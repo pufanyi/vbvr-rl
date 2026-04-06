@@ -148,21 +148,20 @@ class COSTrainer(BaseTrainer):
                         import torch.distributed as dist
 
                         _ep_keys = ["loss", "target_norm", "sigma_mean", "n_cos_high", "n_cos_low"]
-                        half = self.world_size // 2
                         if self.expert_group == 1:
                             # Low group leader: send averaged metrics to rank 0
                             cnt = max(self._cos_debug_count, 1)
                             avg_local = {k: v / cnt for k, v in self._cos_debug_accum.items()}
                             buf = torch.tensor(
                                 [avg_local.get(f"{k}_low", 0.0) for k in _ep_keys],
-                                device=self.device,
+                                dtype=torch.float32,
                             )
-                            dist.send(buf, dst=0)
+                            dist.send(buf, group=self._expert_log_pg, group_dst=0)
                             self._cos_debug_accum.clear()
                             self._cos_debug_count = 0
                         elif self.expert_group == 0:
-                            buf = torch.zeros(len(_ep_keys), device=self.device)
-                            dist.recv(buf, src=half)
+                            buf = torch.zeros(len(_ep_keys), dtype=torch.float32)
+                            dist.recv(buf, group=self._expert_log_pg, group_src=1)
                             self._remote_expert_avg = {
                                 f"{k}_low": v for k, v in zip(_ep_keys, buf.tolist(), strict=True)
                             }

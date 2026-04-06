@@ -126,6 +126,8 @@ class BaseTrainer:
     def _init_expert_parallel(self, cfg: TrainConfig) -> None:
         """Set up expert-parallel state: split GPUs into two groups, one per MoE expert."""
         self.expert_parallel = cfg.expert_parallel
+        self._cpu_world_pg = None
+        self._expert_log_pg = None
         if not self.expert_parallel:
             self._effective_train_experts = cfg.train_experts
             self.expert_group = -1
@@ -143,6 +145,8 @@ class BaseTrainer:
         self.dp_rank = self.rank % half
         self.dp_size = half
         self._effective_train_experts = "high" if self.expert_group == 0 else "low"
+        self._cpu_world_pg = dist.new_group(backend="gloo")
+        self._expert_log_pg = dist.new_group(ranks=[0, half], backend="gloo")
 
     def _get_expert_parallel_sampler_seed(self, cfg: TrainConfig) -> int:
         """Sampler seed for expert-parallel mode.
@@ -381,6 +385,10 @@ class BaseTrainer:
             if hasattr(module, "set_requires_gradient_sync"):
                 module.set_requires_gradient_sync(requires_gradient_sync, recurse=True)
 
+    def _barrier(self) -> None:
+        group = self._cpu_world_pg if self._cpu_world_pg is not None else None
+        dist.barrier(group=group)
+
     # ------------------------------------------------------------------
     # DCP checkpointing
     # ------------------------------------------------------------------
@@ -441,7 +449,7 @@ class BaseTrainer:
                 self.model.save_lora(str(path / "lora"))
             if self.rank == 0:
                 logger.info("Saved DCP checkpoint to {}", path)
-        dist.barrier()
+        self._barrier()
 
     def _load_checkpoint(self, path: str):
         # Resolve path and DCP process group for expert parallel
