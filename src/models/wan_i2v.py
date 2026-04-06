@@ -470,7 +470,12 @@ class WanI2VForTraining:
                     target[cos_low] = x_tau_l - x_final_l
             else:
                 x_t, target = compute_cos_path(
-                    path_type, sigmas_5d, tau_sigma, noise, x_tau, x_final,
+                    path_type,
+                    sigmas_5d,
+                    tau_sigma,
+                    noise,
+                    x_tau,
+                    x_final,
                     boundary_noise_std=boundary_noise_std,
                     smooth_blend_delta=smooth_blend_delta,
                 )
@@ -493,6 +498,7 @@ class WanI2VForTraining:
 
             # Per-expert debug stats
             with torch.no_grad():
+
                 def _norm(t: torch.Tensor) -> float:
                     return t.float().reshape(t.shape[0], -1).norm(dim=1).mean().item()
 

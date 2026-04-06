@@ -72,15 +72,17 @@ class BaseTrainer:
         self.dataloader = self._build_dataloader(self.dataset, cfg)
 
         # ---- Optimizer ----
-        self.params, self.optimizers, self.optimizer_te, self.optimizer_1, self.optimizer_2 = (
-            self._build_optimizers(cfg)
+        self.params, self.optimizers, self.optimizer_te, self.optimizer_1, self.optimizer_2 = self._build_optimizers(
+            cfg
         )
 
         # ---- Total steps ----
         self.total_steps = self._compute_total_steps()
         logger.info(
             "Dataset: {} samples, {} batches/epoch, {} total optimizer steps",
-            len(self.dataset), len(self.dataloader), self.total_steps,
+            len(self.dataset),
+            len(self.dataloader),
+            self.total_steps,
         )
 
         # ---- DCP state ----
@@ -100,6 +102,7 @@ class BaseTrainer:
         self.use_wandb = cfg.wandb_project is not None and self.rank == 0
         if self.use_wandb:
             import wandb
+
             wandb.init(project=cfg.wandb_project, name=cfg.wandb_run_name, config=cfg.model_dump())
 
         # ---- Resume ----
@@ -130,9 +133,7 @@ class BaseTrainer:
             self.dp_size = self.world_size
             return
 
-        assert cfg.train_experts == "both", (
-            f"expert_parallel requires train_experts='both', got '{cfg.train_experts}'"
-        )
+        assert cfg.train_experts == "both", f"expert_parallel requires train_experts='both', got '{cfg.train_experts}'"
         assert self.world_size >= 2 and self.world_size % 2 == 0, (
             f"expert_parallel requires even world_size >= 2, got {self.world_size}"
         )
@@ -175,7 +176,9 @@ class BaseTrainer:
         )
         logger.info(
             "Loading model from {} (lora_rank={}, experts={}{}) ...",
-            cfg.model_path, cfg.lora_rank, train_experts,
+            cfg.model_path,
+            cfg.lora_rank,
+            train_experts,
             f", expert_group={self.expert_group}" if self.expert_parallel else "",
         )
         model = WanI2VForTraining(
@@ -202,13 +205,17 @@ class BaseTrainer:
     def _create_device_mesh(self, cfg: TrainConfig):
         if self.expert_parallel:
             mesh_2d = init_device_mesh(
-                "cuda", (2, self.dp_size), mesh_dim_names=("expert", "dp"),
+                "cuda",
+                (2, self.dp_size),
+                mesh_dim_names=("expert", "dp"),
             )
             mesh = mesh_2d["dp"]
             self._dp_pg = mesh.get_group()
             logger.info(
                 "Expert parallel mesh: group={} dp_rank={}/{}",
-                self.expert_group, self.dp_rank, self.dp_size,
+                self.expert_group,
+                self.dp_rank,
+                self.dp_size,
             )
         else:
             mesh = init_device_mesh("cuda", (self.world_size,))
@@ -230,11 +237,13 @@ class BaseTrainer:
         if self.model.transformer_2 is not None:
             shard_transformer(self.model.transformer_2, self.mesh, self.mp_policy)
         return [
-            m for m in [
+            m
+            for m in [
                 self.model.text_encoder if cfg.train_text_encoder else None,
                 self.model.transformer,
                 self.model.transformer_2,
-            ] if m is not None
+            ]
+            if m is not None
         ]
 
     # ------------------------------------------------------------------
@@ -292,13 +301,19 @@ class BaseTrainer:
         if self.expert_parallel:
             seed = self._get_expert_parallel_sampler_seed(cfg)
             sampler = DistributedSampler(
-                dataset, num_replicas=self.dp_size, rank=self.dp_rank,
-                shuffle=True, seed=seed,
+                dataset,
+                num_replicas=self.dp_size,
+                rank=self.dp_rank,
+                shuffle=True,
+                seed=seed,
             )
         else:
             sampler = DistributedSampler(
-                dataset, num_replicas=self.world_size, rank=self.rank,
-                shuffle=True, seed=cfg.seed,
+                dataset,
+                num_replicas=self.world_size,
+                rank=self.rank,
+                shuffle=True,
+                seed=cfg.seed,
             )
         return dataset, sampler
 
@@ -350,7 +365,9 @@ class BaseTrainer:
         trainable_count = sum(p.numel() for p in params)
         logger.info(
             "Trainable: {:.1f}M / {:.1f}M ({:.2f}%)",
-            trainable_count / 1e6, total_params / 1e6, 100 * trainable_count / total_params,
+            trainable_count / 1e6,
+            total_params / 1e6,
+            100 * trainable_count / total_params,
         )
         optimizers = [opt for opt in [optimizer_te, optimizer_1, optimizer_2] if opt is not None]
         return params, optimizers, optimizer_te, optimizer_1, optimizer_2
@@ -474,5 +491,7 @@ class BaseTrainer:
                 logger.info("Restored dataloader state from {}", dl_state_path)
         logger.info(
             "Resumed at step={} epoch={} batch_idx={}",
-            self.train_state.step, self.train_state.epoch, self.train_state.batch_idx,
+            self.train_state.step,
+            self.train_state.epoch,
+            self.train_state.batch_idx,
         )

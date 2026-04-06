@@ -93,12 +93,8 @@ def parse_args():
         default=None,
         help="Number of steps to render (evenly spaced). None = render all steps.",
     )
-    parser.add_argument(
-        "--save_latents", action="store_true", help="Also save raw latents as .pt files"
-    )
-    parser.add_argument(
-        "--copy_refs", action="store_true", help="Copy first_frame and solution image into output"
-    )
+    parser.add_argument("--save_latents", action="store_true", help="Also save raw latents as .pt files")
+    parser.add_argument("--copy_refs", action="store_true", help="Copy first_frame and solution image into output")
     parser.add_argument(
         "--scheduler",
         type=str,
@@ -123,11 +119,8 @@ def decode_latents_to_frames(pipe, latents: torch.Tensor) -> list:
         .view(1, pipe.vae.config.z_dim, 1, 1, 1)
         .to(latents.device, latents.dtype)
     )
-    latents_std = (
-        1.0
-        / torch.tensor(pipe.vae.config.latents_std)
-        .view(1, pipe.vae.config.z_dim, 1, 1, 1)
-        .to(latents.device, latents.dtype)
+    latents_std = 1.0 / torch.tensor(pipe.vae.config.latents_std).view(1, pipe.vae.config.z_dim, 1, 1, 1).to(
+        latents.device, latents.dtype
     )
     latents = latents / latents_std + latents_mean
     video = pipe.vae.decode(latents, return_dict=False)[0]
@@ -242,10 +235,7 @@ def _run_eval(
             ordered = [z0_predictions[k] for k in sorted(z0_predictions.keys())]
             torch.save(torch.stack(ordered), str(latent_path))
 
-        print(
-            f"[rank {rank}] [{count + 1}/{len(my_indices)}] "
-            f"Saved {name} ({len(z0_predictions)} step videos)"
-        )
+        print(f"[rank {rank}] [{count + 1}/{len(my_indices)}] Saved {name} ({len(z0_predictions)} step videos)")
 
         z0_predictions.clear()
 
@@ -314,10 +304,10 @@ def main():
 
             if rank == 0:
                 print(
-                    f"\n{'='*60}\n"
+                    f"\n{'=' * 60}\n"
                     f"[{ckpt_idx + 1}/{len(checkpoints)}] Loading DCP: {checkpoint} (ema={args.use_ema})\n"
                     f"Output: {output_dir}\n"
-                    f"{'='*60}"
+                    f"{'=' * 60}"
                 )
             load_dcp_into_pipeline(pipe, checkpoint, use_ema=args.use_ema)
         elif rank == 0:

@@ -36,8 +36,13 @@ import torch
 from torch import Tensor
 
 PathType = Literal[
-    "linear", "cosine", "cubic_hermite", "smooth_blend", "quadratic_bezier",
-    "target_linear", "target_cosine",
+    "linear",
+    "cosine",
+    "cubic_hermite",
+    "smooth_blend",
+    "quadratic_bezier",
+    "target_linear",
+    "target_cosine",
 ]
 
 
@@ -99,7 +104,11 @@ def compute_cos_path(
 
 
 def _linear(
-    sigma: Tensor, tau: float, noise: Tensor, x_tau: Tensor, x_final: Tensor,
+    sigma: Tensor,
+    tau: float,
+    noise: Tensor,
+    x_tau: Tensor,
+    x_final: Tensor,
 ) -> tuple[Tensor, Tensor]:
     """Piecewise linear (original).  C0 at boundary."""
     high = sigma >= tau
@@ -116,7 +125,11 @@ def _linear(
 
 
 def _cosine(
-    sigma: Tensor, tau: float, noise: Tensor, x_tau: Tensor, x_final: Tensor,
+    sigma: Tensor,
+    tau: float,
+    noise: Tensor,
+    x_tau: Tensor,
+    x_final: Tensor,
 ) -> tuple[Tensor, Tensor]:
     """Cosine reparameterisation per segment.  C1 at boundary (velocity -> 0)."""
     high = sigma >= tau
@@ -140,7 +153,11 @@ def _cosine(
 
 
 def _cubic_hermite(
-    sigma: Tensor, tau: float, noise: Tensor, x_tau: Tensor, x_final: Tensor,
+    sigma: Tensor,
+    tau: float,
+    noise: Tensor,
+    x_tau: Tensor,
+    x_final: Tensor,
 ) -> tuple[Tensor, Tensor]:
     """Catmull-Rom cubic Hermite spline.  C1 at boundary.
 
@@ -165,8 +182,8 @@ def _cubic_hermite(
     h01 = -2.0 * t3 + 3.0 * t2
     h11 = t3 - t2
     # Tangents in t-space (scaled by segment length 1-tau)
-    m0_h = (1.0 - tau) * v_tau   # Catmull-Rom at tau
-    m1_h = noise - x_tau         # chord at sigma=1
+    m0_h = (1.0 - tau) * v_tau  # Catmull-Rom at tau
+    m1_h = noise - x_tau  # chord at sigma=1
     x_t_h = h00 * x_tau + h10 * m0_h + h01 * noise + h11 * m1_h
     # Derivative basis (d/dt)
     dh00 = 6.0 * t2 - 6.0 * t
@@ -184,8 +201,8 @@ def _cubic_hermite(
     h10 = t3 - 2.0 * t2 + t
     h01 = -2.0 * t3 + 3.0 * t2
     h11 = t3 - t2
-    m0_l = x_tau - x_final   # chord at sigma=0
-    m1_l = tau * v_tau        # Catmull-Rom at tau
+    m0_l = x_tau - x_final  # chord at sigma=0
+    m1_l = tau * v_tau  # Catmull-Rom at tau
     x_t_l = h00 * x_final + h10 * m0_l + h01 * x_tau + h11 * m1_l
     dh00 = 6.0 * t2 - 6.0 * t
     dh10 = 3.0 * t2 - 4.0 * t + 1.0
@@ -198,7 +215,11 @@ def _cubic_hermite(
 
 
 def _smooth_blend(
-    sigma: Tensor, tau: float, noise: Tensor, x_tau: Tensor, x_final: Tensor,
+    sigma: Tensor,
+    tau: float,
+    noise: Tensor,
+    x_tau: Tensor,
+    x_final: Tensor,
     delta: float,
 ) -> tuple[Tensor, Tensor]:
     """Linear with smoothstep blending in ``[tau - delta, tau + delta]``.
@@ -220,20 +241,20 @@ def _smooth_blend(
     lo = tau - delta
     hi = tau + delta
     u = ((sigma - lo) / (hi - lo)).clamp(0.0, 1.0)
-    alpha = 3.0 * u * u - 2.0 * u * u * u          # smoothstep(u)
+    alpha = 3.0 * u * u - 2.0 * u * u * u  # smoothstep(u)
     dalpha_dsigma = 6.0 * u * (1.0 - u) / (hi - lo)
 
     x_t = (1.0 - alpha) * x_t_l + alpha * x_t_h
-    target = (
-        (1.0 - alpha) * tgt_l
-        + alpha * tgt_h
-        + dalpha_dsigma * (x_t_h - x_t_l)
-    )
+    target = (1.0 - alpha) * tgt_l + alpha * tgt_h + dalpha_dsigma * (x_t_h - x_t_l)
     return x_t, target
 
 
 def _quadratic_bezier(
-    sigma: Tensor, tau: float, noise: Tensor, x_tau: Tensor, x_final: Tensor,
+    sigma: Tensor,
+    tau: float,
+    noise: Tensor,
+    x_tau: Tensor,
+    x_final: Tensor,
 ) -> tuple[Tensor, Tensor]:
     """Quadratic polynomial through ``(0, x_final)``, ``(tau, x_tau)``, ``(1, noise)``.
 
@@ -260,7 +281,11 @@ def _quadratic_bezier(
 
 
 def _target_linear(
-    sigma: Tensor, tau: float, noise: Tensor, x_tau: Tensor, x_final: Tensor,
+    sigma: Tensor,
+    tau: float,
+    noise: Tensor,
+    x_tau: Tensor,
+    x_final: Tensor,
 ) -> tuple[Tensor, Tensor]:
     """No-passthrough, hard target switch at tau.  C0 in velocity, continuous in x_t.
 
@@ -291,7 +316,11 @@ def _target_linear(
 
 
 def _target_cosine(
-    sigma: Tensor, tau: float, noise: Tensor, x_tau: Tensor, x_final: Tensor,
+    sigma: Tensor,
+    tau: float,
+    noise: Tensor,
+    x_tau: Tensor,
+    x_final: Tensor,
 ) -> tuple[Tensor, Tensor]:
     """No-passthrough, smooth cosine target blend around tau.  C1.
 

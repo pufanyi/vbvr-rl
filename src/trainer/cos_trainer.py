@@ -58,7 +58,9 @@ class COSTrainer(BaseTrainer):
         for prob, t in experts:
             t_cfg = t.config
             seq_len = compute_wan_seq_len(
-                est_cfg.num_frames, est_h, est_w,
+                est_cfg.num_frames,
+                est_h,
+                est_w,
                 patch_size=tuple(t_cfg.patch_size),
                 vae_temporal_factor=self.model.vae_scale_factor_temporal,
                 vae_spatial_factor=self.model.vae_scale_factor_spatial,
@@ -75,14 +77,16 @@ class COSTrainer(BaseTrainer):
         # With dual expert: 2 forward passes per step (one per expert)
         n_expert_passes = len(experts)
         flops_per_step = (
-            3 * weighted_fwd_flops * n_expert_passes
-            * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
+            3 * weighted_fwd_flops * n_expert_passes * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
         )
 
         logger.info(
             "MFU monitor: seq_len={}, forward={:.2e} FLOPs/sample, step={:.2e} FLOPs, GPU={} ({:.0f} TFLOPS bf16)",
-            seq_len, weighted_fwd_flops, flops_per_step,
-            torch.cuda.get_device_name(0), gpu_peak / 1e12,
+            seq_len,
+            weighted_fwd_flops,
+            flops_per_step,
+            torch.cuda.get_device_name(0),
+            gpu_peak / 1e12,
         )
         return MFUMonitor(flops_per_step, gpu_peak)
 
@@ -102,7 +106,9 @@ class COSTrainer(BaseTrainer):
 
         logger.info(
             "COS training: tau_sigma={}, boundary_noise_std={}, expert_parallel={}",
-            cfg.cos_tau_sigma, cfg.cos_boundary_noise_std, cfg.expert_parallel,
+            cfg.cos_tau_sigma,
+            cfg.cos_boundary_noise_std,
+            cfg.expert_parallel,
         )
 
         for epoch in range(start_epoch, cfg.num_epochs):
@@ -138,11 +144,7 @@ class COSTrainer(BaseTrainer):
 
                     # -- Expert-parallel metric exchange --
                     # Both group leaders participate: low sends its stats to rank 0.
-                    if (
-                        self.expert_parallel
-                        and global_step % cfg.log_steps == 0
-                        and self.dp_rank == 0
-                    ):
+                    if self.expert_parallel and global_step % cfg.log_steps == 0 and self.dp_rank == 0:
                         import torch.distributed as dist
 
                         _ep_keys = ["loss", "target_norm", "sigma_mean", "n_cos_high", "n_cos_low"]
@@ -191,8 +193,15 @@ class COSTrainer(BaseTrainer):
                         fractional_epoch = epoch + (batch_idx + 1) / len(self.dataloader)
                         logger.info(
                             "step={}/{} epoch={:.2f} loss={:.4f} lr={:.2e} grad_norm={:.4f} mfu={} eta={} ({} s/it)",
-                            global_step, self.total_steps, fractional_epoch,
-                            loss.item(), lr, self._last_grad_norm, mfu_str, eta_str, s_it_str,
+                            global_step,
+                            self.total_steps,
+                            fractional_epoch,
+                            loss.item(),
+                            lr,
+                            self._last_grad_norm,
+                            mfu_str,
+                            eta_str,
+                            s_it_str,
                         )
 
                         # Per-expert debug lines
@@ -201,7 +210,8 @@ class COSTrainer(BaseTrainer):
                             if lk in avg:
                                 logger.info(
                                     "  expert={}: loss={:.4f} tnorm={:.2f} sigma={:.3f} cos_h={:.0f} cos_l={:.0f}",
-                                    en, avg[lk],
+                                    en,
+                                    avg[lk],
                                     avg.get(f"target_norm_{en}", 0),
                                     avg.get(f"sigma_mean_{en}", 0),
                                     avg.get(f"n_cos_high_{en}", 0),
@@ -245,8 +255,10 @@ class COSTrainer(BaseTrainer):
 
         if self.use_wandb:
             import wandb
+
             wandb.finish()
         import torch.distributed as dist
+
         dist.destroy_process_group()
 
     def _train_step(self, batch: dict) -> tuple[torch.Tensor, dict[str, float]]:

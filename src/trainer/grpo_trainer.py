@@ -198,13 +198,13 @@ class GRPOTrainer(BaseTrainer):
             if m is not None:
                 m.eval()
 
-        all_chunk_trajs = []   # list of trajectory dicts, each with batch B*cur_S
-        reward_chunks = []     # list of (B, cur_S) reward tensors
+        all_chunk_trajs = []  # list of trajectory dicts, each with batch B*cur_S
+        reward_chunks = []  # list of (B, cur_S) reward tensors
 
         for g_start in range(0, G, S):
             cur_S = min(S, G - g_start)
-            cond_s = condition.repeat_interleave(cur_S, dim=0)       # (B*cur_S, ...)
-            pe_s = prompt_embeds.repeat_interleave(cur_S, dim=0)     # (B*cur_S, ...)
+            cond_s = condition.repeat_interleave(cur_S, dim=0)  # (B*cur_S, ...)
+            pe_s = prompt_embeds.repeat_interleave(cur_S, dim=0)  # (B*cur_S, ...)
             gt_s = gt_video_latents.repeat_interleave(cur_S, dim=0)  # (B*cur_S, ...)
 
             traj = self.model.sde_generate(
@@ -220,7 +220,10 @@ class GRPOTrainer(BaseTrainer):
 
             # Reward for this chunk
             reward_flat = self._compute_reward_neg_loss(
-                traj["latents"][-1], gt_s, cond_s, pe_s,
+                traj["latents"][-1],
+                gt_s,
+                cond_s,
+                pe_s,
             )  # (B*cur_S,)
             reward_chunks.append(reward_flat.view(B, cur_S))
 
@@ -233,9 +236,7 @@ class GRPOTrainer(BaseTrainer):
             gathered_rewards = torch.cat(all_ranks_rewards, dim=0)
             global_mean = gathered_rewards.mean()
             global_std = gathered_rewards.std() + 1e-4
-            advantages = ((rewards - global_mean) / global_std).clamp(
-                -cfg.grpo_adv_clip_max, cfg.grpo_adv_clip_max
-            )
+            advantages = ((rewards - global_mean) / global_std).clamp(-cfg.grpo_adv_clip_max, cfg.grpo_adv_clip_max)
         else:
             advantages = self._compute_advantages(rewards)
 
@@ -263,12 +264,12 @@ class GRPOTrainer(BaseTrainer):
             g_offset += cur_S
 
             for t_idx in range(T):
-                is_last = (chunk_idx == num_chunks - 1 and t_idx == T - 1)
+                is_last = chunk_idx == num_chunks - 1 and t_idx == T - 1
                 self._set_requires_gradient_sync(is_last)
 
                 sigma = traj["sigmas"][t_idx].item()
                 sigma_prev = traj["sigmas"][t_idx + 1].item()
-                latent = traj["latents"][t_idx].detach()          # (B*cur_S, ...)
+                latent = traj["latents"][t_idx].detach()  # (B*cur_S, ...)
                 next_latent = traj["latents"][t_idx + 1].detach()
                 old_log_prob = traj["log_probs"][t_idx].detach()  # (B*cur_S,)
                 timestep_val = traj["timesteps"][t_idx]
@@ -386,24 +387,35 @@ class GRPOTrainer(BaseTrainer):
                     logger.info(
                         "step={}/{} epoch={:.2f} policy_loss={:.4f} kl_loss={:.4f} reward={:.4f}+/-{:.4f} "
                         "lr={:.2e} grad_norm={:.4f} eta={} ({} s/it)",
-                        global_step, self.total_steps, fractional_epoch,
-                        metrics["policy_loss"], metrics["kl_loss"],
-                        metrics["reward_mean"], metrics["reward_std"],
-                        lr, grad_norm, eta_str, speed_str,
+                        global_step,
+                        self.total_steps,
+                        fractional_epoch,
+                        metrics["policy_loss"],
+                        metrics["kl_loss"],
+                        metrics["reward_mean"],
+                        metrics["reward_std"],
+                        lr,
+                        grad_norm,
+                        eta_str,
+                        speed_str,
                     )
 
                     if self.use_wandb:
                         import wandb
-                        wandb.log({
-                            "grpo/policy_loss": metrics["policy_loss"],
-                            "grpo/kl_loss": metrics["kl_loss"],
-                            "grpo/reward_mean": metrics["reward_mean"],
-                            "grpo/reward_std": metrics["reward_std"],
-                            "grpo/advantage_mean": metrics["advantage_mean"],
-                            "train/lr": lr,
-                            "train/grad_norm": grad_norm,
-                            "train/epoch": fractional_epoch,
-                        }, step=global_step)
+
+                        wandb.log(
+                            {
+                                "grpo/policy_loss": metrics["policy_loss"],
+                                "grpo/kl_loss": metrics["kl_loss"],
+                                "grpo/reward_mean": metrics["reward_mean"],
+                                "grpo/reward_std": metrics["reward_std"],
+                                "grpo/advantage_mean": metrics["advantage_mean"],
+                                "train/lr": lr,
+                                "train/grad_norm": grad_norm,
+                                "train/epoch": fractional_epoch,
+                            },
+                            step=global_step,
+                        )
 
                 if cfg.save_steps > 0 and global_step % cfg.save_steps == 0:
                     self.train_state.step = global_step
@@ -419,6 +431,7 @@ class GRPOTrainer(BaseTrainer):
 
         if self.use_wandb:
             import wandb
+
             wandb.finish()
         dist.destroy_process_group()
 

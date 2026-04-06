@@ -43,7 +43,9 @@ class I2VTrainer(BaseTrainer):
         for prob, t in experts:
             t_cfg = t.config
             seq_len = compute_wan_seq_len(
-                est_cfg.num_frames, est_h, est_w,
+                est_cfg.num_frames,
+                est_h,
+                est_w,
                 patch_size=tuple(t_cfg.patch_size),
                 vae_temporal_factor=self.model.vae_scale_factor_temporal,
                 vae_spatial_factor=self.model.vae_scale_factor_spatial,
@@ -61,8 +63,11 @@ class I2VTrainer(BaseTrainer):
 
         logger.info(
             "MFU monitor: seq_len={}, forward={:.2e} FLOPs/sample, step={:.2e} FLOPs, GPU={} ({:.0f} TFLOPS bf16)",
-            seq_len, weighted_fwd_flops, flops_per_step,
-            torch.cuda.get_device_name(0), gpu_peak / 1e12,
+            seq_len,
+            weighted_fwd_flops,
+            flops_per_step,
+            torch.cuda.get_device_name(0),
+            gpu_peak / 1e12,
         )
         return MFUMonitor(flops_per_step, gpu_peak)
 
@@ -126,8 +131,15 @@ class I2VTrainer(BaseTrainer):
                         fractional_epoch = epoch + (batch_idx + 1) / len(self.dataloader)
                         logger.info(
                             "step={}/{} epoch={:.2f} loss={:.4f} lr={:.2e} grad_norm={:.4f} mfu={} eta={} ({} s/it)",
-                            global_step, self.total_steps, fractional_epoch,
-                            loss.item(), lr, self._last_grad_norm, mfu_str, eta_str, s_it_str,
+                            global_step,
+                            self.total_steps,
+                            fractional_epoch,
+                            loss.item(),
+                            lr,
+                            self._last_grad_norm,
+                            mfu_str,
+                            eta_str,
+                            s_it_str,
                         )
 
                         if self.use_wandb:
@@ -158,8 +170,10 @@ class I2VTrainer(BaseTrainer):
 
         if self.use_wandb:
             import wandb
+
             wandb.finish()
         import torch.distributed as dist
+
         dist.destroy_process_group()
 
     def _train_step(self, batch: dict) -> torch.Tensor:

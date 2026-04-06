@@ -127,9 +127,7 @@ def main():
             [p for p in model.text_encoder.parameters() if p.requires_grad], **optim_kwargs
         )
     if model.transformer is not None:
-        optimizer_1 = torch.optim.AdamW(
-            [p for p in model.transformer.parameters() if p.requires_grad], **optim_kwargs
-        )
+        optimizer_1 = torch.optim.AdamW([p for p in model.transformer.parameters() if p.requires_grad], **optim_kwargs)
     if model.transformer_2 is not None:
         optimizer_2 = torch.optim.AdamW(
             [p for p in model.transformer_2.parameters() if p.requires_grad], **optim_kwargs
