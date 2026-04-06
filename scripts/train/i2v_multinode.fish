@@ -9,37 +9,42 @@
 # Optional environment variables:
 #   MASTER_PORT  — port on master node (default: 29500)
 #
-# Usage: fish scripts/train/i2v_multinode.fish [--nproc N] [-- training args...]
-#   e.g. fish scripts/train/i2v_multinode.fish --nproc 8 -- --config configs/train_i2v.yaml
+# Usage: fish scripts/train/i2v_multinode.fish [--nproc N] [training args...]
+#   e.g. fish scripts/train/i2v_multinode.fish --config configs/train_i2v.yaml
+#   e.g. fish scripts/train/i2v_multinode.fish --nproc 8 --config configs/train_i2v.yaml
 
 set -l nproc 8
 
-# Parse launcher args (before --)
+# Parse launcher args. Unknown args are forwarded to the training entrypoint,
+# so `fish ... --config=...` works without an explicit `--` separator.
 set -l train_args
 set -l parsing_launcher true
+set -l expect_nproc false
 for arg in $argv
     if test "$arg" = "--"
         set parsing_launcher false
         continue
     end
-    if $parsing_launcher
-        if set -q _expect_nproc
-            set nproc $arg
-            set -e _expect_nproc
-            continue
-        end
-        if test "$arg" = "--nproc"
-            set -g _expect_nproc 1
-            continue
-        end
-    else
-        set -a train_args $arg
+
+    if test "$expect_nproc" = true
+        set nproc $arg
+        set expect_nproc false
+        continue
     end
+
+    if $parsing_launcher
+        if test "$arg" = "--nproc"
+            set expect_nproc true
+            continue
+        end
+    end
+
+    set -a train_args $arg
 end
 
-# If no -- separator, treat all args as training args
-if $parsing_launcher
-    set train_args $argv
+if test "$expect_nproc" = true
+    echo "ERROR: --nproc requires a value" >&2
+    exit 1
 end
 
 # Validate required environment variables
@@ -61,11 +66,11 @@ set -l master_port (set -q MASTER_PORT; and echo $MASTER_PORT; or echo 29500)
 set -l project_root (realpath (dirname (status filename))/../..)
 cd $project_root
 
-echo "Launching multi-node training: node $RANK/$WORLD_SIZE, $NPROC GPUs/node, master=$MASTER_ADDR:$MASTER_PORT"
+echo "Launching multi-node training: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$master_port"
 torchrun \
     --nnodes=$WORLD_SIZE \
-    --nproc_per_node=$NPROC \
+    --nproc_per_node=$nproc \
     --node_rank=$RANK \
     --master_addr=$MASTER_ADDR \
-    --master_port=$MASTER_PORT \
+    --master_port=$master_port \
     -m src.cli.train_i2v $train_args
