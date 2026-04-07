@@ -57,7 +57,7 @@ SCHEDULERS = {
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Maze evaluation with per-step video rendering")
-    parser.add_argument("--eval_json", type=str, required=True, help="JSON file with test samples")
+    parser.add_argument("--eval_json", type=str, nargs="+", required=True, help="JSON file(s) with test samples")
     parser.add_argument(
         "--model_path",
         type=str,
@@ -148,7 +148,7 @@ def _run_eval(
     else:
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    base_dir = Path(args.eval_json).parent
+    base_dir = Path(args._current_eval_json).parent
 
     # ---- Compute which steps to render ----
     total_steps = args.num_inference_steps
@@ -262,15 +262,6 @@ def main():
     device = torch.device(f"cuda:{local_rank}")
     torch.cuda.set_device(device)
 
-    # ---- Load eval data ----
-    eval_json = Path(args.eval_json)
-    data = json.loads(eval_json.read_text())
-
-    my_indices = list(range(rank, len(data), world_size))
-    if rank == 0:
-        print(f"Eval: {len(data)} samples, {world_size} GPUs, {len(my_indices)} samples/rank")
-        print(f"Steps: {args.num_inference_steps}, Resolution: {args.width}x{args.height}, Frames: {args.num_frames}")
-
     # ---- Load pipeline (once) ----
     if rank == 0:
         print(f"Loading model from {args.model_path} ...")
@@ -286,19 +277,10 @@ def main():
 
     # ---- Build checkpoint list ----
     checkpoints = args.checkpoint or [None]  # None = base model without DCP
+    eval_jsons = args.eval_json
+    multi_eval = len(eval_jsons) > 1
 
     for ckpt_idx, checkpoint in enumerate(checkpoints):
-        # Derive per-checkpoint output dir
-        if len(checkpoints) > 1 and checkpoint is not None:
-            ckpt_name = checkpoint.rstrip("/").replace("/", "_")
-            # Strip common prefix for cleaner names
-            if "storage/checkpoints/" in ckpt_name:
-                ckpt_name = ckpt_name.split("storage_checkpoints_", 1)[-1]
-            ema_suffix = "_ema" if args.use_ema else ""
-            output_dir = Path(args.output_dir) / f"{ckpt_name}{ema_suffix}"
-        else:
-            output_dir = Path(args.output_dir)
-
         if checkpoint is not None:
             from src.trainer.checkpoint import load_dcp_into_pipeline
 
@@ -306,21 +288,53 @@ def main():
                 print(
                     f"\n{'=' * 60}\n"
                     f"[{ckpt_idx + 1}/{len(checkpoints)}] Loading DCP: {checkpoint} (ema={args.use_ema})\n"
-                    f"Output: {output_dir}\n"
                     f"{'=' * 60}"
                 )
             load_dcp_into_pipeline(pipe, checkpoint, use_ema=args.use_ema)
         elif rank == 0:
             print("Evaluating base model (no checkpoint)")
 
-        _run_eval(pipe, args, data, my_indices, output_dir, rank, world_size, device)
+        for eval_json_path in eval_jsons:
+            # ---- Load eval data ----
+            eval_json = Path(eval_json_path)
+            data = json.loads(eval_json.read_text())
+            # Temporarily set args.eval_json to current path for _run_eval's base_dir
+            args._current_eval_json = eval_json_path
+
+            my_indices = list(range(rank, len(data), world_size))
+            if rank == 0:
+                print(f"Eval: {eval_json_path} — {len(data)} samples, {world_size} GPUs, {len(my_indices)} samples/rank")
+                print(f"Steps: {args.num_inference_steps}, Resolution: {args.width}x{args.height}, Frames: {args.num_frames}")
+
+            # Derive output dir
+            base_output = Path(args.output_dir)
+
+            # Per-checkpoint subdir
+            if len(checkpoints) > 1 and checkpoint is not None:
+                ckpt_name = checkpoint.rstrip("/").replace("/", "_")
+                if "storage/checkpoints/" in ckpt_name:
+                    ckpt_name = ckpt_name.split("storage_checkpoints_", 1)[-1]
+                ema_suffix = "_ema" if args.use_ema else ""
+                base_output = base_output / f"{ckpt_name}{ema_suffix}"
+
+            # Per-eval-json subdir (use parent directory name, e.g. test_data_easy)
+            if multi_eval:
+                eval_name = eval_json.parent.name
+                output_dir = base_output / eval_name
+            else:
+                output_dir = base_output
+
+            if rank == 0:
+                print(f"Output: {output_dir}")
+
+            _run_eval(pipe, args, data, my_indices, output_dir, rank, world_size, device)
 
     if world_size > 1:
         dist.barrier()
         dist.destroy_process_group()
 
     if rank == 0:
-        print(f"\nAll done. Evaluated {len(checkpoints)} checkpoint(s).")
+        print(f"\nAll done. Evaluated {len(checkpoints)} checkpoint(s) x {len(eval_jsons)} eval json(s).")
 
 
 if __name__ == "__main__":

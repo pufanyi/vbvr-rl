@@ -9,8 +9,9 @@
 
 # ── Configuration ────────────────────────────────────────────────────
 set CHECKPOINTS \
-    storage/checkpoints/cos_maze_cos_path/checkpoint-4000 \
-    storage/checkpoints/sft_maze/checkpoint-epoch0
+    storage/checkpoints/cos_maze_cos_path_all/checkpoint-2000
+    # storage/checkpoints/cos_maze_cos_path/checkpoint-4000 \
+    # storage/checkpoints/sft_maze/checkpoint-epoch0
     # storage/checkpoints/cos_maze_linear_path/checkpoint-2000
     # storage/checkpoints/cos_maze/checkpoint-epoch0
     # storage/checkpoints/cos_maze/checkpoint-3000
@@ -19,7 +20,9 @@ set NUM_GPUS 1
 set NUM_SAMPLES 5         # leave empty to use all samples
 set NUM_RENDER_STEPS     # leave empty to render all steps
 set SCHEDULER           # leave empty for default; options: euler, euler_ancestral, ddim, dpm_solver, unipc, flow_match_euler
-set EVAL_JSON /mnt/umm/users/pufanyi/workspace/maze/test_data_easy/test.json
+set EVAL_JSONS \
+    /mnt/umm/users/pufanyi/workspace/maze/test_data_easy/test.json \
+    /mnt/umm/users/pufanyi/workspace/maze/test_data_medium/test.json
 # ─────────────────────────────────────────────────────────────────────
 
 # Derive output dir: single checkpoint gets a specific name, multiple uses a generic base
@@ -30,17 +33,22 @@ else
     set OUTPUT_DIR storage/eval_out/multi_ckpt
 end
 
-# If NUM_SAMPLES is set, create a trimmed json and adjust output dir
+# If NUM_SAMPLES is set, create trimmed jsons and adjust output dir
 if test -n "$NUM_SAMPLES"
-    set TRIMMED_JSON /mnt/umm/users/pufanyi/workspace/maze/test_data_easy/eval_maze_first_{$NUM_SAMPLES}.json
-    uv run python -c "
-import json, sys
-data = json.load(open('$EVAL_JSON'))
+    set TRIMMED_JSONS
+    for ej in $EVAL_JSONS
+        set -l ej_dir (dirname $ej)
+        set -l trimmed $ej_dir/eval_maze_first_{$NUM_SAMPLES}.json
+        uv run python -c "
+import json
+data = json.load(open('$ej'))
 n = int($NUM_SAMPLES)
-json.dump(data[:n], open('$TRIMMED_JSON', 'w'), indent=2)
-print(f'Created trimmed eval json with {min(n, len(data))} samples')
+json.dump(data[:n], open('$trimmed', 'w'), indent=2)
+print(f'Created trimmed eval json with {min(n, len(data))} samples: $trimmed')
 "
-    set EVAL_JSON $TRIMMED_JSON
+        set -a TRIMMED_JSONS $trimmed
+    end
+    set EVAL_JSONS $TRIMMED_JSONS
     set OUTPUT_DIR {$OUTPUT_DIR}_n{$NUM_SAMPLES}
 
     # For small debug runs, cap GPUs to sample count
@@ -61,7 +69,10 @@ echo "Checkpoints:    "(count $CHECKPOINTS)" total"
 for ckpt in $CHECKPOINTS
     echo "  - $ckpt"
 end
-echo "Eval JSON:      $EVAL_JSON"
+echo "Eval JSONs:     "(count $EVAL_JSONS)" total"
+for ej in $EVAL_JSONS
+    echo "  - $ej"
+end
 echo "Output:         $OUTPUT_DIR"
 echo "GPUs:           $NUM_GPUS"
 echo "Render steps:   "(test -n "$NUM_RENDER_STEPS" && echo $NUM_RENDER_STEPS || echo "all")
@@ -70,13 +81,13 @@ echo "---"
 
 if test $NUM_GPUS -gt 1
     uv run torchrun --nproc_per_node=$NUM_GPUS -m src.cli.eval_maze \
-        --eval_json $EVAL_JSON \
+        --eval_json $EVAL_JSONS \
         --output_dir $OUTPUT_DIR \
         --checkpoint $CHECKPOINTS \
         --use_ema $EXTRA_ARGS
 else
     uv run python -m src.cli.eval_maze \
-        --eval_json $EVAL_JSON \
+        --eval_json $EVAL_JSONS \
         --output_dir $OUTPUT_DIR \
         --checkpoint $CHECKPOINTS \
         --use_ema $EXTRA_ARGS
