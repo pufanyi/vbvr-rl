@@ -21,8 +21,9 @@ set NUM_SAMPLES 5         # leave empty to use all samples
 set NUM_RENDER_STEPS     # leave empty to render all steps
 set SCHEDULER           # leave empty for default; options: euler, euler_ancestral, ddim, dpm_solver, unipc, flow_match_euler
 set EVAL_JSONS \
-    /mnt/umm/users/pufanyi/workspace/maze/test_data_easy/test.json \
-    /mnt/umm/users/pufanyi/workspace/maze/test_data_medium/test.json
+    /mnt/umm/users/pufanyi/workspace/maze/test_data/test.json
+    # /mnt/umm/users/pufanyi/workspace/maze/test_data_easy/test.json \
+    # /mnt/umm/users/pufanyi/workspace/maze/test_data_medium/test.json
 # ─────────────────────────────────────────────────────────────────────
 
 # Derive output dir: single checkpoint gets a specific name, multiple uses a generic base
@@ -33,22 +34,8 @@ else
     set OUTPUT_DIR storage/eval_out/multi_ckpt
 end
 
-# If NUM_SAMPLES is set, create trimmed jsons and adjust output dir
+# If NUM_SAMPLES is set, adjust output dir and cap GPUs
 if test -n "$NUM_SAMPLES"
-    set TRIMMED_JSONS
-    for ej in $EVAL_JSONS
-        set -l ej_dir (dirname $ej)
-        set -l trimmed $ej_dir/eval_maze_first_{$NUM_SAMPLES}.json
-        uv run python -c "
-import json
-data = json.load(open('$ej'))
-n = int($NUM_SAMPLES)
-json.dump(data[:n], open('$trimmed', 'w'), indent=2)
-print(f'Created trimmed eval json with {min(n, len(data))} samples: $trimmed')
-"
-        set -a TRIMMED_JSONS $trimmed
-    end
-    set EVAL_JSONS $TRIMMED_JSONS
     set OUTPUT_DIR {$OUTPUT_DIR}_n{$NUM_SAMPLES}
 
     # For small debug runs, cap GPUs to sample count
@@ -63,6 +50,9 @@ if test -n "$NUM_RENDER_STEPS"
 end
 if test -n "$SCHEDULER"
     set -a EXTRA_ARGS --scheduler $SCHEDULER
+end
+if test -n "$NUM_SAMPLES"
+    set -a EXTRA_ARGS --num_samples $NUM_SAMPLES
 end
 
 echo "Checkpoints:    "(count $CHECKPOINTS)" total"

@@ -102,6 +102,12 @@ def parse_args():
         choices=list(SCHEDULERS.keys()),
         help="Override the default scheduler/solver (default: use model's original scheduler)",
     )
+    parser.add_argument(
+        "--num_samples",
+        type=int,
+        default=None,
+        help="Only evaluate the first N samples from each eval json. None = use all.",
+    )
     return parser.parse_args()
 
 
@@ -298,6 +304,8 @@ def main():
             # ---- Load eval data ----
             eval_json = Path(eval_json_path)
             data = json.loads(eval_json.read_text())
+            if args.num_samples is not None:
+                data = data[: args.num_samples]
             # Temporarily set args.eval_json to current path for _run_eval's base_dir
             args._current_eval_json = eval_json_path
 
