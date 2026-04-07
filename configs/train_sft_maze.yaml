@@ -1,5 +1,5 @@
 model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
-dataset_json: /mnt/umm/users/pufanyi/workspace/maze/data/train_sft.json
+dataset_json: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/data/train_maze.json
 output_dir: storage/checkpoints/sft_maze
 
 num_frames: 81
@@ -8,13 +8,13 @@ width: 256
 fps: 16
 
 batch_size: 4
-gradient_accumulation_steps: 1
+gradient_accumulation_steps: 4
 num_epochs: 2
-learning_rate: 5.0e-5
+learning_rate: 1.0e-5
 weight_decay: 0.01
 max_grad_norm: 1.0
 warmup_steps: 100
-save_steps: 1000
+save_steps: 2000
 log_steps: 1
 seed: 42
 
