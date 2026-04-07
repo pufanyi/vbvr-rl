@@ -34,6 +34,17 @@ class TrainConfig(BaseModel):
     seed: int = 42
     ema_decay: float = 0.0  # 0 = disabled; typical value: 0.9999
 
+    # Optimizer
+    optimizer: Literal["adamw", "muon"] = "adamw"
+    # AdamW
+    adamw_betas: tuple[float, float] = (0.9, 0.999)
+    adamw_fused: bool = True
+    # Muon
+    muon_momentum: float = 0.95
+    muon_nesterov: bool = True
+    muon_ns_steps: int = 5
+    muon_adjust_lr_fn: Literal["original", "match_rms_adamw"] | None = None
+
     # Which components to train
     train_experts: Literal["both", "high", "low"] = "both"
     train_text_encoder: bool = False

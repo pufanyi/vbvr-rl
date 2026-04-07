@@ -17,6 +17,7 @@ from src.models.wan_i2v import LoRATrainConfig, WanI2VForTraining
 from src.trainer.checkpoint import TrainState
 from src.trainer.config import TrainConfig
 from src.trainer.ema import EMA
+from src.trainer.optimizer import build_optimizer
 from src.trainer.utils import apply_liger_rms_norm, collate, setup_loguru, shard_transformer
 
 
@@ -345,26 +346,29 @@ class BaseTrainer:
         optimizer_1 = None
         optimizer_2 = None
         params = []
+        extra_optimizers = []
         total_params = 0
-        optim_kwargs = dict(lr=cfg.learning_rate, weight_decay=cfg.weight_decay, betas=(0.9, 0.999), fused=True)
 
         if cfg.train_text_encoder:
             params_te = [p for p in self.model.text_encoder.parameters() if p.requires_grad]
             params.extend(params_te)
             total_params += sum(p.numel() for p in self.model.text_encoder.parameters())
-            optimizer_te = torch.optim.AdamW(params_te, **optim_kwargs)
+            optimizer_te, extras = build_optimizer(params_te, cfg)
+            extra_optimizers.extend(extras)
 
         if self.model.transformer is not None:
             params_1 = [p for p in self.model.transformer.parameters() if p.requires_grad]
             params.extend(params_1)
             total_params += sum(p.numel() for p in self.model.transformer.parameters())
-            optimizer_1 = torch.optim.AdamW(params_1, **optim_kwargs)
+            optimizer_1, extras = build_optimizer(params_1, cfg)
+            extra_optimizers.extend(extras)
 
         if self.model.transformer_2 is not None:
             params_2 = [p for p in self.model.transformer_2.parameters() if p.requires_grad]
             params.extend(params_2)
             total_params += sum(p.numel() for p in self.model.transformer_2.parameters())
-            optimizer_2 = torch.optim.AdamW(params_2, **optim_kwargs)
+            optimizer_2, extras = build_optimizer(params_2, cfg)
+            extra_optimizers.extend(extras)
 
         trainable_count = sum(p.numel() for p in params)
         logger.info(
@@ -373,7 +377,11 @@ class BaseTrainer:
             total_params / 1e6,
             100 * trainable_count / total_params,
         )
+        # Primary optimizers (one per FSDP module) are used for DCP checkpointing.
+        # Extra optimizers (e.g. AdamW fallback for <2D params under Muon) are
+        # stepped during training but not checkpointed.
         optimizers = [opt for opt in [optimizer_te, optimizer_1, optimizer_2] if opt is not None]
+        optimizers.extend(extra_optimizers)
         return params, optimizers, optimizer_te, optimizer_1, optimizer_2
 
     # ------------------------------------------------------------------
