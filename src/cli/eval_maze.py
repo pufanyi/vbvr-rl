@@ -311,8 +311,14 @@ def main():
 
             my_indices = list(range(rank, len(data), world_size))
             if rank == 0:
-                print(f"Eval: {eval_json_path} — {len(data)} samples, {world_size} GPUs, {len(my_indices)} samples/rank")
-                print(f"Steps: {args.num_inference_steps}, Resolution: {args.width}x{args.height}, Frames: {args.num_frames}")
+                print(
+                    f"Eval: {eval_json_path} — {len(data)} samples, "
+                    f"{world_size} GPUs, {len(my_indices)} samples/rank"
+                )
+                print(
+                    f"Steps: {args.num_inference_steps}, "
+                    f"Resolution: {args.width}x{args.height}, Frames: {args.num_frames}"
+                )
 
             # Derive output dir
             base_output = Path(args.output_dir)
