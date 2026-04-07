@@ -102,8 +102,10 @@ class I2VTrainer(BaseTrainer):
 
                     lr = cosine_lr(global_step, cfg.warmup_steps, self.total_steps, cfg.learning_rate)
                     for opt in self.optimizers:
+                        base = getattr(opt, "_base_lr", cfg.learning_rate)
+                        opt_lr = cosine_lr(global_step, cfg.warmup_steps, self.total_steps, base)
                         for pg in opt.param_groups:
-                            pg["lr"] = lr
+                            pg["lr"] = opt_lr
                         opt.step()
                         opt.zero_grad(set_to_none=True)
                     if self.ema is not None:

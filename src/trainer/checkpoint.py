@@ -45,6 +45,9 @@ class TrainState(Stateful):
         optimizer_te: torch.optim.Optimizer | None = None,
         optimizer_1: torch.optim.Optimizer | None = None,
         optimizer_2: torch.optim.Optimizer | None = None,
+        fallback_te: torch.optim.Optimizer | None = None,
+        fallback_1: torch.optim.Optimizer | None = None,
+        fallback_2: torch.optim.Optimizer | None = None,
         step: int = 0,
         epoch: int = 0,
         batch_idx: int = 0,
@@ -55,6 +58,9 @@ class TrainState(Stateful):
         self.optimizer_te = optimizer_te
         self.optimizer_1 = optimizer_1
         self.optimizer_2 = optimizer_2
+        self.fallback_te = fallback_te
+        self.fallback_1 = fallback_1
+        self.fallback_2 = fallback_2
         self.step = step
         self.epoch = epoch
         self.batch_idx = batch_idx
@@ -64,6 +70,10 @@ class TrainState(Stateful):
         _save_pair(sd, "text_encoder", self.text_encoder, self.optimizer_te)
         _save_pair(sd, "transformer", self.transformer, self.optimizer_1)
         _save_pair(sd, "transformer_2", self.transformer_2, self.optimizer_2)
+        # Fallback optimizers (e.g. AdamW for non-2D params under Muon)
+        _save_pair(sd, "text_encoder_fallback", self.text_encoder, self.fallback_te)
+        _save_pair(sd, "transformer_fallback", self.transformer, self.fallback_1)
+        _save_pair(sd, "transformer_2_fallback", self.transformer_2, self.fallback_2)
         # RNG states for reproducibility on resume
         sd["rng_cpu"] = torch.random.get_rng_state()
         sd["rng_cuda"] = torch.cuda.get_rng_state()
@@ -73,6 +83,10 @@ class TrainState(Stateful):
         _load_pair(state_dict, "text_encoder", self.text_encoder, self.optimizer_te)
         _load_pair(state_dict, "transformer", self.transformer, self.optimizer_1)
         _load_pair(state_dict, "transformer_2", self.transformer_2, self.optimizer_2)
+        # Fallback optimizers — missing in old checkpoints, just skip
+        _load_pair(state_dict, "text_encoder_fallback", self.text_encoder, self.fallback_te)
+        _load_pair(state_dict, "transformer_fallback", self.transformer, self.fallback_1)
+        _load_pair(state_dict, "transformer_2_fallback", self.transformer_2, self.fallback_2)
         self.step = state_dict["step"]
         self.epoch = state_dict["epoch"]
         self.batch_idx = state_dict.get("batch_idx", 0)

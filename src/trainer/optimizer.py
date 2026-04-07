@@ -1,8 +1,8 @@
 """Optimizer factory.
 
 When using Muon, parameters are split by dimensionality:
-  - >= 2D parameters → Muon (Newton-Schulz orthogonalization)
-  - < 2D parameters (biases, norms) → AdamW fallback
+  - exactly 2D parameters → Muon (Newton-Schulz orthogonalization)
+  - non-2D parameters (1D biases/norms, 3D+ tensors) → AdamW fallback
 
 The first optimizer returned is the "primary" used for DCP checkpointing.
 Any extra optimizers (the AdamW fallback for 1D params) are stepped during
@@ -37,14 +37,15 @@ def build_optimizer(
             betas=cfg.adamw_betas,
             fused=cfg.adamw_fused,
         )
+        opt._base_lr = cfg.learning_rate  # type: ignore[attr-defined]
         return opt, []
 
     elif cfg.optimizer == "muon":
-        params_2d = [p for p in params if p.ndim >= 2]
-        params_1d = [p for p in params if p.ndim < 2]
+        params_2d = [p for p in params if p.ndim == 2]
+        params_other = [p for p in params if p.ndim != 2]
 
         if not params_2d:
-            raise ValueError("Muon requires at least some >= 2D parameters, but none were found")
+            raise ValueError("Muon requires at least some 2D parameters, but none were found")
 
         muon = torch.optim.Muon(
             params_2d,
@@ -55,24 +56,29 @@ def build_optimizer(
             ns_steps=cfg.muon_ns_steps,
             adjust_lr_fn=cfg.muon_adjust_lr_fn,
         )
+        muon._base_lr = cfg.learning_rate  # type: ignore[attr-defined]
 
         extras: list[torch.optim.Optimizer] = []
-        if params_1d:
+        if params_other:
+            fallback_lr = cfg.muon_fallback_lr if cfg.muon_fallback_lr is not None else cfg.learning_rate
             adamw_fallback = torch.optim.AdamW(
-                params_1d,
-                lr=cfg.learning_rate,
+                params_other,
+                lr=fallback_lr,
                 weight_decay=cfg.weight_decay,
                 betas=cfg.adamw_betas,
                 fused=cfg.adamw_fused,
             )
+            adamw_fallback._base_lr = fallback_lr  # type: ignore[attr-defined]
             extras.append(adamw_fallback)
             logger.info(
-                "Muon: {} params (>=2D) + AdamW fallback: {} params (<2D)",
+                "Muon: {} params (2D, lr={}) + AdamW fallback: {} params (non-2D, lr={})",
                 len(params_2d),
-                len(params_1d),
+                cfg.learning_rate,
+                len(params_other),
+                fallback_lr,
             )
         else:
-            logger.info("Muon: {} params (all >=2D, no fallback needed)", len(params_2d))
+            logger.info("Muon: {} params (all 2D, no fallback needed)", len(params_2d))
 
         return muon, extras
 

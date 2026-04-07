@@ -44,6 +44,7 @@ class TrainConfig(BaseModel):
     muon_nesterov: bool = True
     muon_ns_steps: int = 5
     muon_adjust_lr_fn: Literal["original", "match_rms_adamw"] | None = None
+    muon_fallback_lr: float | None = None  # AdamW lr for non-2D params; None = use learning_rate
 
     # Which components to train
     train_experts: Literal["both", "high", "low"] = "both"

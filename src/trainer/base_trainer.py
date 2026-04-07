@@ -73,9 +73,11 @@ class BaseTrainer:
         self.dataloader = self._build_dataloader(self.dataset, cfg)
 
         # ---- Optimizer ----
-        self.params, self.optimizers, self.optimizer_te, self.optimizer_1, self.optimizer_2 = self._build_optimizers(
-            cfg
-        )
+        (
+            self.params, self.optimizers,
+            self.optimizer_te, self.optimizer_1, self.optimizer_2,
+            self.fallback_te, self.fallback_1, self.fallback_2,
+        ) = self._build_optimizers(cfg)
 
         # ---- Total steps ----
         self.total_steps = self._compute_total_steps()
@@ -94,6 +96,9 @@ class BaseTrainer:
             optimizer_te=self.optimizer_te,
             optimizer_1=self.optimizer_1,
             optimizer_2=self.optimizer_2,
+            fallback_te=self.fallback_te,
+            fallback_1=self.fallback_1,
+            fallback_2=self.fallback_2,
         )
 
         # ---- Subclass hook (e.g. MFU monitor) ----
@@ -345,8 +350,10 @@ class BaseTrainer:
         optimizer_te = None
         optimizer_1 = None
         optimizer_2 = None
+        fallback_te = None
+        fallback_1 = None
+        fallback_2 = None
         params = []
-        extra_optimizers = []
         total_params = 0
 
         if cfg.train_text_encoder:
@@ -354,21 +361,24 @@ class BaseTrainer:
             params.extend(params_te)
             total_params += sum(p.numel() for p in self.model.text_encoder.parameters())
             optimizer_te, extras = build_optimizer(params_te, cfg)
-            extra_optimizers.extend(extras)
+            if extras:
+                fallback_te = extras[0]
 
         if self.model.transformer is not None:
             params_1 = [p for p in self.model.transformer.parameters() if p.requires_grad]
             params.extend(params_1)
             total_params += sum(p.numel() for p in self.model.transformer.parameters())
             optimizer_1, extras = build_optimizer(params_1, cfg)
-            extra_optimizers.extend(extras)
+            if extras:
+                fallback_1 = extras[0]
 
         if self.model.transformer_2 is not None:
             params_2 = [p for p in self.model.transformer_2.parameters() if p.requires_grad]
             params.extend(params_2)
             total_params += sum(p.numel() for p in self.model.transformer_2.parameters())
             optimizer_2, extras = build_optimizer(params_2, cfg)
-            extra_optimizers.extend(extras)
+            if extras:
+                fallback_2 = extras[0]
 
         trainable_count = sum(p.numel() for p in params)
         logger.info(
@@ -377,12 +387,12 @@ class BaseTrainer:
             total_params / 1e6,
             100 * trainable_count / total_params,
         )
-        # Primary optimizers (one per FSDP module) are used for DCP checkpointing.
-        # Extra optimizers (e.g. AdamW fallback for <2D params under Muon) are
-        # stepped during training but not checkpointed.
-        optimizers = [opt for opt in [optimizer_te, optimizer_1, optimizer_2] if opt is not None]
-        optimizers.extend(extra_optimizers)
-        return params, optimizers, optimizer_te, optimizer_1, optimizer_2
+        optimizers = [
+            opt
+            for opt in [optimizer_te, optimizer_1, optimizer_2, fallback_te, fallback_1, fallback_2]
+            if opt is not None
+        ]
+        return params, optimizers, optimizer_te, optimizer_1, optimizer_2, fallback_te, fallback_1, fallback_2
 
     # ------------------------------------------------------------------
     # Gradient sync
@@ -492,12 +502,17 @@ class BaseTrainer:
             self.train_state.step = 0
             self.train_state.epoch = 0
             self.train_state.batch_idx = 0
-            self.params, self.optimizers, self.optimizer_te, self.optimizer_1, self.optimizer_2 = (
-                self._build_optimizers(self.cfg)
-            )
+            (
+                self.params, self.optimizers,
+                self.optimizer_te, self.optimizer_1, self.optimizer_2,
+                self.fallback_te, self.fallback_1, self.fallback_2,
+            ) = self._build_optimizers(self.cfg)
             self.train_state.optimizer_te = self.optimizer_te
             self.train_state.optimizer_1 = self.optimizer_1
             self.train_state.optimizer_2 = self.optimizer_2
+            self.train_state.fallback_te = self.fallback_te
+            self.train_state.fallback_1 = self.fallback_1
+            self.train_state.fallback_2 = self.fallback_2
             self.total_steps = self._compute_total_steps()
             logger.info("reset_dataloader=True: reset step/epoch/optimizer, total_steps={}", self.total_steps)
         else:
