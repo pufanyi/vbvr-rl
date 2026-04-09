@@ -32,7 +32,7 @@ class I2VTrainer(BaseTrainer):
             prob = (N - bi) / N if self._effective_train_experts == "both" else 1.0
             experts.append((prob, self.model.transformer_2))
 
-        est_cfg = self.dataset._item_configs[0]
+        est_cfg = self.dataset._configs[0]
         if est_cfg.fixed_height is not None and est_cfg.fixed_width is not None:
             est_h, est_w = est_cfg.fixed_height, est_cfg.fixed_width
         else:
@@ -179,9 +179,12 @@ class I2VTrainer(BaseTrainer):
         dist.destroy_process_group()
 
     def _train_step(self, batch: dict) -> torch.Tensor:
-        """Single forward pass: encode frozen inputs, compute loss."""
+        """Single forward pass: encode frozen inputs, compute loss.
+
+        batch["videos"][-1] is the final target video.
+        """
         prompt_embeds = self.model.encode_text(batch["prompt"], self.device)
-        video = to_model_pixels(batch["video"], self.device)
+        video = to_model_pixels(batch["videos"][-1], self.device)
         image = to_model_pixels(batch["image"], self.device)
         video_latents = self.model.encode_video(video)
         condition = self.model.prepare_condition(image, video.shape[2], video.shape[-2], video.shape[-1])

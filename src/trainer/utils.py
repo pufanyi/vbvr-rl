@@ -55,6 +55,9 @@ def collate(batch):
     for key, value in sample.items():
         if isinstance(value, torch.Tensor):
             collated[key] = torch.stack([x[key] for x in batch])
+        elif isinstance(value, list) and value and isinstance(value[0], torch.Tensor):
+            # List of tensors (e.g. videos): stack each position across the batch
+            collated[key] = [torch.stack([x[key][i] for x in batch]) for i in range(len(value))]
     if "prompt" in sample:
         collated["prompt"] = [x["prompt"] for x in batch]
     if "index" in sample:

@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class TrainConfig(BaseModel):
@@ -92,7 +92,7 @@ class TrainConfig(BaseModel):
     grpo_cfg_scale: float = 1.0  # classifier-free guidance scale during sampling
 
     # COS (Chain-of-Step) piecewise flow matching
-    cos_tau_sigma: float = 0.5  # piecewise boundary in sigma space (independent of MoE boundary)
+    cos_tau_sigma: list[float] = [0.5]  # piecewise boundaries in sigma space (descending); len = num_intermediates
     cos_boundary_noise_std: float = 0.02  # Gaussian perturbation std for x_tau in low stage
     cos_use_standard_formula: bool = False  # ablation: use standard sigma formula per segment (discontinuous)
     cos_path_type: Literal[
@@ -102,6 +102,13 @@ class TrainConfig(BaseModel):
 
     # Trainer selection
     trainer: Literal["i2v", "cos"] = "i2v"  # "cos" for Chain-of-Step piecewise flow matching
+
+    @field_validator("cos_tau_sigma", mode="before")
+    @classmethod
+    def _wrap_tau_sigma(cls, v):
+        if isinstance(v, (int, float)):
+            return [float(v)]
+        return v
 
     # Expert parallel: split MoE experts across GPU sub-groups
     expert_parallel: bool = False  # each expert gets world_size/2 GPUs with independent FSDP

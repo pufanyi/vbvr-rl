@@ -186,7 +186,7 @@ class GRPOTrainer(BaseTrainer):
 
         # ---- Encode inputs once (B samples) ----
         prompt_embeds = self.model.encode_text(batch["prompt"], device)
-        video = to_model_pixels(batch["video"], device)
+        video = to_model_pixels(batch["videos"][-1], device)
         image = to_model_pixels(batch["image"], device)
         gt_video_latents = self.model.encode_video(video)
         condition = self.model.prepare_condition(image, video.shape[2], video.shape[-2], video.shape[-1])

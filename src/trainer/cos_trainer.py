@@ -47,7 +47,7 @@ class COSTrainer(BaseTrainer):
             prob = (N - bi) / N if self._effective_train_experts == "both" else 1.0
             experts.append((prob, self.model.transformer_2))
 
-        est_cfg = self.dataset._item_configs[0]
+        est_cfg = self.dataset._configs[0]
         if est_cfg.fixed_height is not None and est_cfg.fixed_width is not None:
             est_h, est_w = est_cfg.fixed_height, est_cfg.fixed_width
         else:
@@ -263,33 +263,31 @@ class COSTrainer(BaseTrainer):
         dist.destroy_process_group()
 
     def _train_step(self, batch: dict) -> tuple[torch.Tensor, dict[str, float]]:
-        """Single forward pass: encode frozen inputs, compute COS piecewise loss."""
+        """Single forward pass: encode frozen inputs, compute COS piecewise loss.
+
+        batch["videos"] is a list of N batched tensors (one per step in the chain).
+        videos[0..N-2] = intermediate waypoints (coarsest → finest).
+        videos[N-1]    = final target.
+        """
         cfg = self.cfg
 
-        # indices = batch["index"].tolist()
-        # for i, idx in enumerate(indices):
-        #     item = self.dataset.data[idx]
-        #     sv = item.get('search_video', '?')
-        #     print(f"  sample[{i}] idx={idx} video={item.get('video', '?')} search_video={sv}", flush=True)
-
         prompt_embeds = self.model.encode_text(batch["prompt"], self.device)
-        video = to_model_pixels(batch["video"], self.device)
         image = to_model_pixels(batch["image"], self.device)
 
-        x_final = self.model.encode_video(video)
-        condition = self.model.prepare_condition(image, video.shape[2], video.shape[-2], video.shape[-1])
-
-        search_video = to_model_pixels(batch["search_video"], self.device)
-        x_tau = self.model.encode_video(search_video)
+        # Encode all videos in the chain
+        videos = batch["videos"]
+        final_video = to_model_pixels(videos[-1], self.device)
+        condition = self.model.prepare_condition(
+            image, final_video.shape[2], final_video.shape[-2], final_video.shape[-1]
+        )
+        video_latents = [self.model.encode_video(to_model_pixels(v, self.device)) for v in videos]
 
         return self.model.compute_cos_loss(
-            x_final=x_final,
-            x_tau=x_tau,
+            video_latents=video_latents,
             condition=condition,
             prompt_embeds=prompt_embeds,
-            tau_sigma=cfg.cos_tau_sigma,
+            taus=cfg.cos_tau_sigma,
             boundary_noise_std=cfg.cos_boundary_noise_std,
-            use_standard_formula=cfg.cos_use_standard_formula,
             path_type=cfg.cos_path_type,
             smooth_blend_delta=cfg.cos_smooth_blend_delta,
         )

@@ -3,10 +3,7 @@
 Config JSON points to one or more parquet files:
 
     Single dataset:
-    {
-        "data_path": "/path/to/train.parquet",
-        "root": "/path/to/video/root"        // base dir for relative paths
-    }
+    {"data_path": "/path/to/train.parquet", "root": "/path/to/video/root"}
 
     Multi-dataset (list):
     [
@@ -15,10 +12,10 @@ Config JSON points to one or more parquet files:
     ]
 
 Parquet schema:
-    - videos: list<string>  — [search_video, video] (2 entries) or [video] (1 entry)
-      OR video: string      — single video path
+    - videos: list<string>  — ordered video paths [step_0, step_1, ..., final]
+      OR video: string      — single video path (equivalent to [video])
     - prompt: string
-    - image:  string        — optional, reference image path (uses first video frame if absent)
+    - image:  string        — optional reference image (uses first frame of videos[-1] if absent)
 
 Per-dataset overrides (optional keys in the config dict):
     num_frames, max_area, height, width, fps
@@ -87,11 +84,10 @@ class I2VDataset(Dataset):
         else:
             raise ValueError(f"Config JSON must be a dict or list of dicts: {config_path}")
 
-        # Per-table metadata
         self._tables: list[pq.ParquetFile] = []
         self._roots: list[Path] = []
         self._configs: list[_ItemConfig] = []
-        self._cumulative: list[int] = []  # cumulative row counts
+        self._cumulative: list[int] = []
 
         total = 0
         for entry in entries:
@@ -102,7 +98,6 @@ class I2VDataset(Dataset):
             table = pq.read_table(data_path)
             n = table.num_rows
 
-            # Resolve root directory
             if "root" in entry:
                 root = Path(entry["root"])
                 if not root.is_absolute():
@@ -133,7 +128,7 @@ class I2VDataset(Dataset):
     # ------------------------------------------------------------------
 
     def _locate(self, idx: int) -> tuple[int, int]:
-        """Map global index → (table_index, local_row)."""
+        """Map global index -> (table_index, local_row)."""
         ti = bisect.bisect_right(self._cumulative, idx)
         local = idx if ti == 0 else idx - self._cumulative[ti - 1]
         return ti, local
@@ -142,32 +137,22 @@ class I2VDataset(Dataset):
     # Row reading
     # ------------------------------------------------------------------
 
-    def _read_row(self, ti: int, row: int) -> dict:
-        """Read a single row from the Arrow table as a Python dict."""
-        table = self._tables[ti]
+    @staticmethod
+    def _read_row(table, row: int) -> tuple[list[str], str, str | None]:
+        """Read a single row. Returns (video_paths, prompt, image_path)."""
         cols = table.column_names
-        result: dict = {}
 
         if "videos" in cols:
-            videos = table.column("videos")[row].as_py()
-            if len(videos) >= 2:
-                result["search_video"] = videos[0]
-                result["video"] = videos[1]
-            else:
-                result["video"] = videos[0]
+            video_paths = table.column("videos")[row].as_py()
         elif "video" in cols:
-            result["video"] = table.column("video")[row].as_py()
+            video_paths = [table.column("video")[row].as_py()]
         else:
-            raise ValueError(f"Table {ti} has no 'videos' or 'video' column")
+            raise ValueError("Table has no 'videos' or 'video' column")
 
-        result["prompt"] = table.column("prompt")[row].as_py() if "prompt" in cols else ""
+        prompt = table.column("prompt")[row].as_py() if "prompt" in cols else ""
+        image = table.column("image")[row].as_py() if "image" in cols else None
 
-        if "image" in cols:
-            val = table.column("image")[row].as_py()
-            if val is not None:
-                result["image"] = val
-
-        return result
+        return video_paths, prompt, image
 
     # ------------------------------------------------------------------
     # Path / media helpers
@@ -229,28 +214,26 @@ class I2VDataset(Dataset):
 
     def _load_item(self, idx):
         ti, row = self._locate(idx)
-        item = self._read_row(ti, row)
+        video_paths, prompt, image_path = self._read_row(self._tables[ti], row)
         cfg = self._configs[ti]
         root = self._roots[ti]
 
-        video_path = self._resolve(item["video"], root)
-        height, width = self._get_video_hw(video_path, cfg)
-        video = self._load_video(video_path, height, width, cfg)
+        # Use the last video (final target) to determine resolution
+        final_video_path = self._resolve(video_paths[-1], root)
+        height, width = self._get_video_hw(final_video_path, cfg)
 
-        raw_image = item.get("image")
-        image = (
-            self._load_image(self._resolve(raw_image, root), height, width) if raw_image else video[:, 0].clone()
-        )
+        # Load all videos in order
+        videos = [self._load_video(self._resolve(p, root), height, width, cfg) for p in video_paths]
 
-        result = {
+        # Reference image: explicit column, or first frame of the final video
+        if image_path is not None:
+            image = self._load_image(self._resolve(image_path, root), height, width)
+        else:
+            image = videos[-1][:, 0].clone()
+
+        return {
             "index": idx,
-            "video": video,
+            "videos": videos,
             "image": image,
-            "prompt": item["prompt"],
+            "prompt": prompt,
         }
-
-        if "search_video" in item:
-            search_path = self._resolve(item["search_video"], root)
-            result["search_video"] = self._load_video(search_path, height, width, cfg)
-
-        return result

@@ -400,30 +400,33 @@ class WanI2VForTraining:
 
     def compute_cos_loss(
         self,
-        x_final: torch.Tensor,
-        x_tau: torch.Tensor,
+        video_latents: list[torch.Tensor],
         condition: torch.Tensor,
         prompt_embeds: torch.Tensor,
-        tau_sigma: float = 0.5,
+        taus: list[float],
         boundary_noise_std: float = 0.02,
-        use_standard_formula: bool = False,
         path_type: PathType = "linear",
         smooth_blend_delta: float = 0.05,
     ) -> tuple[torch.Tensor, dict[str, float]]:
-        """Compute piecewise flow-matching loss for COS training.
+        """Compute N-step piecewise flow-matching loss for COS training.
 
-        Each available MoE expert gets its own dedicated sigma samples and
-        forward pass, guaranteeing both experts are trained every step
-        (when train_experts='both').
-
-        Solution A (default): rescaled parameterization ensuring path continuity.
-        Solution B (ablation, use_standard_formula=True): standard sigma formula
-            per segment (discontinuous at boundary).
+        Args:
+            video_latents: ``[v_0, …, v_{N-1}]`` encoded video latents.
+                ``v_{N-1}`` is the final target; ``v_0 … v_{N-2}`` are
+                intermediate waypoints (ordered coarsest → finest).
+            condition: Channel-concatenated mask + cond latents.
+            prompt_embeds: Text encoder outputs.
+            taus: Descending sigma boundaries ``[τ_0, …, τ_{K-1}]``,
+                len = len(video_latents) - 1.
+            boundary_noise_std: Gaussian perturbation for intermediate waypoints.
+            path_type: Interpolation strategy (see :mod:`cos_path`).
+            smooth_blend_delta: Blending window half-width (``smooth_blend`` only).
 
         Returns:
-            (loss, debug_dict) where loss is the mean across experts and
-            debug_dict has per-expert stats keyed by expert name.
+            ``(loss, debug_dict)`` — loss averaged across MoE experts, plus
+            per-expert stats.
         """
+        x_final = video_latents[-1]
         B = x_final.shape[0]
         device = x_final.device
         shifted_sigmas, shifted_timesteps, bsmntw = self._get_training_buffers(device)
@@ -448,37 +451,15 @@ class WanI2VForTraining:
 
             noise = torch.randn_like(x_final)
 
-            if use_standard_formula:
-                # Ablation: raw sigma per segment (discontinuous at boundary)
-                cos_high = sigmas >= tau_sigma
-                cos_low = ~cos_high
-                x_t = torch.zeros_like(x_final)
-                target = torch.zeros_like(x_final)
-                if cos_high.any():
-                    z_h = noise[cos_high]
-                    x_tau_h = x_tau[cos_high]
-                    sigma_h = sigmas_5d[cos_high]
-                    x_t[cos_high] = sigma_h * z_h + (1.0 - sigma_h) * x_tau_h
-                    target[cos_high] = z_h - x_tau_h
-                if cos_low.any():
-                    x_tau_l = x_tau[cos_low]
-                    x_final_l = x_final[cos_low]
-                    sigma_l = sigmas_5d[cos_low]
-                    if boundary_noise_std > 0:
-                        x_tau_l = x_tau_l + torch.randn_like(x_tau_l) * boundary_noise_std
-                    x_t[cos_low] = sigma_l * x_tau_l + (1.0 - sigma_l) * x_final_l
-                    target[cos_low] = x_tau_l - x_final_l
-            else:
-                x_t, target = compute_cos_path(
-                    path_type,
-                    sigmas_5d,
-                    tau_sigma,
-                    noise,
-                    x_tau,
-                    x_final,
-                    boundary_noise_std=boundary_noise_std,
-                    smooth_blend_delta=smooth_blend_delta,
-                )
+            x_t, target = compute_cos_path(
+                path_type,
+                sigmas_5d,
+                taus,
+                noise,
+                video_latents,
+                boundary_noise_std=boundary_noise_std,
+                smooth_blend_delta=smooth_blend_delta,
+            )
 
             # Forward through this expert (no MoE routing needed — sigma is in range)
             model_input = torch.cat([x_t, condition], dim=1)
@@ -496,13 +477,12 @@ class WanI2VForTraining:
             total_loss = total_loss + expert_loss
             n_experts += 1
 
-            # Per-expert debug stats
             with torch.no_grad():
 
                 def _norm(t: torch.Tensor) -> float:
                     return t.float().reshape(t.shape[0], -1).norm(dim=1).mean().item()
 
-                cos_high = sigmas >= tau_sigma
+                cos_high = sigmas >= taus[0]
                 debug[f"loss_{expert_name}"] = expert_loss.item()
                 debug[f"target_norm_{expert_name}"] = _norm(target) if B > 0 else 0.0
                 debug[f"sigma_mean_{expert_name}"] = sigmas.mean().item()
