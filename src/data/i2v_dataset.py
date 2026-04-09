@@ -1,41 +1,30 @@
-"""I2V training dataset.
+"""I2V training dataset — parquet-native.
 
-JSON format (list of items — legacy):
-[
+Config JSON points to one or more parquet files:
+
+    Single dataset:
     {
-        "video": "path/to/video.mp4",             // absolute or relative to JSON dir
-        "image": "ref.jpg" | ["ref.jpg"],          // optional, uses first video frame if absent
-        "prompt": "description of the video",
-        "search_video": "path/to/search.mp4"      // optional, for COS training
+        "data_path": "/path/to/train.parquet",
+        "root": "/path/to/video/root"        // base dir for relative paths
     }
-]
 
-JSON format (dict — single dataset config):
-{
-    "num_frames": 81,
-    "max_area": 184320,       // height * width budget
-    "height": 320,            // optional fixed height (overrides max_area)
-    "width": 576,             // optional fixed width (overrides max_area)
-    "fps": 16,
-    "root": "/abs/path/to/data/dir",  // optional, base dir for relative paths in items
-    "data": [ ... ]           // same item format as above
-    // OR
-    "data_path": "path/to/items.json"  // load items from external file
-}
+    Multi-dataset (list):
+    [
+        {"data_path": "/path/to/a/train.parquet", "root": "/path/to/a/"},
+        {"data_path": "/path/to/b/train.parquet", "root": "/path/to/b/"}
+    ]
 
-JSON format (list of dataset configs — multi-dataset):
-[
-    {
-        "num_frames": 81,
-        "max_area": 184320,
-        "fps": 16,
-        "root": "/abs/path/to/data/dir",    // optional, base dir for relative paths in items
-        "data_path": "path/to/items.json"   // or "data": [...]
-    },
-    ...
-]
+Parquet schema:
+    - videos: list<string>  — [search_video, video] (2 entries) or [video] (1 entry)
+      OR video: string      — single video path
+    - prompt: string
+    - image:  string        — optional, reference image path (uses first video frame if absent)
+
+Per-dataset overrides (optional keys in the config dict):
+    num_frames, max_area, height, width, fps
 """
 
+import bisect
 import json
 import logging
 import random
@@ -43,6 +32,7 @@ from pathlib import Path
 
 import decord
 import numpy as np
+import pyarrow.parquet as pq
 import torch
 from PIL import Image
 from pydantic import BaseModel
@@ -55,9 +45,6 @@ decord.bridge.set_bridge("torch")
 # Height/width must be divisible by vae_scale_factor_spatial * patch_size.
 # For Wan2.2: 8 * 2 = 16.
 _MOD_VALUE = 16
-
-# Config keys that distinguish a dataset config dict from a data item dict.
-_CONFIG_KEYS = {"num_frames", "max_area", "fps", "data", "data_path", "height", "width", "root"}
 
 
 class _ItemConfig(BaseModel):
@@ -72,18 +59,14 @@ def compute_hw(max_area: int, aspect_ratio: float) -> tuple[int, int]:
     """Compute (height, width) from a pixel budget and aspect ratio (h/w)."""
     height = round(np.sqrt(max_area * aspect_ratio)) // _MOD_VALUE * _MOD_VALUE
     width = round(np.sqrt(max_area / aspect_ratio)) // _MOD_VALUE * _MOD_VALUE
-    # Ensure at least _MOD_VALUE
     height = max(height, _MOD_VALUE)
     width = max(width, _MOD_VALUE)
     return height, width
 
 
-def _is_config_dict(d: dict) -> bool:
-    """Check if a dict looks like a dataset config (vs a data item)."""
-    return bool(set(d.keys()) & _CONFIG_KEYS)
-
-
 class I2VDataset(Dataset):
+    """Parquet-backed video dataset. Rows are read directly from Arrow tables."""
+
     def __init__(
         self,
         json_path: str,
@@ -93,98 +76,110 @@ class I2VDataset(Dataset):
         width: int | None = None,
         fps: int | None = None,
     ):
-        json_path_converted = Path(json_path)
-        base_dir = json_path_converted.parent
-        raw = json.loads(json_path_converted.read_text())
-
-        # Collect (item, base_dir, config_dict) tuples then build final lists.
-        items: list[dict] = []
-        item_configs: list[_ItemConfig] = []
-        base_dirs: list[Path] = []
+        config_path = Path(json_path)
+        parent_dir = config_path.parent
+        raw = json.loads(config_path.read_text())
 
         if isinstance(raw, dict):
-            # Single dataset config dict
-            cfg_items, cfg_base = self._load_config_items(raw, base_dir)
-            cfg = self._make_item_config(raw, num_frames, max_area, height, width, fps)
-            items.extend(cfg_items)
-            item_configs.extend([cfg] * len(cfg_items))
-            base_dirs.extend([cfg_base] * len(cfg_items))
-        elif isinstance(raw, list) and raw and isinstance(raw[0], dict) and _is_config_dict(raw[0]):
-            # List of dataset configs (multi-dataset)
-            for entry in raw:
-                cfg_items, cfg_base = self._load_config_items(entry, base_dir)
-                cfg = self._make_item_config(entry, num_frames, max_area, height, width, fps)
-                items.extend(cfg_items)
-                item_configs.extend([cfg] * len(cfg_items))
-                base_dirs.extend([cfg_base] * len(cfg_items))
+            entries = [raw]
+        elif isinstance(raw, list):
+            entries = raw
         else:
-            # Legacy: plain list of data items
-            default_cfg = self._make_item_config({}, num_frames, max_area, height, width, fps)
-            items.extend(raw)
-            item_configs.extend([default_cfg] * len(raw))
-            base_dirs.extend([base_dir] * len(raw))
+            raise ValueError(f"Config JSON must be a dict or list of dicts: {config_path}")
 
-        self.data = items
-        self._item_configs = item_configs
-        self._base_dirs = base_dirs
+        # Per-table metadata
+        self._tables: list[pq.ParquetFile] = []
+        self._roots: list[Path] = []
+        self._configs: list[_ItemConfig] = []
+        self._cumulative: list[int] = []  # cumulative row counts
 
-    @staticmethod
-    def _load_config_items(cfg: dict, parent_dir: Path) -> tuple[list[dict], Path]:
-        """Load data items from a config dict. Returns (items, base_dir).
-
-        base_dir priority: explicit "root" > data_path parent > parent_dir.
-        """
-        if "data" in cfg:
-            items = cfg["data"]
-            default_base = parent_dir
-        elif "data_path" in cfg:
-            data_path = Path(cfg["data_path"])
+        total = 0
+        for entry in entries:
+            data_path = Path(entry["data_path"])
             if not data_path.is_absolute():
                 data_path = parent_dir / data_path
-            items = json.loads(data_path.read_text())
-            default_base = data_path.parent
-        else:
-            raise ValueError(f"Dataset config must contain 'data' or 'data_path': {cfg}")
 
-        # Explicit root overrides the default base directory.
-        if "root" in cfg:
-            root = Path(cfg["root"])
-            if not root.is_absolute():
-                root = parent_dir / root
-            return items, root
-        return items, default_base
+            table = pq.read_table(data_path)
+            n = table.num_rows
+
+            # Resolve root directory
+            if "root" in entry:
+                root = Path(entry["root"])
+                if not root.is_absolute():
+                    root = parent_dir / root
+            else:
+                root = data_path.parent
+
+            cfg = _ItemConfig(
+                num_frames=num_frames if num_frames is not None else entry.get("num_frames", 81),
+                max_area=max_area if max_area is not None else entry.get("max_area", 480 * 832),
+                fixed_height=height if height is not None else entry.get("height"),
+                fixed_width=width if width is not None else entry.get("width"),
+                fps=fps if fps is not None else entry.get("fps", 16),
+            )
+
+            self._tables.append(table)
+            self._roots.append(root)
+            self._configs.append(cfg)
+            total += n
+            self._cumulative.append(total)
+
+            logger.info("Loaded %d rows from %s (root=%s)", n, data_path, root)
+
+        self._len = total
+
+    # ------------------------------------------------------------------
+    # Index mapping
+    # ------------------------------------------------------------------
+
+    def _locate(self, idx: int) -> tuple[int, int]:
+        """Map global index → (table_index, local_row)."""
+        ti = bisect.bisect_right(self._cumulative, idx)
+        local = idx if ti == 0 else idx - self._cumulative[ti - 1]
+        return ti, local
+
+    # ------------------------------------------------------------------
+    # Row reading
+    # ------------------------------------------------------------------
+
+    def _read_row(self, ti: int, row: int) -> dict:
+        """Read a single row from the Arrow table as a Python dict."""
+        table = self._tables[ti]
+        cols = table.column_names
+        result: dict = {}
+
+        if "videos" in cols:
+            videos = table.column("videos")[row].as_py()
+            if len(videos) >= 2:
+                result["search_video"] = videos[0]
+                result["video"] = videos[1]
+            else:
+                result["video"] = videos[0]
+        elif "video" in cols:
+            result["video"] = table.column("video")[row].as_py()
+        else:
+            raise ValueError(f"Table {ti} has no 'videos' or 'video' column")
+
+        result["prompt"] = table.column("prompt")[row].as_py() if "prompt" in cols else ""
+
+        if "image" in cols:
+            val = table.column("image")[row].as_py()
+            if val is not None:
+                result["image"] = val
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Path / media helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def _make_item_config(
-        json_cfg: dict,
-        num_frames: int | None,
-        max_area: int | None,
-        height: int | None,
-        width: int | None,
-        fps: int | None,
-    ) -> _ItemConfig:
-        """Build per-item config. Priority: constructor param > JSON config > default."""
-        return _ItemConfig(
-            num_frames=num_frames if num_frames is not None else json_cfg.get("num_frames", 81),
-            max_area=max_area if max_area is not None else json_cfg.get("max_area", 480 * 832),
-            fixed_height=height if height is not None else json_cfg.get("height"),
-            fixed_width=width if width is not None else json_cfg.get("width"),
-            fps=fps if fps is not None else json_cfg.get("fps", 16),
-        )
-
-    def __len__(self):
-        return len(self.data)
-
-    def _resolve(self, path: str, base_dir: Path) -> str:
-        """Resolve path: absolute stays absolute, relative resolves from base_dir."""
+    def _resolve(path: str, root: Path) -> str:
         p = Path(path)
-        if p.is_absolute():
-            return str(p)
-        return str(base_dir / p)
+        return str(p) if p.is_absolute() else str(root / p)
 
     @staticmethod
     def _get_video_hw(video_path: str, cfg: _ItemConfig) -> tuple[int, int]:
-        """Return target (height, width). Uses fixed h/w if set, otherwise derives from video aspect ratio."""
         if cfg.fixed_height is not None and cfg.fixed_width is not None:
             return cfg.fixed_height, cfg.fixed_width
         vr = decord.VideoReader(video_path)
@@ -196,11 +191,8 @@ class I2VDataset(Dataset):
         """Load video frames as uint8. Returns (C, T, H, W)."""
         vr = decord.VideoReader(video_path, width=width, height=height)
         total_frames = len(vr)
-
-        # Uniformly sample num_frames across the entire video (stretch or compress)
         indices = np.linspace(0, total_frames - 1, cfg.num_frames).round().astype(int).tolist()
-
-        frames = vr.get_batch(indices)  # (T, H, W, C) uint8 torch tensor
+        frames = vr.get_batch(indices)  # (T, H, W, C)
         return frames.permute(3, 0, 1, 2).contiguous()
 
     @staticmethod
@@ -210,6 +202,13 @@ class I2VDataset(Dataset):
             img = img.convert("RGB").resize((width, height), Image.LANCZOS)
             array = np.array(img, dtype=np.uint8)
         return torch.from_numpy(array).permute(2, 0, 1).contiguous()
+
+    # ------------------------------------------------------------------
+    # Dataset interface
+    # ------------------------------------------------------------------
+
+    def __len__(self):
+        return self._len
 
     _MAX_RETRIES = 10
 
@@ -225,25 +224,22 @@ class I2VDataset(Dataset):
                     self._MAX_RETRIES,
                     exc_info=True,
                 )
-                idx = random.randint(0, len(self.data) - 1)
-        # Final attempt — let it raise if it still fails.
+                idx = random.randint(0, self._len - 1)
         return self._load_item(idx)
 
     def _load_item(self, idx):
-        item = self.data[idx]
-        cfg = self._item_configs[idx]
-        base_dir = self._base_dirs[idx]
+        ti, row = self._locate(idx)
+        item = self._read_row(ti, row)
+        cfg = self._configs[ti]
+        root = self._roots[ti]
 
-        video_path = self._resolve(item["video"], base_dir)
+        video_path = self._resolve(item["video"], root)
         height, width = self._get_video_hw(video_path, cfg)
-        video = self._load_video(video_path, height, width, cfg)  # (C, T, H, W)
+        video = self._load_video(video_path, height, width, cfg)
 
-        # Reference image: string, list (use first element), or absent (first video frame)
         raw_image = item.get("image")
-        if isinstance(raw_image, list):
-            raw_image = raw_image[0] if raw_image else None
         image = (
-            self._load_image(self._resolve(raw_image, base_dir), height, width) if raw_image else video[:, 0].clone()
+            self._load_image(self._resolve(raw_image, root), height, width) if raw_image else video[:, 0].clone()
         )
 
         result = {
@@ -253,9 +249,8 @@ class I2VDataset(Dataset):
             "prompt": item["prompt"],
         }
 
-        # Optional search_video for COS training
         if "search_video" in item:
-            search_path = self._resolve(item["search_video"], base_dir)
+            search_path = self._resolve(item["search_video"], root)
             result["search_video"] = self._load_video(search_path, height, width, cfg)
 
         return result
