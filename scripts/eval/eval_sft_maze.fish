@@ -9,7 +9,12 @@
 
 # ── Configuration ────────────────────────────────────────────────────
 set CHECKPOINTS \
-    storage/checkpoints/cos_maze_cos_path_all/checkpoint-2000
+    storage/checkpoints/cos_maze_cos_path_all_bfs/checkpoint-2000
+    # storage/checkpoints/sft_maze/checkpoint-2000 \
+    # storage/checkpoints/sft_maze_muon/checkpoint-2000 \
+    # storage/checkpoints/sft_maze_muon/checkpoint-4000 \
+    # storage/checkpoints/sft_maze_muon/checkpoint-6000
+    # storage/checkpoints/cos_maze_cos_path_all/checkpoint-4000
     # storage/checkpoints/cos_maze_cos_path/checkpoint-4000 \
     # storage/checkpoints/sft_maze/checkpoint-epoch0
     # storage/checkpoints/cos_maze_linear_path/checkpoint-2000
@@ -21,9 +26,9 @@ set NUM_SAMPLES 5         # leave empty to use all samples
 set NUM_RENDER_STEPS     # leave empty to render all steps
 set SCHEDULER           # leave empty for default; options: euler, euler_ancestral, ddim, dpm_solver, unipc, flow_match_euler
 set EVAL_JSONS \
-    /mnt/umm/users/pufanyi/workspace/maze/test_data/test.json
-    # /mnt/umm/users/pufanyi/workspace/maze/test_data_easy/test.json \
-    # /mnt/umm/users/pufanyi/workspace/maze/test_data_medium/test.json
+    /mnt/umm/users/pufanyi/workspace/maze/test_data/test.json \
+    /mnt/umm/users/pufanyi/workspace/maze/test_data_easy/test.json \
+    /mnt/umm/users/pufanyi/workspace/maze/test_data_medium/test.json
 # ─────────────────────────────────────────────────────────────────────
 
 # Derive output dir: single checkpoint gets a specific name, multiple uses a generic base

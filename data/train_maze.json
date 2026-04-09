@@ -8,6 +8,10 @@
     "root": "/mnt/umm/users/pufanyi/workspace/maze/data_medium/"
   },
   {
+    "data_path": "/mnt/umm/users/pufanyi/workspace/maze/data/train_cos.json",
+    "root": "/mnt/umm/users/pufanyi/workspace/maze/data/"
+  },
+  {
     "data_path": "/mnt/umm/users/pufanyi/workspace/maze/data_2/train_cos.json",
     "root": "/mnt/umm/users/pufanyi/workspace/maze/data_2/"
   }
