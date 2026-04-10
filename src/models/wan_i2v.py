@@ -426,6 +426,14 @@ class WanI2VForTraining:
             ``(loss, debug_dict)`` — loss averaged across MoE experts, plus
             per-expert stats.
         """
+        expected_taus = len(video_latents) - 1
+        if len(taus) != expected_taus:
+            raise ValueError(
+                "COS training expects one tau boundary per transition between videos, "
+                f"got {len(video_latents)} videos/waypoints and {len(taus)} tau values. "
+                f"Expected {expected_taus} tau values for this batch."
+            )
+
         x_final = video_latents[-1]
         B = x_final.shape[0]
         device = x_final.device
@@ -482,7 +490,7 @@ class WanI2VForTraining:
                 def _norm(t: torch.Tensor) -> float:
                     return t.float().reshape(t.shape[0], -1).norm(dim=1).mean().item()
 
-                cos_high = sigmas >= taus[0]
+                cos_high = torch.ones_like(sigmas, dtype=torch.bool) if not taus else sigmas >= taus[0]
                 debug[f"loss_{expert_name}"] = expert_loss.item()
                 debug[f"target_norm_{expert_name}"] = _norm(target) if B > 0 else 0.0
                 debug[f"sigma_mean_{expert_name}"] = sigmas.mean().item()

@@ -72,6 +72,7 @@ def compute_cos_path(
     Returns:
         ``(x_t, target)`` with the same shape as noise.
     """
+    _validate_nstep_inputs(path_type, taus, waypoints)
     K = len(taus)
 
     if path_type == "linear":
@@ -103,6 +104,27 @@ def compute_cos_path(
     if path_type == "target_linear":
         return _target_linear(sigma, tau, noise, x_tau, x_final)
     raise ValueError(f"Unknown COS path type: {path_type!r}")
+
+
+def _validate_nstep_inputs(path_type: PathType, taus: list[float], waypoints: list[Tensor]) -> None:
+    """Validate COS chain structure before dispatching to a path implementation."""
+    if not waypoints:
+        raise ValueError(f"COS path {path_type!r} requires at least one waypoint")
+
+    expected_taus = len(waypoints) - 1
+    if len(taus) != expected_taus:
+        raise ValueError(
+            "COS path expects len(taus) == len(waypoints) - 1, "
+            f"got {len(taus)} taus for {len(waypoints)} waypoints "
+            f"(path_type={path_type!r}). "
+            f"For {len(waypoints)} videos/waypoints, use exactly {expected_taus} tau boundaries."
+        )
+
+    if any(not 0.0 < tau < 1.0 for tau in taus):
+        raise ValueError(f"COS taus must lie strictly inside (0, 1), got {taus}")
+
+    if any(taus[i] <= taus[i + 1] for i in range(len(taus) - 1)):
+        raise ValueError(f"COS taus must be strictly descending, got {taus}")
 
 
 # ======================================================================
@@ -178,6 +200,12 @@ def _target_cosine_n(
     Velocity target:   dx/dσ = noise − x_eff + (1−σ) · dx_eff/dσ
     """
     K = len(taus)
+    if K == 0:
+        x_eff = waypoints[0]
+        x_t = sigma * noise + (1.0 - sigma) * x_eff
+        target = noise - x_eff
+        return x_t, target
+
     pi = math.pi
     # Extended boundaries for transition windows
     boundaries = [1.0] + taus + [0.0]
