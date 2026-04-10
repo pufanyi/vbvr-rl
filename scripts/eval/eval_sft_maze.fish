@@ -9,7 +9,10 @@
 
 # ── Configuration ────────────────────────────────────────────────────
 set CHECKPOINTS \
-    storage/checkpoints/cos_maze_cos_path_all_bfs/checkpoint-2000
+    storage/checkpoints/cos_maze_cos_path_all_bfs_3steps/checkpoint-2000 \
+    storage/checkpoints/cos_maze_cos_path_all_bfs_w_color/checkpoint-2000 \
+    storage/checkpoints/sft_maze_bfs_3steps/checkpoint-2000
+
     # storage/checkpoints/sft_maze/checkpoint-2000 \
     # storage/checkpoints/sft_maze_muon/checkpoint-2000 \
     # storage/checkpoints/sft_maze_muon/checkpoint-4000 \

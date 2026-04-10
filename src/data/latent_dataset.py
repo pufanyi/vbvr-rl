@@ -1,20 +1,11 @@
-"""Dataset for precomputed latents stored in parquet.
+"""Dataset for precomputed latents stored in safetensors.
 
-Config JSON format (same structure as I2VDataset):
-    [{"data_path": "/path/to/latents.parquet"}, ...]
+Config JSON format:
+    [{"data_path": "/path/to/shard.safetensors"}, ...]
 
-Parquet schema (produced by scripts/precompute_latents.py):
-    - prompt               (string)
-    - prompt_embeds        (bytes) — bf16 tensor
-    - video_latents_0      (bytes) — bf16 tensor, step 0
-    - video_latents_1      (bytes) — bf16 tensor, step 1
-    - ...
-    - final_latents        (bytes) — bf16 tensor, final step
-    - condition            (bytes) — bf16 tensor
-    - num_steps            (int)
-    - embed_shape          (string, JSON list)
-    - latent_shape         (string, JSON list)
-    - condition_shape      (string, JSON list)
+Each safetensors file contains tensors keyed as:
+    {i}.prompt_embeds, {i}.latents, {i}.condition
+with metadata header: count (int), prompts (JSON list of strings).
 """
 
 import bisect
@@ -22,29 +13,23 @@ import json
 import logging
 from pathlib import Path
 
-import numpy as np
-import pyarrow.parquet as pq
 import torch
+from safetensors import safe_open
 from torch.utils.data import Dataset
 
 logger = logging.getLogger(__name__)
 
 
-def _bytes_to_bf16(data: bytes, shape: list[int]) -> torch.Tensor:
-    """Deserialize bytes to a bf16 tensor with the given shape."""
-    arr = np.frombuffer(data, dtype=np.uint16).copy()
-    return torch.from_numpy(arr).view(torch.bfloat16).reshape(shape)
-
-
 class LatentDataset(Dataset):
-    """Parquet-backed dataset of precomputed latents. Zero decoding overhead."""
+    """Safetensors-backed dataset of precomputed latents."""
 
     def __init__(self, json_path: str):
         config_path = Path(json_path)
         raw = json.loads(config_path.read_text())
         entries = [raw] if isinstance(raw, dict) else raw
 
-        self._tables = []
+        self._shards: list[safe_open] = []
+        self._prompts: list[list[str]] = []
         self._cumulative: list[int] = []
         total = 0
 
@@ -53,12 +38,16 @@ class LatentDataset(Dataset):
             if not data_path.is_absolute():
                 data_path = config_path.parent / data_path
 
-            table = pq.read_table(data_path)
-            n = table.num_rows
-            self._tables.append(table)
+            f = safe_open(str(data_path), framework="pt")
+            metadata = f.metadata()
+            n = int(metadata["count"])
+            prompts = json.loads(metadata["prompts"])
+
+            self._shards.append(f)
+            self._prompts.append(prompts)
             total += n
             self._cumulative.append(total)
-            logger.info("Loaded %d precomputed rows from %s", n, data_path)
+            logger.info("Loaded %d precomputed samples from %s", n, data_path)
 
         self._len = total
 
@@ -72,28 +61,17 @@ class LatentDataset(Dataset):
 
     def __getitem__(self, idx):
         ti, row = self._locate(idx)
-        table = self._tables[ti]
+        f = self._shards[ti]
+        prompt = self._prompts[ti][row]
 
-        prompt = table.column("prompt")[row].as_py()
-        num_steps = table.column("num_steps")[row].as_py()
-
-        embed_shape = json.loads(table.column("embed_shape")[row].as_py())
-        latent_shape = json.loads(table.column("latent_shape")[row].as_py())
-        condition_shape = json.loads(table.column("condition_shape")[row].as_py())
-
-        prompt_embeds = _bytes_to_bf16(table.column("prompt_embeds")[row].as_py(), embed_shape)
-        condition = _bytes_to_bf16(table.column("condition")[row].as_py(), condition_shape)
-
-        video_latents = []
-        for step_idx in range(num_steps - 1):
-            vl = _bytes_to_bf16(table.column(f"video_latents_{step_idx}")[row].as_py(), latent_shape)
-            video_latents.append(vl)
-        video_latents.append(_bytes_to_bf16(table.column("final_latents")[row].as_py(), latent_shape))
+        prompt_embeds = f.get_tensor(f"{row}.prompt_embeds")
+        latents = f.get_tensor(f"{row}.latents")
+        condition = f.get_tensor(f"{row}.condition")
 
         return {
             "index": idx,
             "prompt": prompt,
             "prompt_embeds": prompt_embeds,
-            "video_latents": video_latents,
+            "video_latents": [latents],
             "condition": condition,
         }
