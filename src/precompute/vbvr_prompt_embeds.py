@@ -128,16 +128,15 @@ def encode_text(components, prompts: list[str], device: str) -> torch.Tensor:
     input_ids = tokens.input_ids.to(device)
     mask = tokens.attention_mask.to(device)
     embeds = components["text_encoder"](input_ids, mask).last_hidden_state
-    embeds = embeds.masked_fill(~mask.bool().unsqueeze(-1), 0)
     embeds = embeds.to(torch.bfloat16)
 
-    # Pad sequence dim back to max_length for uniform output shape
-    seq_len = embeds.shape[1]
-    if seq_len < max_length:
-        pad = embeds.new_zeros(embeds.shape[0], max_length - seq_len, embeds.shape[2])
-        embeds = torch.cat([embeds, pad], dim=1)
+    # Trim each sample to its actual token length (variable-length output)
+    seq_lens = mask.sum(dim=1).tolist()
+    results = []
+    for i, length in enumerate(seq_lens):
+        results.append(embeds[i, :length].contiguous())
 
-    return embeds
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -222,13 +221,13 @@ def main():
         batch = my_samples[batch_start : batch_start + args.batch_size]
         prompts = [s["prompt"] for s in batch]
 
-        embeds = encode_text(components, prompts, device)
+        embeds_list = encode_text(components, prompts, device)
 
         for j, sample in enumerate(batch):
             sample_path = output_dir / f"{sample['tar_stem']}_{sample['index_in_tar']}.safetensors"
             tmp_path = sample_path.with_suffix(".safetensors.tmp")
             save_file(
-                {"prompt_embeds": embeds[j].contiguous().cpu()},
+                {"prompt_embeds": embeds_list[j].cpu()},
                 tmp_path,
                 metadata={
                     "prompt": sample["prompt"],
