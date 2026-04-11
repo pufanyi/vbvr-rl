@@ -20,7 +20,7 @@ set -q METADATA;    or set -gx METADATA    data/vbvr/VBVR-Dataset/data/metadata.
 set -q TAR_DIR;     or set -gx TAR_DIR     data/vbvr/VBVR-Dataset/tars
 set -q MODEL_PATH;  or set -gx MODEL_PATH  storage/models/Wan2.2-I2V-A14B-Diffusers
 set -q OUTPUT_DIR;   or set -gx OUTPUT_DIR   data/vbvr/latents/vae_latents
-set -q BATCH_SIZE;   or set -gx BATCH_SIZE   64
+set -q BATCH_SIZE;   or set -gx BATCH_SIZE   32
 set -q NUM_FRAMES;   or set -gx NUM_FRAMES   81
 
 . .venv/bin/activate.fish

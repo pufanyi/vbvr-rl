@@ -187,110 +187,97 @@ def load_image_from_tar(tar: tarfile.TarFile, member_path: str, height: int, wid
 # Process one tar
 # ---------------------------------------------------------------------------
 
-def process_tar(
-    tar_path: Path,
-    rows: list[dict],
+def process_samples(
+    samples: list[dict],
+    tar_dir: Path,
     components: dict,
     device: str,
     args,
     output_dir: Path,
     h: int,
     w: int,
-    skip_existing: bool = False,
 ) -> int:
-    n = len(rows)
-    if n == 0:
+    """Process a list of samples, grouped by tar for efficient I/O.
+
+    Each sample dict has: tar_name, tar_stem, index_in_tar, prompt,
+    first_frame_path, ground_truth_video_path.
+    """
+    if not samples:
         return 0
 
     rank = _get_rank()
-    tar_stem = tar_path.stem
-    samples_done = 0
-    samples_skipped = 0
-    num_batches = (n + args.batch_size - 1) // args.batch_size
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    n = len(samples)
 
-    tar = tarfile.open(tar_path, "r")
-    pbar = tqdm(total=num_batches, desc=f"[rank {rank}] {tar_stem}", position=local_rank, leave=True)
-    try:
-        for batch_start in range(0, n, args.batch_size):
-            batch_end = min(batch_start + args.batch_size, n)
-            batch_rows = rows[batch_start:batch_end]
-            cur_bs = len(batch_rows)
+    # Group by tar to avoid reopening the same tar repeatedly
+    from collections import OrderedDict
+    tar_groups: OrderedDict[str, list[dict]] = OrderedDict()
+    for s in samples:
+        tar_groups.setdefault(s["tar_name"], []).append(s)
 
-            # Check which samples already exist
-            if skip_existing:
-                batch_indices = list(range(batch_start, batch_end))
-                missing = [
-                    (i, local_j)
-                    for local_j, i in enumerate(batch_indices)
-                    if not (output_dir / f"{tar_stem}_{i}.safetensors").exists()
-                ]
-                if not missing:
-                    samples_skipped += cur_bs
-                    samples_done += cur_bs
-                    continue
-                missing_global_indices = {i for i, _ in missing}
-            else:
-                missing_global_indices = None
+    pbar = tqdm(total=n, desc=f"[rank {rank}]", position=local_rank, leave=True, unit="sample")
+    written = 0
 
-            batch_videos: list[torch.Tensor] = []
-            batch_images: list[torch.Tensor] = []
+    for tar_name, group in tar_groups.items():
+        tar_path = tar_dir / tar_name
+        tar = tarfile.open(tar_path, "r")
+        try:
+            # Process in batches within this tar group
+            for batch_start in range(0, len(group), args.batch_size):
+                batch = group[batch_start : batch_start + args.batch_size]
 
-            for row in batch_rows:
-                video = load_video_from_tar(tar, row["ground_truth_video_path"], h, w, args.num_frames)
-                batch_videos.append(video)
-                image = load_image_from_tar(tar, row["first_frame_path"], h, w)
-                batch_images.append(image)
+                batch_videos: list[torch.Tensor] = []
+                batch_images: list[torch.Tensor] = []
 
-            # Encode video
-            video_batch = (
-                torch.stack(batch_videos)
-                .to(device=device, dtype=torch.bfloat16)
-                .div(127.5)
-                .sub(1.0)
-            )
-            latents = encode_video(components, video_batch)
+                for s in batch:
+                    video = load_video_from_tar(tar, s["ground_truth_video_path"], h, w, args.num_frames)
+                    batch_videos.append(video)
+                    image = load_image_from_tar(tar, s["first_frame_path"], h, w)
+                    batch_images.append(image)
 
-            # Encode condition
-            image_batch = (
-                torch.stack(batch_images)
-                .to(device=device, dtype=torch.bfloat16)
-                .div(127.5)
-                .sub(1.0)
-            )
-            cond = prepare_condition(components, image_batch, args.num_frames, h, w)
-
-            # Save each sample immediately
-            for j in range(cur_bs):
-                idx = batch_start + j
-                if missing_global_indices is not None and idx not in missing_global_indices:
-                    continue
-
-                sample_path = output_dir / f"{tar_stem}_{idx}.safetensors"
-                tmp_path = sample_path.with_suffix(".safetensors.tmp")
-                save_file(
-                    {
-                        "latents": latents[j].contiguous().cpu(),
-                        "condition": cond[j].contiguous().cpu(),
-                    },
-                    tmp_path,
-                    metadata={
-                        "prompt": batch_rows[j]["prompt"],
-                        "tar": tar_path.name,
-                        "index_in_tar": str(idx),
-                    },
+                # Encode video
+                video_batch = (
+                    torch.stack(batch_videos)
+                    .to(device=device, dtype=torch.bfloat16)
+                    .div(127.5)
+                    .sub(1.0)
                 )
-                tmp_path.rename(sample_path)
+                latents = encode_video(components, video_batch)
 
-            samples_done += cur_bs
-            pbar.update(1)
-    finally:
-        pbar.close()
-        tar.close()
+                # Encode condition
+                image_batch = (
+                    torch.stack(batch_images)
+                    .to(device=device, dtype=torch.bfloat16)
+                    .div(127.5)
+                    .sub(1.0)
+                )
+                cond = prepare_condition(components, image_batch, args.num_frames, h, w)
 
-    if samples_skipped > 0:
-        logger.info("[rank {}] {} — skipped {} existing samples", rank, tar_stem, samples_skipped)
-    return samples_done - samples_skipped
+                # Save each sample immediately
+                for j, s in enumerate(batch):
+                    sample_path = output_dir / f"{s['tar_stem']}_{s['index_in_tar']}.safetensors"
+                    tmp_path = sample_path.with_suffix(".safetensors.tmp")
+                    save_file(
+                        {
+                            "latents": latents[j].contiguous().cpu(),
+                            "condition": cond[j].contiguous().cpu(),
+                        },
+                        tmp_path,
+                        metadata={
+                            "prompt": s["prompt"],
+                            "tar": tar_name,
+                            "index_in_tar": str(s["index_in_tar"]),
+                        },
+                    )
+                    tmp_path.rename(sample_path)
+
+                written += len(batch)
+                pbar.update(len(batch))
+        finally:
+            tar.close()
+
+    pbar.close()
+    return written
 
 
 # ---------------------------------------------------------------------------
@@ -324,43 +311,50 @@ def main():
     if rank == 0:
         logger.info("Loaded metadata: {} rows", metadata.num_rows)
 
-    tar_to_rows: dict[str, list[dict]] = {}
+    # ---- Build flat sample list with tar info ----
+    all_samples = []
     for i in range(metadata.num_rows):
         tar_file = metadata.column("tar_file")[i].as_py()
         tar_basename = Path(tar_file).name
-        row = {
+        tar_stem = Path(tar_basename).stem
+        if args.tars and tar_basename not in args.tars:
+            continue
+        all_samples.append({
             "prompt": metadata.column("prompt")[i].as_py(),
             "first_frame_path": metadata.column("first_frame_path")[i].as_py(),
             "ground_truth_video_path": metadata.column("ground_truth_video_path")[i].as_py(),
-        }
-        tar_to_rows.setdefault(tar_basename, []).append(row)
+            "tar_name": tar_basename,
+            "tar_stem": tar_stem,
+            "index_in_tar": 0,  # will be assigned below
+        })
 
-    if args.tars:
-        tar_to_rows = {k: v for k, v in tar_to_rows.items() if k in args.tars}
+    # Assign per-tar indices
+    tar_counters: dict[str, int] = {}
+    for s in all_samples:
+        idx = tar_counters.get(s["tar_name"], 0)
+        s["index_in_tar"] = idx
+        tar_counters[s["tar_name"]] = idx + 1
 
-    tar_names = sorted(tar_to_rows.keys())
     if rank == 0:
-        logger.info("Found {} tar files to process", len(tar_names))
+        logger.info("Total samples: {}, across {} tars", len(all_samples), len(tar_counters))
 
-    # ---- Skip fully-processed tars ----
+    # ---- Distribute samples round-robin ----
+    my_samples = all_samples[rank::world_size]
+    logger.info("[rank {}] Assigned {} / {} samples", rank, len(my_samples), len(all_samples))
+
+    # ---- Skip existing ----
     if args.skip_existing:
-        before = len(tar_names)
-        remaining = []
-        for t in tar_names:
-            stem = Path(t).stem
-            expected = len(tar_to_rows[t])
-            existing = len(list(output_dir.glob(f"{stem}_*.safetensors")))
-            if existing < expected:
-                remaining.append(t)
-        skipped = before - len(remaining)
-        tar_names = remaining
-        if rank == 0 and skipped > 0:
-            logger.info("Skipped {} fully-processed tars", skipped)
+        before = len(my_samples)
+        my_samples = [
+            s for s in my_samples
+            if not (output_dir / f"{s['tar_stem']}_{s['index_in_tar']}.safetensors").exists()
+        ]
+        skipped = before - len(my_samples)
+        if skipped > 0:
+            logger.info("[rank {}] Skipped {} existing samples", rank, skipped)
 
-    # ---- Distribute tars round-robin ----
-    my_tars = tar_names[rank::world_size]
-    total_my_samples = sum(len(tar_to_rows[t]) for t in my_tars)
-    logger.info("[rank {}] Assigned {} tars ({} samples)", rank, len(my_tars), total_my_samples)
+    # ---- Sort by tar so we open each tar once ----
+    my_samples.sort(key=lambda s: (s["tar_name"], s["index_in_tar"]))
 
     # ---- Load VAE ----
     torch.backends.cudnn.benchmark = True
@@ -372,26 +366,10 @@ def main():
         components["vae"].encoder = torch.compile(components["vae"].encoder)
 
     # ---- Process ----
-    global_done = 0
-    for tar_idx, tar_name in enumerate(my_tars):
-        tar_path = tar_dir / tar_name
-        rows = tar_to_rows[tar_name]
-        logger.info(
-            "[rank {}] ({}/{}) {} — {} samples",
-            rank, tar_idx + 1, len(my_tars), tar_name, len(rows),
-        )
-        num_written = process_tar(
-            tar_path, rows, components, device, args, output_dir, h, w,
-            skip_existing=args.skip_existing,
-        )
-        global_done += num_written
-        logger.info(
-            "[rank {}] Done {} — wrote {}, global {}/{} ({:.1f}%)",
-            rank, tar_name, num_written, global_done, total_my_samples,
-            global_done / max(total_my_samples, 1) * 100,
-        )
-
-    logger.info("[rank {}] All done — {} samples written", rank, global_done)
+    num_written = process_samples(
+        my_samples, tar_dir, components, device, args, output_dir, h, w,
+    )
+    logger.info("[rank {}] All done — {} samples written", rank, num_written)
 
     if _is_distributed():
         torch.distributed.destroy_process_group()
