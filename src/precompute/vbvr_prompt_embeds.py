@@ -90,7 +90,10 @@ def load_text_encoder(model_path: str, device: str):
     text_encoder.to(device).eval().requires_grad_(False)
     logger.info("Loaded text encoder")
 
-    return {"tokenizer": tokenizer, "text_encoder": text_encoder, "max_length": tokenizer.model_max_length or 512}
+    max_length = tokenizer.model_max_length
+    if max_length is None or max_length > 10_000:
+        max_length = 512
+    return {"tokenizer": tokenizer, "text_encoder": text_encoder, "max_length": max_length}
 
 
 # ---------------------------------------------------------------------------
