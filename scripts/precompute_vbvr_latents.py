@@ -285,9 +285,14 @@ def process_tar(
     components: dict,
     device: str,
     args,
-    output_path: Path,
+    output_dir: Path,
+    skip_existing: bool = False,
 ) -> int:
-    """Process all samples from a single tar file and save as safetensors.
+    """Process all samples from a single tar file, saving each sample immediately.
+
+    Each sample is saved as an individual safetensors file:
+        {output_dir}/{tar_stem}_{idx}.safetensors
+    containing prompt_embeds, latents, condition, and prompt in metadata.
 
     Returns the number of samples written.
     """
@@ -303,18 +308,39 @@ def process_tar(
     else:
         h, w = compute_hw(args.max_area, 1.0)
 
-    tensors: dict[str, torch.Tensor] = {}
-    prompts: list[str] = []
+    rank = _get_rank()
+    tar_stem = tar_path.stem
+    samples_done = 0
+    samples_skipped = 0
+    last_logged = 0
+    log_every = 100
 
     tar = tarfile.open(tar_path, "r")
     try:
         for batch_start in tqdm(
             range(0, n, args.batch_size),
-            desc=f"[rank {_get_rank()}] {tar_path.stem}",
+            desc=f"[rank {rank}] {tar_stem}",
         ):
             batch_end = min(batch_start + args.batch_size, n)
             batch_rows = rows[batch_start:batch_end]
             cur_bs = len(batch_rows)
+
+            # Check which samples in this batch already exist
+            if skip_existing:
+                batch_indices = list(range(batch_start, batch_end))
+                missing = [
+                    (i, local_j)
+                    for local_j, i in enumerate(batch_indices)
+                    if not (output_dir / f"{tar_stem}_{i}.safetensors").exists()
+                ]
+                if not missing:
+                    samples_skipped += cur_bs
+                    samples_done += cur_bs
+                    continue
+                # If some exist and some don't, process the full batch but only save missing ones
+                missing_global_indices = {i for i, _ in missing}
+            else:
+                missing_global_indices = None
 
             batch_prompts: list[str] = []
             batch_videos: list[torch.Tensor] = []
@@ -348,21 +374,40 @@ def process_tar(
             )
             cond = prepare_condition(components, image_batch, args.num_frames, h, w)
 
-            # Store per-sample tensors keyed by index
-            base = batch_start
+            # Save each sample immediately
             for j in range(cur_bs):
-                idx = base + j
-                prompts.append(batch_prompts[j])
-                tensors[f"{idx}.prompt_embeds"] = prompt_emb[j].contiguous().cpu()
-                tensors[f"{idx}.latents"] = latents[j].contiguous().cpu()
-                tensors[f"{idx}.condition"] = cond[j].contiguous().cpu()
+                idx = batch_start + j
+                if missing_global_indices is not None and idx not in missing_global_indices:
+                    continue
+
+                sample_tensors = {
+                    "prompt_embeds": prompt_emb[j].contiguous().cpu(),
+                    "latents": latents[j].contiguous().cpu(),
+                    "condition": cond[j].contiguous().cpu(),
+                }
+                sample_meta = {
+                    "prompt": batch_prompts[j],
+                    "tar": tar_path.name,
+                    "index_in_tar": str(idx),
+                }
+                sample_path = output_dir / f"{tar_stem}_{idx}.safetensors"
+                tmp_path = sample_path.with_suffix(".safetensors.tmp")
+                save_file(sample_tensors, tmp_path, metadata=sample_meta)
+                tmp_path.rename(sample_path)
+
+            samples_done += cur_bs
+            if samples_done - last_logged >= log_every:
+                logger.info(
+                    "[rank {}] {} — {}/{} samples encoded ({:.1f}%)",
+                    rank, tar_stem, samples_done, n, samples_done / n * 100,
+                )
+                last_logged = samples_done
     finally:
         tar.close()
 
-    # Save: tensors in safetensors, prompts in metadata header
-    metadata = {"count": str(n), "prompts": json.dumps(prompts, ensure_ascii=False)}
-    save_file(tensors, output_path, metadata=metadata)
-    return n
+    if samples_skipped > 0:
+        logger.info("[rank {}] {} — skipped {} already-existing samples", rank, tar_stem, samples_skipped)
+    return samples_done - samples_skipped
 
 
 # ---------------------------------------------------------------------------
@@ -406,16 +451,20 @@ def main():
     if rank == 0:
         logger.info("Found {} tar files to process", len(tar_names))
 
-    # ---- Skip already-processed tars if requested ----
+    # ---- Skip fully-processed tars if requested ----
     if args.skip_existing:
         before = len(tar_names)
-        tar_names = [
-            t for t in tar_names
-            if not (output_dir / t.replace(".tar", ".safetensors")).exists()
-        ]
-        skipped = before - len(tar_names)
+        remaining = []
+        for t in tar_names:
+            stem = Path(t).stem
+            expected = len(tar_to_rows[t])
+            existing = len(list(output_dir.glob(f"{stem}_*.safetensors")))
+            if existing < expected:
+                remaining.append(t)
+        skipped = before - len(remaining)
+        tar_names = remaining
         if rank == 0 and skipped > 0:
-            logger.info("Skipped {} already-processed tars", skipped)
+            logger.info("Skipped {} fully-processed tars", skipped)
 
     # ---- Distribute tars across GPUs (round-robin by global rank) ----
     my_tars = tar_names[rank::world_size]
@@ -426,15 +475,25 @@ def main():
     components = load_model_components(args.model_path, device)
 
     # ---- Process each assigned tar ----
+    total_my_samples = sum(len(tar_to_rows[t]) for t in my_tars)
+    global_done = 0
     for tar_idx, tar_name in enumerate(my_tars):
         tar_path = tar_dir / tar_name
         rows = tar_to_rows[tar_name]
-        logger.info("[rank {}] ({}/{}) Processing {} ({} samples)", rank, tar_idx + 1, len(my_tars), tar_name, len(rows))
+        logger.info(
+            "[rank {}] ({}/{}) Processing {} ({} samples, global {}/{})",
+            rank, tar_idx + 1, len(my_tars), tar_name, len(rows), global_done, total_my_samples,
+        )
 
-        out_name = tar_name.replace(".tar", ".safetensors")
-        out_path = output_dir / out_name
-        num_written = process_tar(tar_path, rows, components, device, args, out_path)
-        logger.info("[rank {}] Wrote {} ({} samples)", rank, out_path, num_written)
+        num_written = process_tar(
+            tar_path, rows, components, device, args, output_dir,
+            skip_existing=args.skip_existing,
+        )
+        global_done += num_written
+        logger.info(
+            "[rank {}] Done {} ({} samples, global {}/{} = {:.1f}%)",
+            rank, tar_name, num_written, global_done, total_my_samples, global_done / total_my_samples * 100,
+        )
 
     # ---- Gather output paths and write config (rank 0) ----
     _barrier()

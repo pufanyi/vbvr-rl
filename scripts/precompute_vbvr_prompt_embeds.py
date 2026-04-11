@@ -1,0 +1,229 @@
+"""Precompute T5 prompt embeddings for VBVR-Dataset (text-only, no VAE).
+
+Launch on 2 nodes x 8 GPUs (16 GPUs total):
+    # Run on EVERY node:
+    uv run torchrun \
+        --nnodes=2 --nproc_per_node=8 \
+        --node_rank=$RANK \
+        --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \
+        scripts/precompute_vbvr_prompt_embeds.py \
+        --metadata data/vbvr/VBVR-Dataset/data/metadata.parquet \
+        --tar_dir data/vbvr/VBVR-Dataset/tars \
+        --model_path storage/models/Wan2.2-I2V-A14B-Diffusers \
+        --output_dir data/vbvr/latents/prompt_embeds \
+        --batch_size 64
+
+Output: one safetensors per sample: {tar_stem}_{idx}.safetensors
+    - prompt_embeds (bf16)
+    - metadata: prompt, tar, index_in_tar
+"""
+
+import argparse
+import json
+import os
+import tarfile
+from pathlib import Path
+
+import pyarrow.parquet as pq
+import torch
+from loguru import logger
+from safetensors.torch import save_file
+from tqdm import tqdm
+
+
+# ---------------------------------------------------------------------------
+# Distributed helpers
+# ---------------------------------------------------------------------------
+
+def _is_distributed() -> bool:
+    return "RANK" in os.environ
+
+
+def _get_rank() -> int:
+    return int(os.environ.get("RANK", 0))
+
+
+def _get_world_size() -> int:
+    return int(os.environ.get("WORLD_SIZE", 1))
+
+
+def _init_distributed():
+    if not _is_distributed():
+        return
+    torch.distributed.init_process_group(backend="nccl")
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(local_rank)
+
+
+# ---------------------------------------------------------------------------
+# Args
+# ---------------------------------------------------------------------------
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Precompute T5 prompt embeddings for VBVR")
+    p.add_argument("--metadata", required=True, help="Path to VBVR metadata.parquet")
+    p.add_argument("--tar_dir", required=True, help="Directory containing VBVR tar files (used for grouping only)")
+    p.add_argument("--model_path", required=True, help="Path to Wan2.2 diffusers model")
+    p.add_argument("--output_dir", required=True, help="Directory to write output safetensors files")
+    p.add_argument("--batch_size", type=int, default=64, help="Batch size for T5 encoding")
+    p.add_argument("--tars", nargs="*", default=None, help="Process only these tar files (basenames). Default: all.")
+    p.add_argument("--skip_existing", action="store_true", help="Skip samples whose output already exists")
+    return p.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# Model loading (T5 only)
+# ---------------------------------------------------------------------------
+
+def load_text_encoder(model_path: str, device: str):
+    from transformers import AutoTokenizer, UMT5EncoderModel
+
+    model_dir = Path(model_path)
+
+    tokenizer = AutoTokenizer.from_pretrained(model_dir / "tokenizer")
+    logger.info("Loaded tokenizer")
+
+    text_encoder = UMT5EncoderModel.from_pretrained(
+        model_dir / "text_encoder", torch_dtype=torch.bfloat16
+    )
+    text_encoder.to(device).eval().requires_grad_(False)
+    logger.info("Loaded text encoder")
+
+    return {"tokenizer": tokenizer, "text_encoder": text_encoder}
+
+
+# ---------------------------------------------------------------------------
+# Encoding
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def encode_text(components, prompts: list[str], device: str) -> torch.Tensor:
+    import ftfy
+    import html
+    import regex as re
+
+    def clean(text):
+        text = ftfy.fix_text(text)
+        text = html.unescape(html.unescape(text))
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    prompts = [clean(p) for p in prompts]
+    tokens = components["tokenizer"](
+        prompts,
+        padding="max_length",
+        max_length=512,
+        truncation=True,
+        add_special_tokens=True,
+        return_attention_mask=True,
+        return_tensors="pt",
+    )
+    input_ids = tokens.input_ids.to(device)
+    mask = tokens.attention_mask.to(device)
+    embeds = components["text_encoder"](input_ids, mask).last_hidden_state
+    embeds = embeds.masked_fill(~mask.bool().unsqueeze(-1), 0)
+    return embeds.to(torch.bfloat16)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    args = parse_args()
+    _init_distributed()
+
+    rank = _get_rank()
+    world_size = _get_world_size()
+    device = f"cuda:{int(os.environ.get('LOCAL_RANK', 0))}"
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- Load metadata and group by tar file ----
+    metadata = pq.read_table(args.metadata)
+    if rank == 0:
+        logger.info("Loaded metadata: {} rows", metadata.num_rows)
+
+    tar_to_rows: dict[str, list[dict]] = {}
+    for i in range(metadata.num_rows):
+        tar_file = metadata.column("tar_file")[i].as_py()
+        tar_basename = Path(tar_file).name
+        row = {
+            "prompt": metadata.column("prompt")[i].as_py(),
+            "index": i,
+        }
+        tar_to_rows.setdefault(tar_basename, []).append(row)
+
+    if args.tars:
+        tar_to_rows = {k: v for k, v in tar_to_rows.items() if k in args.tars}
+
+    # Flatten all samples with tar_stem info for round-robin distribution
+    all_samples = []
+    for tar_name in sorted(tar_to_rows.keys()):
+        tar_stem = Path(tar_name).stem
+        for idx, row in enumerate(tar_to_rows[tar_name]):
+            all_samples.append({
+                "prompt": row["prompt"],
+                "tar_name": tar_name,
+                "tar_stem": tar_stem,
+                "index_in_tar": idx,
+            })
+
+    if rank == 0:
+        logger.info("Total samples: {}", len(all_samples))
+
+    # Distribute samples round-robin
+    my_samples = all_samples[rank::world_size]
+    logger.info("[rank {}] Assigned {} / {} samples", rank, len(my_samples), len(all_samples))
+
+    # Skip existing
+    if args.skip_existing:
+        before = len(my_samples)
+        my_samples = [
+            s for s in my_samples
+            if not (output_dir / f"{s['tar_stem']}_{s['index_in_tar']}.safetensors").exists()
+        ]
+        skipped = before - len(my_samples)
+        if skipped > 0:
+            logger.info("[rank {}] Skipped {} existing samples", rank, skipped)
+
+    # ---- Load model ----
+    logger.info("[rank {}] Loading text encoder from {}", rank, args.model_path)
+    components = load_text_encoder(args.model_path, device)
+
+    # ---- Process in batches ----
+    n = len(my_samples)
+    done = 0
+    for batch_start in tqdm(range(0, n, args.batch_size), desc=f"[rank {rank}] prompt_embeds"):
+        batch = my_samples[batch_start : batch_start + args.batch_size]
+        prompts = [s["prompt"] for s in batch]
+
+        embeds = encode_text(components, prompts, device)
+
+        for j, sample in enumerate(batch):
+            sample_path = output_dir / f"{sample['tar_stem']}_{sample['index_in_tar']}.safetensors"
+            tmp_path = sample_path.with_suffix(".safetensors.tmp")
+            save_file(
+                {"prompt_embeds": embeds[j].contiguous().cpu()},
+                tmp_path,
+                metadata={
+                    "prompt": sample["prompt"],
+                    "tar": sample["tar_name"],
+                    "index_in_tar": str(sample["index_in_tar"]),
+                },
+            )
+            tmp_path.rename(sample_path)
+
+        done += len(batch)
+        if done % (args.batch_size * 10) == 0 or done == n:
+            logger.info("[rank {}] {}/{} ({:.1f}%)", rank, done, n, done / n * 100)
+
+    logger.info("[rank {}] Done — {} prompt embeddings saved", rank, done)
+
+    if _is_distributed():
+        torch.distributed.destroy_process_group()
+
+
+if __name__ == "__main__":
+    main()
