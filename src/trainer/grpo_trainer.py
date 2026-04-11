@@ -216,9 +216,8 @@ class GRPOTrainer(BaseTrainer):
                 sigma_max=cfg.grpo_sde_sigma_max,
                 cfg_scale=cfg.grpo_cfg_scale,
             )
-            all_chunk_trajs.append((traj, cur_S))
 
-            # Reward for this chunk
+            # Reward for this chunk (before offloading)
             reward_flat = self._compute_reward_neg_loss(
                 traj["latents"][-1],
                 gt_s,
@@ -226,6 +225,13 @@ class GRPOTrainer(BaseTrainer):
                 pe_s,
             )  # (B*cur_S,)
             reward_chunks.append(reward_flat.view(B, cur_S))
+
+            # Drop noises (unused in training phase) and offload trajectory
+            # to CPU to reduce GPU memory / RDMA registration pressure
+            del traj["noises"]
+            traj["latents"] = [x.to("cpu", non_blocking=True) for x in traj["latents"]]
+            traj["log_probs"] = [x.to("cpu", non_blocking=True) for x in traj["log_probs"]]
+            all_chunk_trajs.append((traj, cur_S))
 
         rewards = torch.cat(reward_chunks, dim=1)  # (B, G)
 
@@ -275,6 +281,10 @@ class GRPOTrainer(BaseTrainer):
             pe_s = prompt_embeds.repeat_interleave(cur_S, dim=0).detach()
             adv_chunk = advantages[:, g_offset : g_offset + cur_S].reshape(BS)  # (B*cur_S,)
             g_offset += cur_S
+
+            # Move this chunk's trajectory back to GPU
+            traj["latents"] = [x.to(device, non_blocking=True) for x in traj["latents"]]
+            traj["log_probs"] = [x.to(device, non_blocking=True) for x in traj["log_probs"]]
 
             for t_idx in range(T):
                 is_last = chunk_idx == num_chunks - 1 and t_idx == T - 1
@@ -343,6 +353,9 @@ class GRPOTrainer(BaseTrainer):
 
                 total_policy_loss += policy_loss.item()
                 total_kl_loss += kl_loss.item()
+
+            # Free this chunk's GPU trajectory data before loading next chunk
+            del traj["latents"], traj["log_probs"]
 
         return {
             "policy_loss": total_policy_loss / (T * num_chunks),

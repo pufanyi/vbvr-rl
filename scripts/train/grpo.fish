@@ -36,5 +36,37 @@ end
 set -l project_root (realpath (dirname (status filename))/../..)
 cd $project_root
 
+# Keep local GRPO launches aligned with the trainer defaults and allow the same
+# `WAN_NCCL_TRANSPORT=socket` escape hatch used by the multi-node launcher.
+if not set -q NCCL_REGISTRATION_CACHE_SIZE
+    set -gx NCCL_REGISTRATION_CACHE_SIZE 0
+end
+if not set -q TORCH_NCCL_AVOID_RECORD_STREAMS
+    set -gx TORCH_NCCL_AVOID_RECORD_STREAMS 1
+end
+if not set -q NCCL_NET_GDR_LEVEL
+    set -gx NCCL_NET_GDR_LEVEL 0
+end
+if not set -q NCCL_IB_QPS_PER_CONNECTION
+    set -gx NCCL_IB_QPS_PER_CONNECTION 1
+end
+if not set -q NCCL_IB_SPLIT_DATA_ON_QPS
+    set -gx NCCL_IB_SPLIT_DATA_ON_QPS 0
+end
+if not set -q NCCL_MAX_NCHANNELS
+    set -gx NCCL_MAX_NCHANNELS 4
+end
+if not set -q NCCL_MIN_NCHANNELS
+    set -gx NCCL_MIN_NCHANNELS 1
+end
+if set -q WAN_NCCL_TRANSPORT
+    set -l wan_nccl_transport (string lower -- "$WAN_NCCL_TRANSPORT")
+    if contains -- $wan_nccl_transport socket tcp
+        if not set -q NCCL_IB_DISABLE
+            set -gx NCCL_IB_DISABLE 1
+        end
+    end
+end
+
 echo "Launching Flow-GRPO training with $nproc GPUs..."
 torchrun --nproc_per_node=$nproc -m src.cli.train_grpo $train_args

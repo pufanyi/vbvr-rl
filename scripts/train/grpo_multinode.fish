@@ -71,10 +71,47 @@ echo "Launching Flow-GRPO multi-node training: node $RANK/$WORLD_SIZE, $nproc GP
 # Ensure sufficient locked memory for InfiniBand RDMA registration
 ulimit -l unlimited 2>/dev/null; or ulimit -l 67108864 2>/dev/null
 
-# NCCL tuning for multi-node FSDP with large all_gather buffers
-set -gx NCCL_IB_GID_INDEX 3
-set -gx NCCL_IB_RETRY_CNT 7
-set -gx NCCL_SOCKET_IFNAME eth0
+# NCCL tuning for multi-node FSDP with large all_gather buffers. Preserve any
+# user-provided overrides and support `WAN_NCCL_TRANSPORT=socket` as a hard
+# fallback when InfiniBand queue-pair allocation is exhausted.
+if not set -q NCCL_IB_GID_INDEX
+    set -gx NCCL_IB_GID_INDEX 3
+end
+if not set -q NCCL_IB_RETRY_CNT
+    set -gx NCCL_IB_RETRY_CNT 7
+end
+if not set -q NCCL_SOCKET_IFNAME
+    set -gx NCCL_SOCKET_IFNAME eth0
+end
+if not set -q NCCL_REGISTRATION_CACHE_SIZE
+    set -gx NCCL_REGISTRATION_CACHE_SIZE 0
+end
+if not set -q TORCH_NCCL_AVOID_RECORD_STREAMS
+    set -gx TORCH_NCCL_AVOID_RECORD_STREAMS 1
+end
+if not set -q NCCL_NET_GDR_LEVEL
+    set -gx NCCL_NET_GDR_LEVEL 0
+end
+if not set -q NCCL_IB_QPS_PER_CONNECTION
+    set -gx NCCL_IB_QPS_PER_CONNECTION 1
+end
+if not set -q NCCL_IB_SPLIT_DATA_ON_QPS
+    set -gx NCCL_IB_SPLIT_DATA_ON_QPS 0
+end
+if not set -q NCCL_MAX_NCHANNELS
+    set -gx NCCL_MAX_NCHANNELS 4
+end
+if not set -q NCCL_MIN_NCHANNELS
+    set -gx NCCL_MIN_NCHANNELS 1
+end
+if set -q WAN_NCCL_TRANSPORT
+    set -l wan_nccl_transport (string lower -- "$WAN_NCCL_TRANSPORT")
+    if contains -- $wan_nccl_transport socket tcp
+        if not set -q NCCL_IB_DISABLE
+            set -gx NCCL_IB_DISABLE 1
+        end
+    end
+end
 
 . .venv/bin/activate.fish
 

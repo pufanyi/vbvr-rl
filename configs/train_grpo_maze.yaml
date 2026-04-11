@@ -3,12 +3,12 @@ model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
 dataset_json: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/data/train_maze_bfs_sft.json
 output_dir: storage/checkpoints/grpo_maze_bfs
 
-num_frames: 81
+num_frames: 17
 height: 256
 width: 256
 fps: 16
 
-batch_size: 8
+batch_size: 1
 gradient_accumulation_steps: 1
 num_epochs: 2
 learning_rate: 1.0e-5
