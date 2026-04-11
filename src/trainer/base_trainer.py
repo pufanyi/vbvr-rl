@@ -13,6 +13,7 @@ from torch.utils.data import DistributedSampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 
 from src.data.i2v_dataset import I2VDataset
+from src.data.vbvr_latent_dataset import VBVRLatentDataset
 from src.models.wan_i2v import LoRATrainConfig, WanI2VForTraining
 from src.trainer.checkpoint import TrainState
 from src.trainer.config import TrainConfig
@@ -90,7 +91,7 @@ class BaseTrainer:
 
         # ---- DCP state ----
         self.train_state = TrainState(
-            text_encoder=self.model.text_encoder if cfg.train_text_encoder else None,
+            text_encoder=self.model.text_encoder if (cfg.train_text_encoder and self.model.text_encoder is not None) else None,
             transformer=self.model.transformer,
             transformer_2=self.model.transformer_2,
             optimizer_te=self.optimizer_te,
@@ -184,12 +185,17 @@ class BaseTrainer:
             if cfg.lora_rank > 0
             else None
         )
+        use_precomputed = cfg.latent_json is not None
+        load_vae = not use_precomputed
+        load_text_encoder = not use_precomputed or cfg.train_text_encoder
         logger.info(
-            "Loading model from {} (lora_rank={}, experts={}{}) ...",
+            "Loading model from {} (lora_rank={}, experts={}{}, load_vae={}, load_text_encoder={}) ...",
             cfg.model_path,
             cfg.lora_rank,
             train_experts,
             f", expert_group={self.expert_group}" if self.expert_parallel else "",
+            load_vae,
+            load_text_encoder,
         )
         model = WanI2VForTraining(
             cfg.model_path,
@@ -197,6 +203,8 @@ class BaseTrainer:
             train_experts=train_experts,
             train_text_encoder=cfg.train_text_encoder,
             gradient_checkpointing=cfg.gradient_checkpointing,
+            load_vae=load_vae,
+            load_text_encoder=load_text_encoder,
         )
         if cfg.use_liger_kernel:
             count = 0
@@ -204,8 +212,10 @@ class BaseTrainer:
                 if m is not None:
                     count += apply_liger_rms_norm(m)
             logger.info("Liger Kernel: replaced {} RMSNorm modules", count)
-        model.text_encoder.to(self.device)
-        model.vae.to(self.device)
+        if model.text_encoder is not None:
+            model.text_encoder.to(self.device)
+        if model.vae is not None:
+            model.vae.to(self.device)
         return model
 
     # ------------------------------------------------------------------
@@ -240,7 +250,7 @@ class BaseTrainer:
 
     def _setup_fsdp(self, cfg: TrainConfig) -> list[torch.nn.Module]:
         """Shard trainable modules with FSDP2. Override to shard additional modules."""
-        if cfg.train_text_encoder:
+        if cfg.train_text_encoder and self.model.text_encoder is not None:
             fully_shard(self.model.text_encoder, mesh=self.mesh, mp_policy=self.mp_policy)
         if self.model.transformer is not None:
             shard_transformer(self.model.transformer, self.mesh, self.mp_policy)
@@ -249,7 +259,7 @@ class BaseTrainer:
         return [
             m
             for m in [
-                self.model.text_encoder if cfg.train_text_encoder else None,
+                self.model.text_encoder if (cfg.train_text_encoder and self.model.text_encoder is not None) else None,
                 self.model.transformer,
                 self.model.transformer_2,
             ]
@@ -264,7 +274,7 @@ class BaseTrainer:
         if cfg.ema_decay <= 0:
             return None
         ema_models: dict[str, torch.nn.Module] = {}
-        if cfg.train_text_encoder:
+        if cfg.train_text_encoder and self.model.text_encoder is not None:
             ema_models["text_encoder"] = self.model.text_encoder
         if self.model.transformer is not None:
             ema_models["transformer"] = self.model.transformer
@@ -282,9 +292,10 @@ class BaseTrainer:
         compile_kwargs = {"backend": cfg.torch_compile_backend}
         if cfg.torch_compile_mode is not None:
             compile_kwargs["mode"] = cfg.torch_compile_mode
-        self.model.vae = torch.compile(self.model.vae, **compile_kwargs)
-        logger.info("Compiled vae")
-        if not cfg.train_text_encoder:
+        if self.model.vae is not None:
+            self.model.vae = torch.compile(self.model.vae, **compile_kwargs)
+            logger.info("Compiled vae")
+        if not cfg.train_text_encoder and self.model.text_encoder is not None:
             self.model.text_encoder = torch.compile(self.model.text_encoder, **compile_kwargs)
             logger.info("Compiled text_encoder")
         if self.model.transformer is not None:
@@ -300,14 +311,17 @@ class BaseTrainer:
     # ------------------------------------------------------------------
 
     def _build_dataset(self, cfg: TrainConfig) -> tuple:
-        dataset = I2VDataset(
-            json_path=cfg.dataset_json,
-            num_frames=cfg.num_frames,
-            max_area=cfg.max_area,
-            height=cfg.height,
-            width=cfg.width,
-            fps=cfg.fps,
-        )
+        if cfg.latent_json is not None:
+            dataset = VBVRLatentDataset(json_path=cfg.latent_json)
+        else:
+            dataset = I2VDataset(
+                json_path=cfg.dataset_json,
+                num_frames=cfg.num_frames,
+                max_area=cfg.max_area,
+                height=cfg.height,
+                width=cfg.width,
+                fps=cfg.fps,
+            )
         if self.expert_parallel:
             seed = self._get_expert_parallel_sampler_seed(cfg)
             sampler = DistributedSampler(
@@ -356,7 +370,7 @@ class BaseTrainer:
         params = []
         total_params = 0
 
-        if cfg.train_text_encoder:
+        if cfg.train_text_encoder and self.model.text_encoder is not None:
             params_te = [p for p in self.model.text_encoder.parameters() if p.requires_grad]
             params.extend(params_te)
             total_params += sum(p.numel() for p in self.model.text_encoder.parameters())

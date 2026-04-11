@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import tarfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -217,28 +218,41 @@ def main():
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     pbar = tqdm(total=num_batches, desc=f"[rank {rank}]", position=local_rank, leave=True)
 
-    for batch_start in range(0, n, args.batch_size):
+    def _save_batch(batch_idx, batch, embeds_cpu):
+        tensors = {str(j): embeds_cpu[j] for j in range(len(batch))}
+        meta = {
+            "count": str(len(batch)),
+            "samples": json.dumps([
+                {"tar": s["tar_name"], "index_in_tar": s["index_in_tar"], "prompt": s["prompt"]}
+                for s in batch
+            ]),
+        }
+        out_path = output_dir / f"rank{rank}_batch{batch_idx}.safetensors"
+        tmp_path = out_path.with_suffix(".safetensors.tmp")
+        save_file(tensors, tmp_path, metadata=meta)
+        tmp_path.rename(out_path)
+
+    save_executor = ThreadPoolExecutor(max_workers=1)
+    save_future = None
+
+    for batch_idx, batch_start in enumerate(range(0, n, args.batch_size)):
         batch = my_samples[batch_start : batch_start + args.batch_size]
         prompts = [s["prompt"] for s in batch]
 
         embeds_list = encode_text(components, prompts, device)
+        embeds_cpu = [e.cpu() for e in embeds_list]
 
-        for j, sample in enumerate(batch):
-            sample_path = output_dir / f"{sample['tar_stem']}_{sample['index_in_tar']}.safetensors"
-            tmp_path = sample_path.with_suffix(".safetensors.tmp")
-            save_file(
-                {"prompt_embeds": embeds_list[j].cpu()},
-                tmp_path,
-                metadata={
-                    "prompt": sample["prompt"],
-                    "tar": sample["tar_name"],
-                    "index_in_tar": str(sample["index_in_tar"]),
-                },
-            )
-            tmp_path.rename(sample_path)
+        if save_future is not None:
+            save_future.result()
+
+        save_future = save_executor.submit(_save_batch, batch_idx, batch, embeds_cpu)
 
         done += len(batch)
         pbar.update(1)
+
+    if save_future is not None:
+        save_future.result()
+    save_executor.shutdown(wait=True)
 
     pbar.close()
 

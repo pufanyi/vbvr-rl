@@ -54,6 +54,8 @@ class WanI2VForTraining:
         train_experts: str = "both",
         train_text_encoder: bool = False,
         gradient_checkpointing: bool = True,
+        load_vae: bool = True,
+        load_text_encoder: bool = True,
     ):
         assert train_experts in ("both", "high", "low"), (
             f"train_experts must be 'both', 'high', or 'low', got '{train_experts}'"
@@ -72,27 +74,37 @@ class WanI2VForTraining:
         # boundary_idx is computed below after shifted_timesteps is built.
 
         # ---- Load components sequentially ----
-        self.tokenizer = AutoTokenizer.from_pretrained(model_dir / "tokenizer")
-        logger.info("Loaded tokenizer")
+        self.tokenizer = None
+        self.text_encoder = None
+        self.vae = None
 
-        # ---- Text encoder ----
-        self.text_encoder: UMT5EncoderModel = UMT5EncoderModel.from_pretrained(
-            model_dir / "text_encoder", torch_dtype=torch.bfloat16
-        )
-        logger.info("Loaded text_encoder")
-        if train_text_encoder:
-            self.text_encoder.train()
-            if gradient_checkpointing:
-                self.text_encoder.gradient_checkpointing_enable()
+        if load_text_encoder:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_dir / "tokenizer")
+            logger.info("Loaded tokenizer")
+
+            # ---- Text encoder ----
+            self.text_encoder = UMT5EncoderModel.from_pretrained(
+                model_dir / "text_encoder", torch_dtype=torch.bfloat16
+            )
+            logger.info("Loaded text_encoder")
+            if train_text_encoder:
+                self.text_encoder.train()
+                if gradient_checkpointing:
+                    self.text_encoder.gradient_checkpointing_enable()
+            else:
+                self.text_encoder.requires_grad_(False)
+                self.text_encoder.eval()
         else:
-            self.text_encoder.requires_grad_(False)
-            self.text_encoder.eval()
+            logger.info("Skipped text_encoder (using precomputed prompt embeddings)")
 
         # ---- VAE (always frozen) ----
-        self.vae: AutoencoderKLWan = AutoencoderKLWan.from_pretrained(model_dir / "vae", torch_dtype=torch.bfloat16)
-        logger.info("Loaded vae")
-        self.vae.requires_grad_(False)
-        self.vae.eval()
+        if load_vae:
+            self.vae = AutoencoderKLWan.from_pretrained(model_dir / "vae", torch_dtype=torch.bfloat16)
+            logger.info("Loaded vae")
+            self.vae.requires_grad_(False)
+            self.vae.eval()
+        else:
+            logger.info("Skipped vae (using precomputed latents)")
 
         # ---- Transformers (only load what we need) ----
         self.transformer: WanTransformer3DModel | None = None
@@ -136,7 +148,24 @@ class WanI2VForTraining:
                 m.enable_gradient_checkpointing()
 
         # ---- VAE normalization constants ----
-        vae_cfg = self.vae.config
+        if load_vae:
+            vae_cfg = self.vae.config
+        else:
+            # Load VAE config from disk without loading weights
+            vae_config_path = model_dir / "vae" / "config.json"
+            with open(vae_config_path) as f:
+                vae_cfg_dict = json.load(f)
+
+            class _VaeCfg:
+                pass
+
+            vae_cfg = _VaeCfg()
+            vae_cfg.latents_mean = vae_cfg_dict["latents_mean"]
+            vae_cfg.latents_std = vae_cfg_dict["latents_std"]
+            vae_cfg.z_dim = vae_cfg_dict["z_dim"]
+            vae_cfg.scale_factor_spatial = vae_cfg_dict.get("scale_factor_spatial", 8)
+            vae_cfg.scale_factor_temporal = vae_cfg_dict.get("scale_factor_temporal", 4)
+
         self.latents_mean = torch.tensor(vae_cfg.latents_mean).view(1, vae_cfg.z_dim, 1, 1, 1)
         self.latents_std_inv = (1.0 / torch.tensor(vae_cfg.latents_std)).view(1, vae_cfg.z_dim, 1, 1, 1)
 

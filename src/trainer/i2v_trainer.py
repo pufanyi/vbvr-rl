@@ -22,6 +22,10 @@ class I2VTrainer(BaseTrainer):
         if gpu_peak is None:
             return None
 
+        if not hasattr(self.dataset, "_configs"):
+            logger.info("MFU monitor: skipped (precomputed latent dataset has no resolution config)")
+            return None
+
         bi = self.model.boundary_idx
         N = self.model.num_train_timesteps
         experts = []
@@ -181,11 +185,20 @@ class I2VTrainer(BaseTrainer):
     def _train_step(self, batch: dict) -> torch.Tensor:
         """Single forward pass: encode frozen inputs, compute loss.
 
-        batch["videos"][-1] is the final target video.
+        Supports two modes:
+        - Raw data: batch has "videos", "image", "prompt" — encode on-the-fly.
+        - Precomputed: batch has "video_latents", "condition", "prompt_embeds" tensors.
         """
-        prompt_embeds = self.model.encode_text(batch["prompt"], self.device)
-        video = to_model_pixels(batch["videos"][-1], self.device)
-        image = to_model_pixels(batch["image"], self.device)
-        video_latents = self.model.encode_video(video)
-        condition = self.model.prepare_condition(image, video.shape[2], video.shape[-2], video.shape[-1])
+        if "prompt_embeds" in batch:
+            # Precomputed latents path
+            prompt_embeds = batch["prompt_embeds"].to(self.device)
+            video_latents = batch["video_latents"].to(self.device)
+            condition = batch["condition"].to(self.device)
+        else:
+            # Raw data path — encode on-the-fly
+            prompt_embeds = self.model.encode_text(batch["prompt"], self.device)
+            video = to_model_pixels(batch["videos"][-1], self.device)
+            image = to_model_pixels(batch["image"], self.device)
+            video_latents = self.model.encode_video(video)
+            condition = self.model.prepare_condition(image, video.shape[2], video.shape[-2], video.shape[-1])
         return self.model.compute_loss(video_latents, condition, prompt_embeds)

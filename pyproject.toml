@@ -24,6 +24,7 @@ dependencies = [
     "loguru>=0.7",
     "liger-kernel>=0.7.0",
     "pyarrow>=19.0",
+    "safetensors>=0.7.0",
 ]
 
 [dependency-groups]

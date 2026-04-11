@@ -11,6 +11,7 @@ class TrainConfig(BaseModel):
 
     # Data
     dataset_json: str = "data/train.json"
+    latent_json: str | None = None  # precomputed latents config; skips VAE/T5 loading
     num_frames: int | None = None  # override dataset JSON config; default 81
     max_area: int | None = None  # override dataset JSON config; default 480*832
     height: int | None = None  # override dataset JSON config; fixed height
