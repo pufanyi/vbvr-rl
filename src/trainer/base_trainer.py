@@ -135,6 +135,7 @@ class BaseTrainer:
         self.expert_parallel = cfg.expert_parallel
         self._cpu_world_pg = None
         self._expert_log_pg = None
+        self._cpu_dp_pg = None
         if not self.expert_parallel:
             self._effective_train_experts = cfg.train_experts
             self.expert_group = -1
@@ -154,6 +155,11 @@ class BaseTrainer:
         self._effective_train_experts = "high" if self.expert_group == 0 else "low"
         self._cpu_world_pg = dist.new_group(backend="gloo")
         self._expert_log_pg = dist.new_group(ranks=[0, half], backend="gloo")
+        # Gloo-backed dp group for lightweight collectives (rewards, metrics)
+        # to avoid extra NCCL/RDMA buffer pressure on multi-node InfiniBand
+        dp_ranks_0 = list(range(half))
+        dp_ranks_1 = list(range(half, self.world_size))
+        self._cpu_dp_pg = dist.new_group(ranks=dp_ranks_0 if self.expert_group == 0 else dp_ranks_1, backend="gloo")
 
     def _get_expert_parallel_sampler_seed(self, cfg: TrainConfig) -> int:
         """Sampler seed for expert-parallel mode.

@@ -68,6 +68,14 @@ cd $project_root
 
 echo "Launching Flow-GRPO multi-node training: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$master_port"
 
+# Ensure sufficient locked memory for InfiniBand RDMA registration
+ulimit -l unlimited 2>/dev/null; or ulimit -l 67108864 2>/dev/null
+
+# NCCL tuning for multi-node FSDP with large all_gather buffers
+set -gx NCCL_IB_GID_INDEX 3
+set -gx NCCL_IB_RETRY_CNT 7
+set -gx NCCL_SOCKET_IFNAME eth0
+
 . .venv/bin/activate.fish
 
 torchrun \

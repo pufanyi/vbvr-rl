@@ -230,7 +230,20 @@ class GRPOTrainer(BaseTrainer):
         rewards = torch.cat(reward_chunks, dim=1)  # (B, G)
 
         # ---- Phase 2: Advantage Computation ----
-        if self.world_size > 1:
+        # In expert_parallel mode, gather only within the same expert's dp group
+        # (different experts produce incomparable rewards) and use gloo to avoid
+        # extra NCCL/RDMA buffer pressure on InfiniBand.
+        if self.expert_parallel:
+            rewards_cpu = rewards.cpu()
+            all_dp_rewards = [torch.zeros_like(rewards_cpu) for _ in range(self.dp_size)]
+            dist.all_gather(all_dp_rewards, rewards_cpu, group=self._cpu_dp_pg)
+            gathered_rewards = torch.cat(all_dp_rewards, dim=0)
+            global_mean = gathered_rewards.mean()
+            global_std = gathered_rewards.std() + 1e-4
+            advantages = ((rewards_cpu - global_mean) / global_std).clamp(
+                -cfg.grpo_adv_clip_max, cfg.grpo_adv_clip_max
+            ).to(device)
+        elif self.world_size > 1:
             all_ranks_rewards = [torch.zeros_like(rewards) for _ in range(self.world_size)]
             dist.all_gather(all_ranks_rewards, rewards)
             gathered_rewards = torch.cat(all_ranks_rewards, dim=0)
