@@ -6,7 +6,7 @@ Launch on 2 nodes x 8 GPUs (16 GPUs total):
         --nnodes=2 --nproc_per_node=8 \
         --node_rank=$RANK \
         --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \
-        scripts/precompute_vbvr_prompt_embeds.py \
+        -m src.precompute.vbvr_prompt_embeds \
         --metadata data/vbvr/VBVR-Dataset/data/metadata.parquet \
         --tar_dir data/vbvr/VBVR-Dataset/tars \
         --model_path storage/models/Wan2.2-I2V-A14B-Diffusers \
@@ -68,6 +68,7 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=64, help="Batch size for T5 encoding")
     p.add_argument("--tars", nargs="*", default=None, help="Process only these tar files (basenames). Default: all.")
     p.add_argument("--skip_existing", action="store_true", help="Skip samples whose output already exists")
+    p.add_argument("--compile", action="store_true", help="Use torch.compile on text encoder")
     return p.parse_args()
 
 
@@ -89,7 +90,7 @@ def load_text_encoder(model_path: str, device: str):
     text_encoder.to(device).eval().requires_grad_(False)
     logger.info("Loaded text encoder")
 
-    return {"tokenizer": tokenizer, "text_encoder": text_encoder}
+    return {"tokenizer": tokenizer, "text_encoder": text_encoder, "max_length": tokenizer.model_max_length or 512}
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +103,8 @@ def encode_text(components, prompts: list[str], device: str) -> torch.Tensor:
     import html
     import regex as re
 
+    max_length = components["max_length"]
+
     def clean(text):
         text = ftfy.fix_text(text)
         text = html.unescape(html.unescape(text))
@@ -109,10 +112,11 @@ def encode_text(components, prompts: list[str], device: str) -> torch.Tensor:
         return text
 
     prompts = [clean(p) for p in prompts]
+    # Dynamic padding: pad to longest in batch, not max_length — saves compute
     tokens = components["tokenizer"](
         prompts,
-        padding="max_length",
-        max_length=512,
+        padding="longest",
+        max_length=max_length,
         truncation=True,
         add_special_tokens=True,
         return_attention_mask=True,
@@ -122,7 +126,15 @@ def encode_text(components, prompts: list[str], device: str) -> torch.Tensor:
     mask = tokens.attention_mask.to(device)
     embeds = components["text_encoder"](input_ids, mask).last_hidden_state
     embeds = embeds.masked_fill(~mask.bool().unsqueeze(-1), 0)
-    return embeds.to(torch.bfloat16)
+    embeds = embeds.to(torch.bfloat16)
+
+    # Pad sequence dim back to max_length for uniform output shape
+    seq_len = embeds.shape[1]
+    if seq_len < max_length:
+        pad = embeds.new_zeros(embeds.shape[0], max_length - seq_len, embeds.shape[2])
+        embeds = torch.cat([embeds, pad], dim=1)
+
+    return embeds
 
 
 # ---------------------------------------------------------------------------
@@ -192,10 +204,18 @@ def main():
     logger.info("[rank {}] Loading text encoder from {}", rank, args.model_path)
     components = load_text_encoder(args.model_path, device)
 
+    if args.compile:
+        logger.info("[rank {}] Compiling text encoder with torch.compile", rank)
+        components["text_encoder"] = torch.compile(components["text_encoder"])
+
     # ---- Process in batches ----
     n = len(my_samples)
     done = 0
-    for batch_start in tqdm(range(0, n, args.batch_size), desc=f"[rank {rank}] prompt_embeds"):
+    num_batches = (n + args.batch_size - 1) // args.batch_size
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    pbar = tqdm(total=num_batches, desc=f"[rank {rank}]", position=local_rank, leave=True)
+
+    for batch_start in range(0, n, args.batch_size):
         batch = my_samples[batch_start : batch_start + args.batch_size]
         prompts = [s["prompt"] for s in batch]
 
@@ -216,8 +236,9 @@ def main():
             tmp_path.rename(sample_path)
 
         done += len(batch)
-        if done % (args.batch_size * 10) == 0 or done == n:
-            logger.info("[rank {}] {}/{} ({:.1f}%)", rank, done, n, done / n * 100)
+        pbar.update(1)
+
+    pbar.close()
 
     logger.info("[rank {}] Done — {} prompt embeddings saved", rank, done)
 
