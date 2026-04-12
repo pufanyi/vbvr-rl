@@ -7,7 +7,7 @@ import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from loguru import logger
-from torch.distributed._composable.fsdp import MixedPrecisionPolicy, fully_shard
+from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 from torch.distributed.device_mesh import init_device_mesh
 from torch.utils.data import DistributedSampler
 from torchdata.stateful_dataloader import StatefulDataLoader
@@ -225,7 +225,48 @@ class BaseTrainer:
     # ------------------------------------------------------------------
 
     def _create_device_mesh(self, cfg: TrainConfig):
-        if self.expert_parallel:
+        if self.expert_parallel and cfg.hsdp:
+            # 3D mesh: (expert, replicate, shard) — EP + HSDP combined.
+            local_size = int(os.environ.get("LOCAL_WORLD_SIZE", torch.cuda.device_count()))
+            assert self.dp_size % local_size == 0, (
+                f"dp_size ({self.dp_size}) must be divisible by local GPUs ({local_size})"
+            )
+            num_replicas = self.dp_size // local_size
+            if num_replicas <= 1:
+                # Single node per expert group — fall back to EP without HSDP
+                logger.warning("expert_parallel+hsdp but only 1 node per expert group, HSDP disabled")
+                mesh_2d = init_device_mesh(
+                    "cuda",
+                    (2, self.dp_size),
+                    mesh_dim_names=("expert", "dp"),
+                )
+                mesh = mesh_2d["dp"]
+            else:
+                rep_backend = cfg.hsdp_replicate_backend or "gloo"
+                mesh_3d = init_device_mesh(
+                    "cuda",
+                    (2, num_replicas, local_size),
+                    mesh_dim_names=("expert", "replicate", "shard"),
+                    backend_override={"replicate": rep_backend},
+                )
+                mesh = mesh_3d["replicate", "shard"]
+                logger.info(
+                    "EP+HSDP 3D mesh: 2 experts × {} replicas × {} shards (replicate={})",
+                    num_replicas,
+                    local_size,
+                    rep_backend,
+                )
+            # Flat process group for DCP checkpointing (covers all ranks in this expert group)
+            half = self.world_size // 2
+            dp_ranks = list(range(half)) if self.expert_group == 0 else list(range(half, self.world_size))
+            self._dp_pg = dist.new_group(ranks=dp_ranks)
+            logger.info(
+                "Expert parallel: group={} dp_rank={}/{}",
+                self.expert_group,
+                self.dp_rank,
+                self.dp_size,
+            )
+        elif self.expert_parallel:
             mesh_2d = init_device_mesh(
                 "cuda",
                 (2, self.dp_size),
@@ -239,6 +280,33 @@ class BaseTrainer:
                 self.dp_rank,
                 self.dp_size,
             )
+        elif cfg.hsdp:
+            # HSDP: shard within node (NVLink), replicate across nodes (all-reduce).
+            local_size = int(os.environ.get("LOCAL_WORLD_SIZE", torch.cuda.device_count()))
+            assert self.world_size % local_size == 0, (
+                f"world_size ({self.world_size}) must be divisible by local GPUs ({local_size})"
+            )
+            num_replicas = self.world_size // local_size
+            if num_replicas <= 1:
+                logger.warning("hsdp=True but only 1 node detected, falling back to plain FSDP")
+                mesh = init_device_mesh("cuda", (self.world_size,))
+            else:
+                # Use gloo for the replicate (inter-node) dimension by default
+                # to completely avoid NCCL IB registration on cross-node traffic.
+                rep_backend = cfg.hsdp_replicate_backend or "gloo"
+                mesh = init_device_mesh(
+                    "cuda",
+                    (num_replicas, local_size),
+                    mesh_dim_names=("replicate", "shard"),
+                    backend_override={"replicate": rep_backend},
+                )
+                logger.info(
+                    "HSDP mesh: {} replicas × {} shards (shard=nccl, replicate={})",
+                    num_replicas,
+                    local_size,
+                    rep_backend,
+                )
+            self._dp_pg = None
         else:
             mesh = init_device_mesh("cuda", (self.world_size,))
             self._dp_pg = None

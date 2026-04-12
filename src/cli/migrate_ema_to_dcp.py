@@ -16,7 +16,7 @@ import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 import yaml
 from loguru import logger
-from torch.distributed._composable.fsdp import MixedPrecisionPolicy, fully_shard
+from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 from torch.distributed.device_mesh import init_device_mesh
 
 from src.models.wan_i2v import LoRATrainConfig, WanI2VForTraining

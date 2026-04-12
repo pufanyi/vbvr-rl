@@ -4,7 +4,7 @@ import math
 
 import torch
 from loguru import logger
-from torch.distributed._composable.fsdp import fully_shard
+from torch.distributed.fsdp import fully_shard
 
 
 def apply_liger_rms_norm(model: torch.nn.Module) -> int:
