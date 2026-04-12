@@ -155,7 +155,7 @@ def main():
             if tar_file is not None:
                 tar_file.close()
             shard_id += 1
-            tar_file = tarfile.open(str(output_dir / f"shard-{shard_id:06d}.tar"), "w")
+            tar_file = tarfile.open(str(output_dir / f"shard-{shard_id:06d}.tar"), "w")  # noqa: SIM115
 
         # Read prompt embeds from cached handle
         prompt_embeds = get_pe(sample["source_file"]).get_tensor(sample["key"])

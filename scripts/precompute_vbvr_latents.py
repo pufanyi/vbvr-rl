@@ -80,7 +80,6 @@ from PIL import Image
 from safetensors.torch import save_file
 from tqdm import tqdm
 
-
 # ---------------------------------------------------------------------------
 # Distributed helpers
 # ---------------------------------------------------------------------------
@@ -126,7 +125,9 @@ def parse_args():
     p.add_argument("--width", type=int, default=None, help="Target width (computed from max_area if not set)")
     p.add_argument("--max_area", type=int, default=480 * 832, help="Max pixel area (used when height/width not set)")
     p.add_argument("--tars", nargs="*", default=None, help="Process only these tar files (basenames). Default: all.")
-    p.add_argument("--skip_existing", action="store_true", help="Skip tars whose output parquet already exists (for resuming)")
+    p.add_argument(
+        "--skip_existing", action="store_true", help="Skip tars whose output parquet already exists (for resuming)"
+    )
     return p.parse_args()
 
 
@@ -176,8 +177,9 @@ def load_model_components(model_path: str, device: str):
 
 @torch.no_grad()
 def encode_text(components, prompts: list[str], device: str) -> torch.Tensor:
-    import ftfy
     import html
+
+    import ftfy
     import regex as re
 
     def clean(text):
@@ -243,7 +245,9 @@ def prepare_condition(components, image: torch.Tensor, num_frames: int, height: 
 # Video loading from tar
 # ---------------------------------------------------------------------------
 
-def load_video_from_tar(tar: tarfile.TarFile, member_path: str, height: int, width: int, num_frames: int) -> torch.Tensor:
+def load_video_from_tar(
+    tar: tarfile.TarFile, member_path: str, height: int, width: int, num_frames: int
+) -> torch.Tensor:
     """Load and resize a video from inside a tar archive. Returns uint8 (C, T, H, W)."""
     import decord
     decord.bridge.set_bridge("torch")
@@ -315,8 +319,7 @@ def process_tar(
     last_logged = 0
     log_every = 100
 
-    tar = tarfile.open(tar_path, "r")
-    try:
+    with tarfile.open(tar_path, "r") as tar:
         for batch_start in tqdm(
             range(0, n, args.batch_size),
             desc=f"[rank {rank}] {tar_stem}",
@@ -402,8 +405,6 @@ def process_tar(
                     rank, tar_stem, samples_done, n, samples_done / n * 100,
                 )
                 last_logged = samples_done
-    finally:
-        tar.close()
 
     if samples_skipped > 0:
         logger.info("[rank {}] {} — skipped {} already-existing samples", rank, tar_stem, samples_skipped)

@@ -45,7 +45,6 @@ import torch
 from loguru import logger
 from tqdm import tqdm
 
-
 # ---------------------------------------------------------------------------
 # Distributed helpers
 # ---------------------------------------------------------------------------
@@ -149,8 +148,9 @@ def load_model_components(model_path: str, device: str):
 @torch.no_grad()
 def encode_text(components, prompts: list[str], device: str) -> torch.Tensor:
     """Encode prompts -> (B, 512, text_dim) bf16."""
-    import ftfy
     import html
+
+    import ftfy
     import regex as re
 
     def clean(text):
@@ -248,6 +248,7 @@ def process_rows(
     """Process a subset of rows from a table, return a new table with precomputed latents."""
     import decord
     import numpy as np
+
     from src.data.i2v_dataset import compute_hw
 
     decord.bridge.set_bridge("torch")
@@ -285,10 +286,9 @@ def process_rows(
         h, w = 0, 0
 
         for i in batch_rows:
-            if "videos" in cols:
-                video_paths = table.column("videos")[i].as_py()
-            else:
-                video_paths = [table.column("video")[i].as_py()]
+            video_paths = (
+                table.column("videos")[i].as_py() if "videos" in cols else [table.column("video")[i].as_py()]
+            )
 
             prompt = table.column("prompt")[i].as_py() if "prompt" in cols else ""
             image_path = table.column("image")[i].as_py() if "image" in cols else None

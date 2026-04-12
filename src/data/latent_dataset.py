@@ -13,7 +13,6 @@ import json
 import logging
 from pathlib import Path
 
-import torch
 from safetensors import safe_open
 from torch.utils.data import Dataset
 

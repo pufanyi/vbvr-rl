@@ -21,7 +21,6 @@ Output: one safetensors per sample: {tar_stem}_{idx}.safetensors
 import argparse
 import json
 import os
-import tarfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -30,7 +29,6 @@ import torch
 from loguru import logger
 from safetensors.torch import save_file
 from tqdm import tqdm
-
 
 # ---------------------------------------------------------------------------
 # Distributed helpers
@@ -103,8 +101,9 @@ def load_text_encoder(model_path: str, device: str):
 
 @torch.no_grad()
 def encode_text(components, prompts: list[str], device: str) -> torch.Tensor:
-    import ftfy
     import html
+
+    import ftfy
     import regex as re
 
     max_length = components["max_length"]

@@ -21,7 +21,6 @@ import json
 import logging
 from pathlib import Path
 
-import torch
 import torch.nn.functional as F
 from safetensors import safe_open
 from torch.utils.data import Dataset
@@ -87,7 +86,6 @@ class VBVRLatentDataset(Dataset):
             condition = f.get_tensor("condition")
             metadata = f.metadata()
 
-        prompt = metadata.get("prompt", "")
         tar_name = metadata.get("tar", "")
         index_in_tar = int(metadata.get("index_in_tar", "0"))
         tar_stem = Path(tar_name).stem

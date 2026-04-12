@@ -21,7 +21,6 @@ Output: one safetensors per sample: {tar_stem}_{idx}.safetensors
 
 import argparse
 import io
-import json
 import os
 import tarfile
 import tempfile
@@ -34,7 +33,6 @@ from loguru import logger
 from PIL import Image
 from safetensors.torch import save_file
 from tqdm import tqdm
-
 
 # ---------------------------------------------------------------------------
 # Distributed helpers
@@ -153,7 +151,9 @@ def prepare_condition(components, image: torch.Tensor, num_frames: int, height: 
 # Video/image loading from tar
 # ---------------------------------------------------------------------------
 
-def load_video_from_tar(tar: tarfile.TarFile, member_path: str, height: int, width: int, num_frames: int) -> torch.Tensor:
+def load_video_from_tar(
+    tar: tarfile.TarFile, member_path: str, height: int, width: int, num_frames: int
+) -> torch.Tensor:
     import decord
     decord.bridge.set_bridge("torch")
 
@@ -220,8 +220,7 @@ def process_samples(
 
     for tar_name, group in tar_groups.items():
         tar_path = tar_dir / tar_name
-        tar = tarfile.open(tar_path, "r")
-        try:
+        with tarfile.open(tar_path, "r") as tar:
             # Process in batches within this tar group
             for batch_start in range(0, len(group), args.batch_size):
                 batch = group[batch_start : batch_start + args.batch_size]
@@ -273,8 +272,6 @@ def process_samples(
 
                 written += len(batch)
                 pbar.update(len(batch))
-        finally:
-            tar.close()
 
     pbar.close()
     return written
