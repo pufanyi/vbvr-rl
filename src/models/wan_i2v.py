@@ -621,6 +621,7 @@ class WanI2VForTraining:
         sigma_max: float = 1.0,
         cfg_scale: float = 1.0,
         generator: torch.Generator | None = None,
+        initial_latent: torch.Tensor | None = None,
     ) -> dict:
         """Generate video latents via SDE sampling, storing per-step data for GRPO.
 
@@ -636,6 +637,8 @@ class WanI2VForTraining:
             sigma_max: Noise ceiling.
             cfg_scale: Classifier-free guidance scale (1.0 = no guidance).
             generator: Optional RNG for reproducibility.
+            initial_latent: Optional pre-sampled x_T. When provided, all group
+                members can share the same initial noise as in DanceGRPO.
 
         Returns:
             dict with keys:
@@ -655,8 +658,11 @@ class WanI2VForTraining:
         shift = 5.0
         sigmas = shift * t_values / (1.0 + (shift - 1.0) * t_values)
 
-        # Start from pure noise
-        latent = torch.randn(latent_shape, device=device, dtype=torch.bfloat16, generator=generator)
+        # Start from pure noise unless a caller provides a shared x_T.
+        if initial_latent is None:
+            latent = torch.randn(latent_shape, device=device, dtype=torch.bfloat16, generator=generator)
+        else:
+            latent = initial_latent.to(device=device, dtype=torch.bfloat16).clone()
 
         all_latents = [latent]
         all_log_probs = []

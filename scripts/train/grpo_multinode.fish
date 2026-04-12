@@ -47,6 +47,18 @@ if test "$expect_nproc" = true
     exit 1
 end
 
+set -l hsdp_backend_overridden false
+for arg in $train_args
+    if test "$arg" = "--hsdp_replicate_backend"
+        set hsdp_backend_overridden true
+        break
+    end
+    if string match -qr '^--hsdp_replicate_backend=' -- "$arg"
+        set hsdp_backend_overridden true
+        break
+    end
+end
+
 # Validate required environment variables
 if not set -q MASTER_ADDR; or test -z "$MASTER_ADDR"
     echo "ERROR: MASTER_ADDR is not set" >&2
@@ -71,6 +83,28 @@ echo "Launching Flow-GRPO multi-node training: node $RANK/$WORLD_SIZE, $nproc GP
 # Ensure sufficient locked memory for InfiniBand RDMA registration
 ulimit -l unlimited 2>/dev/null; or ulimit -l 67108864 2>/dev/null
 
+set -l memlock_limit (ulimit -l 2>/dev/null)
+set -l memlock_desc unknown
+set -l low_memlock false
+if test "$memlock_limit" = "unlimited"
+    set memlock_desc unlimited
+else if string match -qr '^[0-9]+$' -- "$memlock_limit"
+    set memlock_desc "$memlock_limit KiB"
+    if test "$memlock_limit" -le 8192
+        set low_memlock true
+    end
+end
+
+# Low memlock makes NCCL/IB registration fragile. Default to NCCL over socket
+# so HSDP cross-node replicate traffic can stay on GPU collectives instead of
+# falling back to the much slower gloo backend.
+if test "$low_memlock" = true
+    if not set -q WAN_NCCL_TRANSPORT
+        set -gx WAN_NCCL_TRANSPORT socket
+        echo "Detected low memlock ($memlock_desc); defaulting WAN_NCCL_TRANSPORT=socket"
+    end
+end
+
 # NCCL tuning for multi-node FSDP with large all_gather buffers. Preserve any
 # user-provided overrides and support `WAN_NCCL_TRANSPORT=socket` as a hard
 # fallback when InfiniBand queue-pair allocation is exhausted.
@@ -82,6 +116,9 @@ if not set -q NCCL_IB_RETRY_CNT
 end
 if not set -q NCCL_SOCKET_IFNAME
     set -gx NCCL_SOCKET_IFNAME eth0
+end
+if not set -q GLOO_SOCKET_IFNAME
+    set -gx GLOO_SOCKET_IFNAME $NCCL_SOCKET_IFNAME
 end
 if not set -q NCCL_REGISTRATION_CACHE_SIZE
     set -gx NCCL_REGISTRATION_CACHE_SIZE 0
@@ -110,8 +147,26 @@ if set -q WAN_NCCL_TRANSPORT
         if not set -q NCCL_IB_DISABLE
             set -gx NCCL_IB_DISABLE 1
         end
+        if test "$hsdp_backend_overridden" = false
+            set -a train_args --hsdp_replicate_backend nccl
+        end
     end
 end
+
+set -l transport_desc ib
+if set -q WAN_NCCL_TRANSPORT
+    set transport_desc (string lower -- "$WAN_NCCL_TRANSPORT")
+end
+set -l hsdp_backend_desc auto
+if test "$hsdp_backend_overridden" = true
+    set hsdp_backend_desc user-specified
+else if set -q WAN_NCCL_TRANSPORT
+    set -l wan_nccl_transport (string lower -- "$WAN_NCCL_TRANSPORT")
+    if contains -- $wan_nccl_transport socket tcp
+        set hsdp_backend_desc nccl
+    end
+end
+echo "Distributed comm config: memlock=$memlock_desc transport=$transport_desc NCCL_SOCKET_IFNAME=$NCCL_SOCKET_IFNAME GLOO_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME hsdp_replicate_backend=$hsdp_backend_desc"
 
 . .venv/bin/activate.fish
 

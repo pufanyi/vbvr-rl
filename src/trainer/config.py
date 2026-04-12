@@ -102,13 +102,24 @@ class TrainConfig(BaseModel):
     cos_smooth_blend_delta: float = 0.05  # half-width of blending window (only for smooth_blend path)
 
     # Trainer selection
-    trainer: Literal["i2v", "cos"] = "i2v"  # "cos" for Chain-of-Step piecewise flow matching
+    trainer: Literal["i2v", "cos", "grpo", "dancegrpo"] = "i2v"
 
     @field_validator("cos_tau_sigma", mode="before")
     @classmethod
     def _wrap_tau_sigma(cls, v):
         if isinstance(v, (int, float)):
             return [float(v)]
+        return v
+
+    # DanceGRPO (paper-inspired variant of GRPO)
+    dancegrpo_share_group_init_noise: bool = True
+    dancegrpo_timestep_selection_ratio: float = 1.0
+
+    @field_validator("dancegrpo_timestep_selection_ratio")
+    @classmethod
+    def _validate_dancegrpo_timestep_selection_ratio(cls, v: float):
+        if not (0.0 < v <= 1.0):
+            raise ValueError(f"dancegrpo_timestep_selection_ratio must be in (0, 1], got {v}")
         return v
 
     # HSDP: shard within node, replicate across nodes.

@@ -16,7 +16,8 @@ Usage:
         --prompt_embeds_dir data/vbvr/latents/prompt_embeds \
         --vae_latents_dir   data/vbvr/latents/vae_latents \
         --output_dir        data/vbvr/latents/webdataset \
-        --samples_per_shard 1000
+        --samples_per_shard 1000 \
+        --num_workers 16
 
 Training:
     import webdataset as wds
@@ -35,12 +36,23 @@ import json
 import random
 import struct
 import tarfile
+import threading
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import Value
 from pathlib import Path
 
 from loguru import logger
 from safetensors import safe_open
 from safetensors.torch import save as st_save
 from tqdm import tqdm
+
+# Shared counter for per-sample progress across workers
+_counter = None
+
+
+def _init_worker(counter: Value):
+    global _counter
+    _counter = counter
 
 
 def read_safetensors_header(path: str) -> dict:
@@ -56,6 +68,7 @@ def parse_args():
     p.add_argument("--vae_latents_dir", required=True)
     p.add_argument("--output_dir", required=True)
     p.add_argument("--samples_per_shard", type=int, default=1000)
+    p.add_argument("--num_workers", type=int, default=16)
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
@@ -64,6 +77,76 @@ def _add_tar_entry(tar: tarfile.TarFile, name: str, data: bytes):
     info = tarfile.TarInfo(name=name)
     info.size = len(data)
     tar.addfile(info, io.BytesIO(data))
+
+
+def _write_shard(
+    shard_id: int,
+    samples: list[dict],
+    output_dir: str,
+    global_offset: int,
+) -> tuple[int, int]:
+    """Write one tar shard. Runs in a worker process.
+
+    Returns (shard_id, total_bytes_written).
+    """
+    pe_handles: dict[str, safe_open] = {}
+    tar_path = str(Path(output_dir) / f"shard-{shard_id:06d}.tar")
+    total_bytes = 0
+
+    with tarfile.open(tar_path, "w") as tar_file:
+        for local_idx, sample in enumerate(samples):
+            # Read prompt embeds (cache file handles within this shard)
+            src = sample["source_file"]
+            if src not in pe_handles:
+                pe_handles[src] = safe_open(src, framework="pt")
+            prompt_embeds = pe_handles[src].get_tensor(sample["key"])
+
+            # Read VAE latents
+            with safe_open(sample["vae_path"], framework="pt") as vae_sf:
+                latents = vae_sf.get_tensor("latents")
+                condition = vae_sf.get_tensor("condition")
+
+            # Serialize tensors
+            st_bytes = st_save({
+                "prompt_embeds": prompt_embeds,
+                "latents": latents,
+                "condition": condition,
+            })
+
+            # Serialize metadata
+            meta_bytes = json.dumps({
+                "prompt": sample["prompt"],
+                "tar": sample["tar"],
+                "index_in_tar": sample["index_in_tar"],
+                "seq_len": sample["seq_len"],
+            }).encode()
+
+            key = f"{global_offset + local_idx:07d}"
+            _add_tar_entry(tar_file, f"{key}.safetensors", st_bytes)
+            _add_tar_entry(tar_file, f"{key}.json", meta_bytes)
+            total_bytes += len(st_bytes) + len(meta_bytes)
+
+            # Update shared progress counter
+            if _counter is not None:
+                with _counter.get_lock():
+                    _counter.value += 1
+
+    pe_handles.clear()
+    return shard_id, total_bytes
+
+
+def _progress_monitor(counter: Value, total: int, pbar: tqdm, done: threading.Event):
+    """Poll shared counter and update tqdm from the main process."""
+    last = 0
+    while not done.wait(0.5):
+        current = counter.value
+        if current > last:
+            pbar.update(current - last)
+            last = current
+    # Final flush
+    current = counter.value
+    if current > last:
+        pbar.update(current - last)
 
 
 def main():
@@ -133,65 +216,52 @@ def main():
     random.shuffle(complete)
 
     # ------------------------------------------------------------------
-    # Write tar shards
+    # Split into shard chunks and write in parallel
     # ------------------------------------------------------------------
-    num_shards = (len(complete) + args.samples_per_shard - 1) // args.samples_per_shard
-    logger.info("Writing {} shards (~{} samples each) …", num_shards, args.samples_per_shard)
+    sps = args.samples_per_shard
+    shard_chunks: list[tuple[int, list[dict], int]] = []
+    for i in range(0, len(complete), sps):
+        shard_id = i // sps
+        shard_chunks.append((shard_id, complete[i : i + sps], i))
 
-    pe_handles: dict[str, safe_open] = {}
+    num_shards = len(shard_chunks)
+    num_workers = min(args.num_workers, num_shards)
+    logger.info(
+        "Writing {} shards (~{} samples each) with {} workers …",
+        num_shards, sps, num_workers,
+    )
 
-    def get_pe(path: str):
-        if path not in pe_handles:
-            pe_handles[path] = safe_open(path, framework="pt")
-        return pe_handles[path]
+    counter = Value("i", 0)
+    done_event = threading.Event()
+    pbar = tqdm(total=len(complete), desc="Writing samples", unit="sample")
+    monitor = threading.Thread(
+        target=_progress_monitor, args=(counter, len(complete), pbar, done_event)
+    )
+    monitor.start()
 
-    tar_file = None
-    shard_id = -1
     total_bytes = 0
+    with ProcessPoolExecutor(
+        max_workers=num_workers,
+        initializer=_init_worker,
+        initargs=(counter,),
+    ) as executor:
+        futures = {
+            executor.submit(
+                _write_shard, shard_id, samples, str(output_dir), offset
+            ): shard_id
+            for shard_id, samples, offset in shard_chunks
+        }
+        for future in as_completed(futures):
+            _, nbytes = future.result()
+            total_bytes += nbytes
 
-    for global_idx, sample in enumerate(tqdm(complete, desc="Writing shards")):
-        # Start new shard if needed
-        if global_idx % args.samples_per_shard == 0:
-            if tar_file is not None:
-                tar_file.close()
-            shard_id += 1
-            tar_file = tarfile.open(str(output_dir / f"shard-{shard_id:06d}.tar"), "w")  # noqa: SIM115
-
-        # Read prompt embeds from cached handle
-        prompt_embeds = get_pe(sample["source_file"]).get_tensor(sample["key"])
-
-        # Read VAE latents
-        with safe_open(sample["vae_path"], framework="pt") as vae_sf:
-            latents = vae_sf.get_tensor("latents")
-            condition = vae_sf.get_tensor("condition")
-
-        # Serialize tensors
-        st_bytes = st_save({
-            "prompt_embeds": prompt_embeds,
-            "latents": latents,
-            "condition": condition,
-        })
-
-        # Serialize metadata
-        meta_bytes = json.dumps({
-            "prompt": sample["prompt"],
-            "tar": sample["tar"],
-            "index_in_tar": sample["index_in_tar"],
-            "seq_len": sample["seq_len"],
-        }).encode()
-
-        key = f"{global_idx:07d}"
-        _add_tar_entry(tar_file, f"{key}.safetensors", st_bytes)
-        _add_tar_entry(tar_file, f"{key}.json", meta_bytes)
-        total_bytes += len(st_bytes) + len(meta_bytes)
-
-    if tar_file is not None:
-        tar_file.close()
-    pe_handles.clear()
+    done_event.set()
+    monitor.join()
+    pbar.close()
 
     logger.info(
         "Done! {} shards, {} samples, {:.1f} GB → {}",
-        shard_id + 1, len(complete), total_bytes / 1e9, output_dir,
+        num_shards, len(complete), total_bytes / 1e9, output_dir,
     )
 
 

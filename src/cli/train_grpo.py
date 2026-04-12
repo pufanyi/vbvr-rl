@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 
-from src.trainer import GRPOTrainer, TrainConfig
+from src.trainer import DanceGRPOTrainer, GRPOTrainer, TrainConfig
 
 
 def main():
@@ -37,7 +37,8 @@ def main():
             cfg_dict[name] = v
 
     cfg = TrainConfig(**cfg_dict)
-    trainer = GRPOTrainer(cfg)
+    trainer_cls = DanceGRPOTrainer if cfg.trainer == "dancegrpo" else GRPOTrainer
+    trainer = trainer_cls(cfg)
     trainer.train()
 
 

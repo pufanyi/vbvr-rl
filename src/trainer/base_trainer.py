@@ -136,7 +136,9 @@ class BaseTrainer:
         """Set up expert-parallel state: split GPUs into two groups, one per MoE expert."""
         self.expert_parallel = cfg.expert_parallel
         self._cpu_world_pg = None
+        self._cpu_dp_pg = None
         self._expert_log_pg = None
+        self.peer_rank = -1
         if not self.expert_parallel:
             self._effective_train_experts = cfg.train_experts
             self.expert_group = -1
@@ -153,8 +155,11 @@ class BaseTrainer:
         self.expert_group = 0 if self.rank < half else 1
         self.dp_rank = self.rank % half
         self.dp_size = half
+        self.peer_rank = self.rank + half if self.expert_group == 0 else self.rank - half
         self._effective_train_experts = "high" if self.expert_group == 0 else "low"
         self._cpu_world_pg = dist.new_group(backend="gloo")
+        dp_ranks = list(range(half)) if self.expert_group == 0 else list(range(half, self.world_size))
+        self._cpu_dp_pg = dist.new_group(ranks=dp_ranks, backend="gloo")
         self._expert_log_pg = dist.new_group(ranks=[0, half], backend="gloo")
 
     def _get_expert_parallel_sampler_seed(self, cfg: TrainConfig) -> int:
