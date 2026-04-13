@@ -61,13 +61,18 @@ class BaseTrainer:
 
         # ---- Model ----
         self.model = self._build_model(cfg)
+        logger.info("Model loaded")
 
         # ---- Subclass hook (e.g. create reference policy copies) ----
         self._pre_fsdp_setup(cfg)
 
         # ---- FSDP2 ----
+        logger.info("Creating device mesh")
         self.mesh, self.mp_policy = self._create_device_mesh(cfg)
+        logger.info("Device mesh ready")
+        logger.info("Applying FSDP sharding")
         self.sync_modules = self._setup_fsdp(cfg)
+        logger.info("FSDP sharding ready")
 
         # ---- EMA ----
         self.ema = self._setup_ema(cfg)
@@ -253,10 +258,7 @@ class BaseTrainer:
         if self.expert_parallel and cfg.hsdp:
             # EP + HSDP: per-expert-group 2D mesh (replicate, shard).
             local_size = int(os.environ.get("LOCAL_WORLD_SIZE", torch.cuda.device_count()))
-            assert self.dp_size % local_size == 0, (
-                f"dp_size ({self.dp_size}) must be divisible by local GPUs ({local_size})"
-            )
-            num_replicas = self.dp_size // local_size
+            num_replicas = self.dp_size // local_size if self.dp_size >= local_size and self.dp_size % local_size == 0 else 0
             if num_replicas <= 1:
                 # Single node per expert group — fall back to EP without HSDP
                 logger.warning("expert_parallel+hsdp but only 1 node per expert group, HSDP disabled")
@@ -268,25 +270,33 @@ class BaseTrainer:
                 mesh = mesh_2d["dp"]
             else:
                 rep_backend = cfg.hsdp_replicate_backend or "nccl"
-                # Build per-expert-group 2D meshes directly instead of slicing
-                # a 3D mesh — avoids PyTorch issues with 3D mixed-backend submesh
-                # extraction (pytorch#157393, pytorch#158793).
-                half = self.world_size // 2
-                g0 = torch.arange(0, half).reshape(num_replicas, local_size)
-                g1 = torch.arange(half, self.world_size).reshape(num_replicas, local_size)
-                bo = (
-                    (rep_backend, None),  # replicate dim
-                    (None, None),         # shard dim (default nccl)
-                )
-                mesh_g0 = DeviceMesh(
-                    "cuda", g0, mesh_dim_names=("replicate", "shard"),
-                    backend_override=bo,
-                )
-                mesh_g1 = DeviceMesh(
-                    "cuda", g1, mesh_dim_names=("replicate", "shard"),
-                    backend_override=bo,
-                )
-                mesh = mesh_g0 if self.expert_group == 0 else mesh_g1
+                if rep_backend == "nccl":
+                    mesh_3d = init_device_mesh(
+                        "cuda",
+                        (2, num_replicas, local_size),
+                        mesh_dim_names=("expert", "replicate", "shard"),
+                    )
+                    mesh = mesh_3d["replicate", "shard"]
+                else:
+                    # Build per-expert-group 2D meshes directly instead of slicing
+                    # a 3D mixed-backend mesh. PyTorch has had issues with mixed-
+                    # backend submesh extraction in this path.
+                    half = self.world_size // 2
+                    g0 = torch.arange(0, half).reshape(num_replicas, local_size)
+                    g1 = torch.arange(half, self.world_size).reshape(num_replicas, local_size)
+                    bo = (
+                        (rep_backend, None),  # replicate dim
+                        (None, None),         # shard dim (default nccl)
+                    )
+                    mesh_g0 = DeviceMesh(
+                        "cuda", g0, mesh_dim_names=("replicate", "shard"),
+                        backend_override=bo,
+                    )
+                    mesh_g1 = DeviceMesh(
+                        "cuda", g1, mesh_dim_names=("replicate", "shard"),
+                        backend_override=bo,
+                    )
+                    mesh = mesh_g0 if self.expert_group == 0 else mesh_g1
                 logger.info(
                     "EP+HSDP: 2 experts × {} replicas × {} shards (replicate={})",
                     num_replicas,

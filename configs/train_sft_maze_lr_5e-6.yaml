@@ -18,6 +18,7 @@ warmup_steps: 100
 save_steps: 6000
 log_steps: 1
 seed: 42
+hsdp: false
 
 ema_decay: 0.99
 

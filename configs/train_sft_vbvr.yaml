@@ -19,5 +19,6 @@ ema_decay: 0.99
 
 expert_parallel: true
 train_experts: both
+hsdp: false
 
 wandb_project: wan-sft-vbvr
