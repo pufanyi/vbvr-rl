@@ -47,18 +47,6 @@ if test "$expect_nproc" = true
     exit 1
 end
 
-set -l hsdp_backend_overridden false
-for arg in $train_args
-    if test "$arg" = "--hsdp_replicate_backend"
-        set hsdp_backend_overridden true
-        break
-    end
-    if string match -qr '^--hsdp_replicate_backend=' -- "$arg"
-        set hsdp_backend_overridden true
-        break
-    end
-end
-
 # Validate required environment variables
 if not set -q MASTER_ADDR; or test -z "$MASTER_ADDR"
     echo "ERROR: MASTER_ADDR is not set" >&2
@@ -80,7 +68,8 @@ cd $project_root
 
 echo "Launching Flow-GRPO multi-node training: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$master_port"
 
-# Ensure sufficient locked memory for InfiniBand RDMA registration
+# Try to raise memlock for NCCL/IB. This often fails under schedulers; we
+# still continue and fall back to NCCL over socket when the limit is too low.
 ulimit -l unlimited 2>/dev/null; or ulimit -l 67108864 2>/dev/null
 
 set -l memlock_limit (ulimit -l 2>/dev/null)
@@ -95,9 +84,8 @@ else if string match -qr '^[0-9]+$' -- "$memlock_limit"
     end
 end
 
-# Low memlock makes NCCL/IB registration fragile. Default to NCCL over socket
-# so HSDP cross-node replicate traffic can stay on GPU collectives instead of
-# falling back to the much slower gloo backend.
+# Low memlock makes NCCL/IB registration fragile. Keep NCCL, but default the
+# transport to socket/TCP instead of trying to run the hot path through gloo.
 if test "$low_memlock" = true
     if not set -q WAN_NCCL_TRANSPORT
         set -gx WAN_NCCL_TRANSPORT socket
@@ -105,68 +93,31 @@ if test "$low_memlock" = true
     end
 end
 
-# NCCL tuning for multi-node FSDP with large all_gather buffers. Preserve any
-# user-provided overrides and support `WAN_NCCL_TRANSPORT=socket` as a hard
-# fallback when InfiniBand queue-pair allocation is exhausted.
-if not set -q NCCL_IB_GID_INDEX
-    set -gx NCCL_IB_GID_INDEX 3
-end
-if not set -q NCCL_IB_RETRY_CNT
-    set -gx NCCL_IB_RETRY_CNT 7
-end
+# Default bootstrap interfaces. Override from the environment if your cluster
+# uses a different NIC name.
 if not set -q NCCL_SOCKET_IFNAME
     set -gx NCCL_SOCKET_IFNAME eth0
 end
 if not set -q GLOO_SOCKET_IFNAME
     set -gx GLOO_SOCKET_IFNAME $NCCL_SOCKET_IFNAME
 end
-if not set -q NCCL_REGISTRATION_CACHE_SIZE
-    set -gx NCCL_REGISTRATION_CACHE_SIZE 0
-end
-if not set -q TORCH_NCCL_AVOID_RECORD_STREAMS
-    set -gx TORCH_NCCL_AVOID_RECORD_STREAMS 1
-end
-if not set -q NCCL_NET_GDR_LEVEL
-    set -gx NCCL_NET_GDR_LEVEL 0
-end
-if not set -q NCCL_IB_QPS_PER_CONNECTION
-    set -gx NCCL_IB_QPS_PER_CONNECTION 1
-end
-if not set -q NCCL_IB_SPLIT_DATA_ON_QPS
-    set -gx NCCL_IB_SPLIT_DATA_ON_QPS 0
-end
-if not set -q NCCL_MAX_NCHANNELS
-    set -gx NCCL_MAX_NCHANNELS 4
-end
-if not set -q NCCL_MIN_NCHANNELS
-    set -gx NCCL_MIN_NCHANNELS 1
-end
+
+set -l transport_desc ib
 if set -q WAN_NCCL_TRANSPORT
     set -l wan_nccl_transport (string lower -- "$WAN_NCCL_TRANSPORT")
+    set transport_desc $wan_nccl_transport
     if contains -- $wan_nccl_transport socket tcp
         if not set -q NCCL_IB_DISABLE
             set -gx NCCL_IB_DISABLE 1
         end
-        if test "$hsdp_backend_overridden" = false
-            set -a train_args --hsdp_replicate_backend nccl
-        end
     end
 end
 
-set -l transport_desc ib
-if set -q WAN_NCCL_TRANSPORT
-    set transport_desc (string lower -- "$WAN_NCCL_TRANSPORT")
+set -l ib_disable_desc 0
+if set -q NCCL_IB_DISABLE
+    set ib_disable_desc $NCCL_IB_DISABLE
 end
-set -l hsdp_backend_desc auto
-if test "$hsdp_backend_overridden" = true
-    set hsdp_backend_desc user-specified
-else if set -q WAN_NCCL_TRANSPORT
-    set -l wan_nccl_transport (string lower -- "$WAN_NCCL_TRANSPORT")
-    if contains -- $wan_nccl_transport socket tcp
-        set hsdp_backend_desc nccl
-    end
-end
-echo "Distributed comm config: memlock=$memlock_desc transport=$transport_desc NCCL_SOCKET_IFNAME=$NCCL_SOCKET_IFNAME GLOO_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME hsdp_replicate_backend=$hsdp_backend_desc"
+echo "Distributed comm config: memlock=$memlock_desc transport=$transport_desc NCCL_SOCKET_IFNAME=$NCCL_SOCKET_IFNAME GLOO_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME NCCL_IB_DISABLE=$ib_disable_desc"
 
 . .venv/bin/activate.fish
 

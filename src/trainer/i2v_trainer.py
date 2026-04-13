@@ -135,7 +135,14 @@ class I2VTrainer(BaseTrainer):
                             eta_str = "?"
                             s_it_str = "?"
 
-                        fractional_epoch = epoch + (batch_idx + 1) / len(self.dataloader)
+                        if hasattr(self.dataloader.dataset, '__len__'):
+                            batches = len(self.dataloader)
+                        elif cfg.dataset_size is not None:
+                            dp = self.dp_size if self.expert_parallel else self.world_size
+                            batches = cfg.dataset_size // (dp * cfg.batch_size)
+                        else:
+                            batches = None
+                        fractional_epoch = epoch + (batch_idx + 1) / batches if batches else float(epoch)
                         logger.info(
                             "step={}/{} epoch={:.2f} loss={:.4f} lr={:.2e} grad_norm={:.4f} mfu={} eta={} ({} s/it)",
                             global_step,

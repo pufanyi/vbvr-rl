@@ -259,7 +259,7 @@ class BaseRLTrainer:
                 )
                 mesh = mesh_2d["dp"]
             else:
-                rep_backend = cfg.hsdp_replicate_backend or "gloo"
+                rep_backend = cfg.hsdp_replicate_backend or "nccl"
                 mesh_3d = init_device_mesh(
                     "cuda",
                     (2, num_replicas, local_size),
@@ -306,7 +306,7 @@ class BaseRLTrainer:
                 logger.warning("hsdp=True but only 1 node detected, falling back to plain FSDP")
                 mesh = init_device_mesh("cuda", (self.world_size,))
             else:
-                rep_backend = cfg.hsdp_replicate_backend or "gloo"
+                rep_backend = cfg.hsdp_replicate_backend or "nccl"
                 mesh = init_device_mesh(
                     "cuda",
                     (num_replicas, local_size),

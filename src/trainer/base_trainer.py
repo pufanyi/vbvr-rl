@@ -8,7 +8,7 @@ import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from loguru import logger
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
-from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 from torch.utils.data import DistributedSampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 
@@ -251,7 +251,7 @@ class BaseTrainer:
 
     def _create_device_mesh(self, cfg: TrainConfig):
         if self.expert_parallel and cfg.hsdp:
-            # 3D mesh: (expert, replicate, shard) — EP + HSDP combined.
+            # EP + HSDP: per-expert-group 2D mesh (replicate, shard).
             local_size = int(os.environ.get("LOCAL_WORLD_SIZE", torch.cuda.device_count()))
             assert self.dp_size % local_size == 0, (
                 f"dp_size ({self.dp_size}) must be divisible by local GPUs ({local_size})"
@@ -267,16 +267,28 @@ class BaseTrainer:
                 )
                 mesh = mesh_2d["dp"]
             else:
-                rep_backend = cfg.hsdp_replicate_backend or "gloo"
-                mesh_3d = init_device_mesh(
-                    "cuda",
-                    (2, num_replicas, local_size),
-                    mesh_dim_names=("expert", "replicate", "shard"),
-                    backend_override={"replicate": rep_backend},
+                rep_backend = cfg.hsdp_replicate_backend or "nccl"
+                # Build per-expert-group 2D meshes directly instead of slicing
+                # a 3D mesh — avoids PyTorch issues with 3D mixed-backend submesh
+                # extraction (pytorch#157393, pytorch#158793).
+                half = self.world_size // 2
+                g0 = torch.arange(0, half).reshape(num_replicas, local_size)
+                g1 = torch.arange(half, self.world_size).reshape(num_replicas, local_size)
+                bo = (
+                    (rep_backend, None),  # replicate dim
+                    (None, None),         # shard dim (default nccl)
                 )
-                mesh = mesh_3d["replicate", "shard"]
+                mesh_g0 = DeviceMesh(
+                    "cuda", g0, mesh_dim_names=("replicate", "shard"),
+                    backend_override=bo,
+                )
+                mesh_g1 = DeviceMesh(
+                    "cuda", g1, mesh_dim_names=("replicate", "shard"),
+                    backend_override=bo,
+                )
+                mesh = mesh_g0 if self.expert_group == 0 else mesh_g1
                 logger.info(
-                    "EP+HSDP 3D mesh: 2 experts × {} replicas × {} shards (replicate={})",
+                    "EP+HSDP: 2 experts × {} replicas × {} shards (replicate={})",
                     num_replicas,
                     local_size,
                     rep_backend,
@@ -316,9 +328,10 @@ class BaseTrainer:
                 logger.warning("hsdp=True but only 1 node detected, falling back to plain FSDP")
                 mesh = init_device_mesh("cuda", (self.world_size,))
             else:
-                # Use gloo for the replicate (inter-node) dimension by default
-                # to completely avoid NCCL IB registration on cross-node traffic.
-                rep_backend = cfg.hsdp_replicate_backend or "gloo"
+                # Prefer NCCL for cross-node replicate traffic; low-memlock setups
+                # should switch NCCL transport away from IB rather than falling back
+                # to gloo for the hot path.
+                rep_backend = cfg.hsdp_replicate_backend or "nccl"
                 mesh = init_device_mesh(
                     "cuda",
                     (num_replicas, local_size),

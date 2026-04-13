@@ -127,7 +127,7 @@ class TrainConfig(BaseModel):
     # Keeps NCCL IB traffic to intra-node NVLink; cross-node uses only gradient
     # all-reduce (much less locked-memory / IB registration pressure).
     hsdp: bool = True  # Hybrid Sharded Data Parallel; single-node auto-falls back to plain FSDP
-    hsdp_replicate_backend: Literal["nccl", "gloo"] | None = None  # None = auto (gloo when hsdp=True)
+    hsdp_replicate_backend: Literal["nccl", "gloo"] | None = None  # None = auto (prefer nccl)
 
     # Expert parallel: split MoE experts across GPU sub-groups
     expert_parallel: bool = False  # each expert gets world_size/2 GPUs with independent FSDP
