@@ -175,10 +175,10 @@ class BaseTrainer:
         self.dp_size = half
         self.peer_rank = self.rank + half if self.expert_group == 0 else self.rank - half
         self._effective_train_experts = "high" if self.expert_group == 0 else "low"
-        self._cpu_world_pg = dist.new_group(backend="gloo")
+        self._cpu_world_pg = dist.new_group(backend="nccl")
         dp_ranks = list(range(half)) if self.expert_group == 0 else list(range(half, self.world_size))
-        self._cpu_dp_pg = dist.new_group(ranks=dp_ranks, backend="gloo")
-        self._expert_log_pg = dist.new_group(ranks=[0, half], backend="gloo")
+        self._cpu_dp_pg = dist.new_group(ranks=dp_ranks, backend="nccl")
+        self._expert_log_pg = dist.new_group(ranks=[0, half], backend="nccl")
 
     def _get_expert_parallel_sampler_seed(self, cfg: TrainConfig) -> int:
         """Sampler seed for expert-parallel mode.

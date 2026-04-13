@@ -39,19 +39,19 @@ if test "$expect_nproc" = true
     exit 1
 end
 
-# # Validate required environment variables
-# if not set -q MASTER_ADDR; or test -z "$MASTER_ADDR"
-#     echo "ERROR: MASTER_ADDR is not set" >&2
-#     exit 1
-# end
-# if not set -q WORLD_SIZE; or test -z "$WORLD_SIZE"
-#     echo "ERROR: WORLD_SIZE is not set" >&2
-#     exit 1
-# end
-# if not set -q RANK; or test -z "$RANK"
-#     echo "ERROR: RANK is not set" >&2
-#     exit 1
-# end
+# Validate required environment variables
+if not set -q MASTER_ADDR; or test -z "$MASTER_ADDR"
+    echo "ERROR: MASTER_ADDR is not set" >&2
+    exit 1
+end
+if not set -q WORLD_SIZE; or test -z "$WORLD_SIZE"
+    echo "ERROR: WORLD_SIZE is not set" >&2
+    exit 1
+end
+if not set -q RANK; or test -z "$RANK"
+    echo "ERROR: RANK is not set" >&2
+    exit 1
+end
 
 # set -l project_root (realpath (dirname (status filename))/../..)
 # cd $project_root
@@ -109,12 +109,7 @@ end
 # end
 # echo "Distributed comm config: memlock=$memlock_desc transport=$transport_desc NCCL_SOCKET_IFNAME=$NCCL_SOCKET_IFNAME GLOO_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME NCCL_IB_DISABLE=$ib_disable_desc"
 
-export NCCL_IB_HCA=mlx5_0:1
-export NCCL_IB_DISABLE=0 
-export NCCL_IB_RETRY_CNT=7
-export NCCL_IB_TIMEOUT=23
 export NCCL_DEBUG=INFO
-export NCCL_SOCKET_IFNAME=^
 
 . .venv/bin/activate.fish
 
