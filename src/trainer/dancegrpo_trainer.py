@@ -16,10 +16,10 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
-from src.trainer.grpo_trainer import GRPOTrainer, _compute_ref_mean
+from src.trainer.base_grpo_trainer import BaseGRPOTrainer, _compute_ref_mean
 
 
-class DanceGRPOTrainer(GRPOTrainer):
+class DanceGRPOTrainer(BaseGRPOTrainer):
     """Paper-inspired GRPO variant with shared group noise and timestep selection."""
 
     def __init__(self, cfg):

@@ -112,7 +112,8 @@ class COSTrainer(BaseTrainer):
         )
 
         for epoch in range(start_epoch, cfg.num_epochs):
-            self.sampler.set_epoch(epoch)
+            if self.sampler is not None:
+                self.sampler.set_epoch(epoch)
             for opt in self.optimizers:
                 opt.zero_grad(set_to_none=True)
 

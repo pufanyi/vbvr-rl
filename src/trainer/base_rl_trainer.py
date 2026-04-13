@@ -1,4 +1,10 @@
-"""Base trainer with shared infrastructure for FSDP2 + DCP training."""
+"""Base RL trainer with independent infrastructure for FSDP2 + DCP training.
+
+This is the RL-side counterpart of BaseTrainer (which serves SFT).
+The two hierarchies are intentionally kept separate so the RL side can
+evolve independently — e.g. toward an inference/training GPU split
+architecture — without affecting SFT trainers.
+"""
 
 import os
 from pathlib import Path
@@ -7,8 +13,8 @@ import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from loguru import logger
-from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 from torch.utils.data import DistributedSampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 
@@ -22,11 +28,14 @@ from src.trainer.optimizer import build_optimizer
 from src.trainer.utils import apply_liger_rms_norm, collate, setup_loguru, shard_transformer
 
 
-class BaseTrainer:
-    """Shared infrastructure: distributed init, model, FSDP2, EMA, compile,
-    dataset, optimizer, DCP checkpointing, wandb, and resume logic.
+class BaseRLTrainer:
+    """Independent RL training infrastructure: distributed init, model, FSDP2,
+    EMA, compile, dataset, optimizer, DCP checkpointing, wandb, and resume.
 
-    Subclasses implement ``train()`` and any training-mode-specific setup.
+    Separated from BaseTrainer so the RL training pipeline can evolve
+    independently (e.g. inference/training GPU split).
+
+    Subclasses implement ``train()`` and any algorithm-specific setup.
     Override hooks:
         ``_pre_fsdp_setup``  — called after model build, before FSDP sharding.
         ``_setup_fsdp``      — override to shard additional modules (call super).
@@ -169,11 +178,7 @@ class BaseTrainer:
         self._expert_log_pg = dist.new_group(ranks=[0, half], backend="gloo")
 
     def _get_expert_parallel_sampler_seed(self, cfg: TrainConfig) -> int:
-        """Sampler seed for expert-parallel mode.
-
-        Default: same seed -> both groups iterate the same data (SFT behavior).
-        Override in subclass for per-group independent data (COS behavior).
-        """
+        """Sampler seed for expert-parallel mode."""
         return cfg.seed
 
     def _post_init(self, cfg: TrainConfig) -> None:
@@ -183,9 +188,8 @@ class BaseTrainer:
         """Total optimizer steps. Override for different accumulation strategies."""
         if self.cfg.dataset_size is not None:
             dp = self.dp_size if self.expert_parallel else self.world_size
-            batches_per_epoch = self.cfg.dataset_size // (dp * self.cfg.batch_size)
-            return self.cfg.num_epochs * batches_per_epoch // self.cfg.gradient_accumulation_steps
-        return self.cfg.num_epochs * len(self.dataloader) // self.cfg.gradient_accumulation_steps
+            return self.cfg.num_epochs * (self.cfg.dataset_size // (dp * self.cfg.batch_size))
+        return self.cfg.num_epochs * len(self.dataloader)
 
     def train(self):
         """Main training loop. Must be implemented by subclass."""
@@ -241,14 +245,12 @@ class BaseTrainer:
 
     def _create_device_mesh(self, cfg: TrainConfig):
         if self.expert_parallel and cfg.hsdp:
-            # 3D mesh: (expert, replicate, shard) — EP + HSDP combined.
             local_size = int(os.environ.get("LOCAL_WORLD_SIZE", torch.cuda.device_count()))
             assert self.dp_size % local_size == 0, (
                 f"dp_size ({self.dp_size}) must be divisible by local GPUs ({local_size})"
             )
             num_replicas = self.dp_size // local_size
             if num_replicas <= 1:
-                # Single node per expert group — fall back to EP without HSDP
                 logger.warning("expert_parallel+hsdp but only 1 node per expert group, HSDP disabled")
                 mesh_2d = init_device_mesh(
                     "cuda",
@@ -271,7 +273,6 @@ class BaseTrainer:
                     local_size,
                     rep_backend,
                 )
-            # Flat process group for DCP checkpointing (covers all ranks in this expert group)
             half = self.world_size // 2
             dp_ranks = list(range(half)) if self.expert_group == 0 else list(range(half, self.world_size))
             self._dp_pg = dist.new_group(ranks=dp_ranks)
@@ -296,7 +297,6 @@ class BaseTrainer:
                 self.dp_size,
             )
         elif cfg.hsdp:
-            # HSDP: shard within node (NVLink), replicate across nodes (all-reduce).
             local_size = int(os.environ.get("LOCAL_WORLD_SIZE", torch.cuda.device_count()))
             assert self.world_size % local_size == 0, (
                 f"world_size ({self.world_size}) must be divisible by local GPUs ({local_size})"
@@ -306,8 +306,6 @@ class BaseTrainer:
                 logger.warning("hsdp=True but only 1 node detected, falling back to plain FSDP")
                 mesh = init_device_mesh("cuda", (self.world_size,))
             else:
-                # Use gloo for the replicate (inter-node) dimension by default
-                # to completely avoid NCCL IB registration on cross-node traffic.
                 rep_backend = cfg.hsdp_replicate_backend or "gloo"
                 mesh = init_device_mesh(
                     "cuda",
@@ -520,7 +518,6 @@ class BaseTrainer:
         for d in output_dir.iterdir():
             if not d.is_dir():
                 continue
-            # Detect checkpoint: direct .metadata (non-EP) or EP subdirectory
             is_ckpt = (d / ".metadata").exists()
             if not is_ckpt and self.expert_parallel:
                 expert_name = "high" if self.expert_group == 0 else "low"
@@ -571,7 +568,6 @@ class BaseTrainer:
         self._barrier()
 
     def _load_checkpoint(self, path: str):
-        # Resolve path and DCP process group for expert parallel
         if self.expert_parallel:
             expert_name = "high" if self.expert_group == 0 else "low"
             ep_path = Path(path) / expert_name
