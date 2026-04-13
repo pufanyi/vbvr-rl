@@ -68,57 +68,6 @@ cd $project_root
 
 echo "Launching Flow-GRPO multi-node training: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$master_port"
 
-# Try to raise memlock for NCCL/IB. This often fails under schedulers; we
-# still continue and fall back to NCCL over socket when the limit is too low.
-ulimit -l unlimited 2>/dev/null; or ulimit -l 67108864 2>/dev/null
-
-set -l memlock_limit (ulimit -l 2>/dev/null)
-set -l memlock_desc unknown
-set -l low_memlock false
-if test "$memlock_limit" = "unlimited"
-    set memlock_desc unlimited
-else if string match -qr '^[0-9]+$' -- "$memlock_limit"
-    set memlock_desc "$memlock_limit KiB"
-    if test "$memlock_limit" -le 8192
-        set low_memlock true
-    end
-end
-
-# Low memlock makes NCCL/IB registration fragile. Keep NCCL, but default the
-# transport to socket/TCP instead of trying to run the hot path through gloo.
-if test "$low_memlock" = true
-    if not set -q WAN_NCCL_TRANSPORT
-        set -gx WAN_NCCL_TRANSPORT socket
-        echo "Detected low memlock ($memlock_desc); defaulting WAN_NCCL_TRANSPORT=socket"
-    end
-end
-
-# Default bootstrap interfaces. Override from the environment if your cluster
-# uses a different NIC name.
-if not set -q NCCL_SOCKET_IFNAME
-    set -gx NCCL_SOCKET_IFNAME eth0
-end
-if not set -q GLOO_SOCKET_IFNAME
-    set -gx GLOO_SOCKET_IFNAME $NCCL_SOCKET_IFNAME
-end
-
-set -l transport_desc ib
-if set -q WAN_NCCL_TRANSPORT
-    set -l wan_nccl_transport (string lower -- "$WAN_NCCL_TRANSPORT")
-    set transport_desc $wan_nccl_transport
-    if contains -- $wan_nccl_transport socket tcp
-        if not set -q NCCL_IB_DISABLE
-            set -gx NCCL_IB_DISABLE 1
-        end
-    end
-end
-
-set -l ib_disable_desc 0
-if set -q NCCL_IB_DISABLE
-    set ib_disable_desc $NCCL_IB_DISABLE
-end
-echo "Distributed comm config: memlock=$memlock_desc transport=$transport_desc NCCL_SOCKET_IFNAME=$NCCL_SOCKET_IFNAME GLOO_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME NCCL_IB_DISABLE=$ib_disable_desc"
-
 . .venv/bin/activate.fish
 
 torchrun \

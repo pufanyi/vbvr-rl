@@ -18,7 +18,7 @@ class TrainConfig(BaseModel):
     height: int | None = None  # override dataset JSON config; fixed height
     width: int | None = None  # override dataset JSON config; fixed width
     fps: int | None = None  # override dataset JSON config; default 16
-    num_workers: int = 4
+    num_workers: int = 16
     persistent_workers: bool = True
     prefetch_factor: int = 2
 
@@ -126,7 +126,7 @@ class TrainConfig(BaseModel):
     # HSDP: shard within node, replicate across nodes.
     # Keeps NCCL IB traffic to intra-node NVLink; cross-node uses only gradient
     # all-reduce (much less locked-memory / IB registration pressure).
-    hsdp: bool = True  # Hybrid Sharded Data Parallel; single-node auto-falls back to plain FSDP
+    hsdp: bool = False  # Hybrid Sharded Data Parallel; shard within node, replicate across nodes
     hsdp_replicate_backend: Literal["nccl", "gloo"] | None = None  # None = auto (prefer nccl)
 
     # Expert parallel: split MoE experts across GPU sub-groups

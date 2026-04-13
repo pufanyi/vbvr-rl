@@ -15,13 +15,13 @@ learning_rate: 1.0e-5
 weight_decay: 0.01
 max_grad_norm: 1.0
 warmup_steps: 100
-save_steps: 0
+save_steps: 10
 log_steps: 1
 seed: 42
 
 ema_decay: 0.99
 
-expert_parallel: true
+expert_parallel: false
 train_experts: both
 
 # GRPO

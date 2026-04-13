@@ -273,17 +273,15 @@ class GRPOTrainer(BaseGRPOTrainer):
                 total_chunk_rewards.append((reward_low + reward_high).view(B, cur_S))
 
             rewards = torch.cat(total_chunk_rewards, dim=1)
-            rewards_cpu = rewards.cpu()
-            all_dp_rewards = [torch.zeros_like(rewards_cpu) for _ in range(self.dp_size)]
-            dist.all_gather(all_dp_rewards, rewards_cpu, group=self._cpu_dp_pg)
+            all_dp_rewards = [torch.zeros_like(rewards) for _ in range(self.dp_size)]
+            dist.all_gather(all_dp_rewards, rewards, group=self._dp_pg)
             gathered_rewards = torch.cat(all_dp_rewards, dim=0)
             global_mean = gathered_rewards.mean()
             global_std = gathered_rewards.std() + 1e-4
-            advantages_cpu = ((rewards_cpu - global_mean) / global_std).clamp(
+            advantages = ((rewards - global_mean) / global_std).clamp(
                 -cfg.grpo_adv_clip_max, cfg.grpo_adv_clip_max
             )
-            dist.send(advantages_cpu.contiguous(), group=self._cpu_world_pg, group_dst=self.peer_rank)
-            advantages = advantages_cpu.to(device)
+            dist.send(advantages.contiguous(), dst=self.peer_rank)
         else:
             for _traj, cur_S in all_chunk_trajs:
                 BS = B * cur_S
@@ -305,9 +303,8 @@ class GRPOTrainer(BaseGRPOTrainer):
                 )
                 dist.send(reward_high.contiguous(), dst=self.peer_rank)
 
-            advantages_cpu = torch.empty((B, G), dtype=torch.float32)
-            dist.recv(advantages_cpu, group=self._cpu_world_pg, group_src=self.peer_rank)
-            advantages = advantages_cpu.to(device)
+            advantages = torch.empty((B, G), device=device, dtype=torch.float32)
+            dist.recv(advantages, src=self.peer_rank)
             rewards = None
 
         for m in [self.model.transformer, self.model.transformer_2]:

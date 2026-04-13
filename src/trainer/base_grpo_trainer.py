@@ -418,11 +418,12 @@ class BaseGRPOTrainer(BaseRLTrainer):
                         buf = torch.tensor(
                             [metrics.get(k, 0.0) for k in metric_keys] + [grad_norm],
                             dtype=torch.float32,
+                            device=self.device,
                         )
-                        dist.send(buf, group=self._expert_log_pg, group_dst=0)
+                        dist.send(buf, dst=self._expert_log_peer)
                     elif self.rank == 0:
-                        buf = torch.zeros(len(metric_keys) + 1, dtype=torch.float32)
-                        dist.recv(buf, group=self._expert_log_pg, group_src=1)
+                        buf = torch.zeros(len(metric_keys) + 1, dtype=torch.float32, device=self.device)
+                        dist.recv(buf, src=self._expert_log_peer)
                         self._remote_grpo_ep_metrics = {
                             k: v for k, v in zip(metric_keys + ["grad_norm_low"], buf.tolist(), strict=True)
                         }

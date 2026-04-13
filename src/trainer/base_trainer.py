@@ -153,9 +153,6 @@ class BaseTrainer:
     def _init_expert_parallel(self, cfg: TrainConfig) -> None:
         """Set up expert-parallel state: split GPUs into two groups, one per MoE expert."""
         self.expert_parallel = cfg.expert_parallel
-        self._cpu_world_pg = None
-        self._cpu_dp_pg = None
-        self._expert_log_pg = None
         self.peer_rank = -1
         if not self.expert_parallel:
             self._effective_train_experts = cfg.train_experts
@@ -175,10 +172,8 @@ class BaseTrainer:
         self.dp_size = half
         self.peer_rank = self.rank + half if self.expert_group == 0 else self.rank - half
         self._effective_train_experts = "high" if self.expert_group == 0 else "low"
-        self._cpu_world_pg = dist.new_group(backend="nccl")
-        dp_ranks = list(range(half)) if self.expert_group == 0 else list(range(half, self.world_size))
-        self._cpu_dp_pg = dist.new_group(ranks=dp_ranks, backend="nccl")
-        self._expert_log_pg = dist.new_group(ranks=[0, half], backend="nccl")
+        # Peer rank for expert log exchange (rank 0 of each expert group)
+        self._expert_log_peer = half if self.expert_group == 0 else 0
 
     def _get_expert_parallel_sampler_seed(self, cfg: TrainConfig) -> int:
         """Sampler seed for expert-parallel mode.
@@ -547,8 +542,7 @@ class BaseTrainer:
                 module.set_requires_gradient_sync(requires_gradient_sync, recurse=True)
 
     def _barrier(self) -> None:
-        group = self._cpu_world_pg if self._cpu_world_pg is not None else None
-        dist.barrier(group=group)
+        dist.barrier()
 
     # ------------------------------------------------------------------
     # DCP checkpointing

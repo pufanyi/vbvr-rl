@@ -4,7 +4,7 @@ latent_webdataset_dir: data/vbvr/latents/webdataset
 dataset_size: 1000000
 output_dir: storage/checkpoints/sft_vbvr
 
-batch_size: 8
+batch_size: 12
 gradient_accumulation_steps: 1
 num_epochs: 2
 learning_rate: 1.0e-5
@@ -19,6 +19,5 @@ ema_decay: 0.99
 
 expert_parallel: true
 train_experts: both
-hsdp: false
 
 wandb_project: wan-sft-vbvr

@@ -21,7 +21,6 @@ seed: 42
 
 ema_decay: 0.99
 
-hsdp: false
 expert_parallel: true
 train_experts: both
 

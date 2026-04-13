@@ -22,10 +22,6 @@ class I2VTrainer(BaseTrainer):
         if gpu_peak is None:
             return None
 
-        if not hasattr(self.dataset, "_configs"):
-            logger.info("MFU monitor: skipped (precomputed latent dataset has no resolution config)")
-            return None
-
         bi = self.model.boundary_idx
         N = self.model.num_train_timesteps
         experts = []
@@ -36,30 +32,51 @@ class I2VTrainer(BaseTrainer):
             prob = (N - bi) / N if self._effective_train_experts == "both" else 1.0
             experts.append((prob, self.model.transformer_2))
 
-        est_cfg = self.dataset._configs[0]
-        if est_cfg.fixed_height is not None and est_cfg.fixed_width is not None:
-            est_h, est_w = est_cfg.fixed_height, est_cfg.fixed_width
+        # Determine seq_len: from dataset config or latent shape
+        latent_seq_len: int | None = None
+        if hasattr(self.dataset, "_configs"):
+            est_cfg = self.dataset._configs[0]
+            if est_cfg.fixed_height is not None and est_cfg.fixed_width is not None:
+                est_h, est_w = est_cfg.fixed_height, est_cfg.fixed_width
+            else:
+                est_h = est_w = int(est_cfg.max_area**0.5)
+            ref_t = experts[0][1] if experts else None
+            if ref_t is not None:
+                t_cfg = ref_t.config
+                latent_seq_len = compute_wan_seq_len(
+                    est_cfg.num_frames,
+                    est_h,
+                    est_w,
+                    patch_size=tuple(t_cfg.patch_size),
+                    vae_temporal_factor=self.model.vae_scale_factor_temporal,
+                    vae_spatial_factor=self.model.vae_scale_factor_spatial,
+                )
         else:
-            est_h = est_w = int(est_cfg.max_area**0.5)
+            # Latent dataset: peek at one sample to get (C, T', H', W')
+            try:
+                sample = next(iter(self.dataset))
+                latent = sample["video_latents"]  # (C, T', H', W')
+                _, t_lat, h_lat, w_lat = latent.shape
+                ref_t = experts[0][1] if experts else None
+                if ref_t is not None:
+                    p_t, p_h, p_w = ref_t.config.patch_size
+                    latent_seq_len = (t_lat // p_t) * (h_lat // p_h) * (w_lat // p_w)
+            except Exception as e:
+                logger.info("MFU monitor: skipped (cannot peek latent sample: {})", e)
+
+        if latent_seq_len is None:
+            logger.info("MFU monitor: skipped (no resolution info available)")
+            return None
 
         weighted_fwd_flops = 0.0
-        seq_len = 0
         for prob, t in experts:
             t_cfg = t.config
-            seq_len = compute_wan_seq_len(
-                est_cfg.num_frames,
-                est_h,
-                est_w,
-                patch_size=tuple(t_cfg.patch_size),
-                vae_temporal_factor=self.model.vae_scale_factor_temporal,
-                vae_spatial_factor=self.model.vae_scale_factor_spatial,
-            )
             fwd = estimate_wan_forward_flops(
                 num_layers=t_cfg.num_layers,
                 num_heads=t_cfg.num_attention_heads,
                 head_dim=t_cfg.attention_head_dim,
                 ffn_dim=t_cfg.ffn_dim,
-                seq_len=seq_len,
+                seq_len=latent_seq_len,
             )
             weighted_fwd_flops += prob * fwd
 
@@ -67,7 +84,7 @@ class I2VTrainer(BaseTrainer):
 
         logger.info(
             "MFU monitor: seq_len={}, forward={:.2e} FLOPs/sample, step={:.2e} FLOPs, GPU={} ({:.0f} TFLOPS bf16)",
-            seq_len,
+            latent_seq_len,
             weighted_fwd_flops,
             flops_per_step,
             torch.cuda.get_device_name(0),
