@@ -14,6 +14,7 @@ from pathlib import Path
 import torch.nn.functional as F
 import webdataset as wds
 from safetensors.torch import load as st_load
+from torch.utils.data import IterableDataset
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +37,12 @@ def _decode_sample(sample: dict, max_text_len: int = 512) -> dict:
     }
 
 
-class VBVRLatentDataset(wds.WebDataset):
+class VBVRLatentDataset(IterableDataset):
     """WebDataset-based loader for precomputed VAE latents + T5 prompt embeddings.
 
-    Wraps ``wds.WebDataset`` with shard discovery, distributed splitting,
-    shuffle, and decoding built in.  This is an IterableDataset — set
-    ``total_train_steps`` in TrainConfig for LR scheduling.
+    Composes a ``wds.WebDataset`` pipeline with shard discovery, distributed
+    splitting, shuffle, and decoding.  This is an IterableDataset — set
+    ``dataset_size`` in TrainConfig for LR scheduling.
 
     Args:
         webdataset_dir: Directory containing ``shard-NNNNNN.tar`` files.
@@ -63,7 +64,10 @@ class VBVRLatentDataset(wds.WebDataset):
         urls = [str(p) for p in shard_paths]
         logger.info("VBVRLatentDataset: %d shards in %s", len(shard_paths), shard_dir)
 
-        super().__init__(urls, nodesplitter=wds.split_by_node, shardshuffle=True)
+        pipeline = wds.WebDataset(urls, nodesplitter=wds.split_by_node, shardshuffle=len(urls))
         if shuffle_buffer > 0:
-            self.shuffle(shuffle_buffer)
-        self.map(lambda s: _decode_sample(s, max_text_len))
+            pipeline = pipeline.shuffle(shuffle_buffer)
+        self._pipeline = pipeline.map(lambda s: _decode_sample(s, max_text_len))
+
+    def __iter__(self):
+        return iter(self._pipeline)
