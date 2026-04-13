@@ -71,6 +71,8 @@ class COSTrainer(BaseTrainer):
             try:
                 sample = next(iter(self.dataset))
                 latent = sample["video_latents"]  # (C, T', H', W')
+                if isinstance(latent, list):
+                    latent = latent[-1]
                 _, t_lat, h_lat, w_lat = latent.shape
                 ref_t = experts[0][1] if experts else None
                 if ref_t is not None:
@@ -288,22 +290,34 @@ class COSTrainer(BaseTrainer):
     def _train_step(self, batch: dict) -> tuple[torch.Tensor, dict[str, float]]:
         """Single forward pass: encode frozen inputs, compute COS piecewise loss.
 
-        batch["videos"] is a list of N batched tensors (one per step in the chain).
-        videos[0..N-2] = intermediate waypoints (coarsest → finest).
-        videos[N-1]    = final target.
+        Supports two modes:
+        - Raw data: batch["videos"] is a list of N batched tensors (one per step in
+          the chain). videos[0..N-2] = intermediate waypoints; videos[N-1] = final target.
+        - Precomputed: batch has "prompt_embeds", "condition", and "video_latents"
+          where video_latents is a list of latent tensors for the full chain.
         """
         cfg = self.cfg
 
-        prompt_embeds = self.model.encode_text(batch["prompt"], self.device)
-        image = to_model_pixels(batch["image"], self.device)
+        if "prompt_embeds" in batch:
+            prompt_embeds = batch["prompt_embeds"].to(self.device)
+            condition = batch["condition"].to(self.device)
+            raw_video_latents = batch["video_latents"]
+            if not isinstance(raw_video_latents, list):
+                raise ValueError(
+                    "COS latent training requires all chain latents. "
+                    "Re-run precompute with --encode_all_videos."
+                )
+            video_latents = [latent.to(self.device) for latent in raw_video_latents]
+        else:
+            prompt_embeds = self.model.encode_text(batch["prompt"], self.device)
+            image = to_model_pixels(batch["image"], self.device)
 
-        # Encode all videos in the chain
-        videos = batch["videos"]
-        final_video = to_model_pixels(videos[-1], self.device)
-        condition = self.model.prepare_condition(
-            image, final_video.shape[2], final_video.shape[-2], final_video.shape[-1]
-        )
-        video_latents = [self.model.encode_video(to_model_pixels(v, self.device)) for v in videos]
+            videos = batch["videos"]
+            final_video = to_model_pixels(videos[-1], self.device)
+            condition = self.model.prepare_condition(
+                image, final_video.shape[2], final_video.shape[-2], final_video.shape[-1]
+            )
+            video_latents = [self.model.encode_video(to_model_pixels(v, self.device)) for v in videos]
 
         return self.model.compute_cos_loss(
             video_latents=video_latents,

@@ -57,15 +57,21 @@ class BaseGRPOTrainer(BaseRLTrainer):
         return cfg.seed
 
     def _pre_fsdp_setup(self, cfg: TrainConfig) -> None:
-        """Create frozen reference policy copies for full fine-tuning."""
+        """Create frozen reference policy copies for full fine-tuning.
+
+        Copies are made via CPU to avoid holding 4 full transformers on GPU
+        simultaneously (which can OOM before FSDP sharding kicks in).
+        """
         self.is_lora = cfg.lora_rank > 0
         self.ref_transformers: dict[str, torch.nn.Module] = {}
         if not self.is_lora:
-            logger.info("Full fine-tuning mode: creating frozen reference policy copies")
-            if self.model.transformer is not None:
-                self.ref_transformers["transformer"] = deepcopy(self.model.transformer).requires_grad_(False).eval()
-            if self.model.transformer_2 is not None:
-                self.ref_transformers["transformer_2"] = deepcopy(self.model.transformer_2).requires_grad_(False).eval()
+            logger.info("Full fine-tuning mode: creating frozen reference policy copies (via CPU)")
+            for name, m in [("transformer", self.model.transformer), ("transformer_2", self.model.transformer_2)]:
+                if m is not None:
+                    ref = deepcopy(m.cpu()).requires_grad_(False).eval().to(self.device)
+                    m.to(self.device)  # move training model back to GPU
+                    self.ref_transformers[name] = ref
+                    logger.info("Reference {} created", name)
 
     def _setup_fsdp(self, cfg: TrainConfig) -> list[torch.nn.Module]:
         sync_modules = super()._setup_fsdp(cfg)
@@ -287,13 +293,23 @@ class BaseGRPOTrainer(BaseRLTrainer):
         rewards = torch.zeros(B, device=device, dtype=torch.float32)
         if self.model.transformer is not None and expert_filter in (None, "high"):
             selected = (timesteps >= self.model.boundary_timestep).nonzero(as_tuple=False).flatten()
+            # FSDP requires all ranks to participate in forward (all_gather).
+            # When selected is empty, run a dummy forward so ranks stay in sync.
             if selected.numel() > 0:
-                pred = self.model.transformer(
-                    hidden_states=model_input.index_select(0, selected),
-                    timestep=timesteps.index_select(0, selected),
-                    encoder_hidden_states=prompt_embeds.index_select(0, selected),
-                    return_dict=False,
-                )[0]
+                sel_input = model_input.index_select(0, selected)
+                sel_ts = timesteps.index_select(0, selected)
+                sel_pe = prompt_embeds.index_select(0, selected)
+            else:
+                sel_input = model_input[:1]
+                sel_ts = timesteps[:1]
+                sel_pe = prompt_embeds[:1]
+            pred = self.model.transformer(
+                hidden_states=sel_input,
+                timestep=sel_ts,
+                encoder_hidden_states=sel_pe,
+                return_dict=False,
+            )[0]
+            if selected.numel() > 0:
                 per_sample_loss = F.mse_loss(
                     pred.float(),
                     target.index_select(0, selected).float(),
@@ -304,12 +320,20 @@ class BaseGRPOTrainer(BaseRLTrainer):
         if self.model.transformer_2 is not None and expert_filter in (None, "low"):
             selected = (timesteps < self.model.boundary_timestep).nonzero(as_tuple=False).flatten()
             if selected.numel() > 0:
-                pred = self.model.transformer_2(
-                    hidden_states=model_input.index_select(0, selected),
-                    timestep=timesteps.index_select(0, selected),
-                    encoder_hidden_states=prompt_embeds.index_select(0, selected),
-                    return_dict=False,
-                )[0]
+                sel_input = model_input.index_select(0, selected)
+                sel_ts = timesteps.index_select(0, selected)
+                sel_pe = prompt_embeds.index_select(0, selected)
+            else:
+                sel_input = model_input[:1]
+                sel_ts = timesteps[:1]
+                sel_pe = prompt_embeds[:1]
+            pred = self.model.transformer_2(
+                hidden_states=sel_input,
+                timestep=sel_ts,
+                encoder_hidden_states=sel_pe,
+                return_dict=False,
+            )[0]
+            if selected.numel() > 0:
                 per_sample_loss = F.mse_loss(
                     pred.float(),
                     target.index_select(0, selected).float(),

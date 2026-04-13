@@ -27,17 +27,25 @@ import logging
 import random
 from pathlib import Path
 
-import decord
+import imageio.v3 as iio
 import numpy as np
 import pyarrow.parquet as pq
 import torch
+import torch.nn.functional as F
 from PIL import Image
 from pydantic import BaseModel
 from torch.utils.data import Dataset
 
 logger = logging.getLogger(__name__)
 
-decord.bridge.set_bridge("torch")
+try:
+    import decord  # type: ignore
+except Exception:
+    decord = None
+
+_HAS_DECORD = decord is not None and hasattr(decord, "VideoReader")
+if _HAS_DECORD and hasattr(decord, "bridge") and hasattr(decord.bridge, "set_bridge"):
+    decord.bridge.set_bridge("torch")
 
 # Height/width must be divisible by vae_scale_factor_spatial * patch_size.
 # For Wan2.2: 8 * 2 = 16.
@@ -167,18 +175,38 @@ class I2VDataset(Dataset):
     def _get_video_hw(video_path: str, cfg: _ItemConfig) -> tuple[int, int]:
         if cfg.fixed_height is not None and cfg.fixed_width is not None:
             return cfg.fixed_height, cfg.fixed_width
-        vr = decord.VideoReader(video_path)
-        orig_h, orig_w = vr[0].shape[:2]
+        if _HAS_DECORD:
+            vr = decord.VideoReader(video_path)
+            orig_h, orig_w = vr[0].shape[:2]
+        else:
+            meta = iio.immeta(video_path)
+            if "source_size" in meta:
+                orig_w, orig_h = meta["source_size"]
+            elif "size" in meta:
+                orig_w, orig_h = meta["size"]
+            else:
+                _, orig_h, orig_w, _ = iio.improps(video_path).shape
         return compute_hw(cfg.max_area, orig_h / orig_w)
 
     @staticmethod
     def _load_video(video_path: str, height: int, width: int, cfg: _ItemConfig) -> torch.Tensor:
         """Load video frames as uint8. Returns (C, T, H, W)."""
-        vr = decord.VideoReader(video_path, width=width, height=height)
-        total_frames = len(vr)
-        indices = np.linspace(0, total_frames - 1, cfg.num_frames).round().astype(int).tolist()
-        frames = vr.get_batch(indices)  # (T, H, W, C)
-        return frames.permute(3, 0, 1, 2).contiguous()
+        if _HAS_DECORD:
+            vr = decord.VideoReader(video_path, width=width, height=height)
+            total_frames = len(vr)
+            indices = np.linspace(0, total_frames - 1, cfg.num_frames).round().astype(int).tolist()
+            frames = vr.get_batch(indices)  # (T, H, W, C)
+            return frames.permute(3, 0, 1, 2).contiguous()
+
+        frames = iio.imread(video_path)
+        total_frames = int(frames.shape[0])
+        indices = np.linspace(0, total_frames - 1, cfg.num_frames).round().astype(int)
+        frames = frames[indices]
+        if frames.shape[1] != height or frames.shape[2] != width:
+            tensor = torch.from_numpy(frames).permute(0, 3, 1, 2).float()
+            tensor = F.interpolate(tensor, size=(height, width), mode="bilinear", align_corners=False)
+            frames = tensor.round().clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()
+        return torch.from_numpy(frames).permute(3, 0, 1, 2).contiguous()
 
     @staticmethod
     def _load_image(path: str, height: int, width: int) -> torch.Tensor:

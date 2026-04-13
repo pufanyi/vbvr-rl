@@ -2,8 +2,9 @@ trainer: grpo
 model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
 dataset_json: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/data/train_maze_bfs_sft.json
 output_dir: storage/checkpoints/grpo_maze_bfs
+resume_from: storage/checkpoints/sft_maze_bfs_3steps/checkpoint-epoch0
 
-num_frames: 17
+num_frames: 33
 height: 256
 width: 256
 fps: 16
@@ -23,6 +24,7 @@ ema_decay: 0.99
 
 expert_parallel: false
 train_experts: both
+lora_rank: 32
 
 # GRPO
 grpo_group_size: 16

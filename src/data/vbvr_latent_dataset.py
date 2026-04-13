@@ -2,6 +2,7 @@
 
 Each tar shard contains pairs of files per sample:
   {key}.safetensors  — prompt_embeds, latents, condition
+                     or prompt_embeds, latents_0, latents_1, ..., condition
   {key}.json         — prompt, tar, index_in_tar, seq_len
 
 Usage:
@@ -9,6 +10,7 @@ Usage:
 """
 
 import logging
+import re
 from pathlib import Path
 
 import torch.nn.functional as F
@@ -17,6 +19,7 @@ from safetensors.torch import load as st_load
 from torch.utils.data import IterableDataset
 
 logger = logging.getLogger(__name__)
+_LATENTS_KEY_RE = re.compile(r"latents_(\d+)$")
 
 
 def _decode_sample(sample: dict, max_text_len: int = 512) -> dict:
@@ -30,11 +33,26 @@ def _decode_sample(sample: dict, max_text_len: int = 512) -> dict:
     elif seq_len > max_text_len:
         prompt_embeds = prompt_embeds[:max_text_len]
 
-    return {
+    decoded = {
         "prompt_embeds": prompt_embeds,
-        "video_latents": tensors["latents"],
         "condition": tensors["condition"],
     }
+    if "latents" in tensors:
+        decoded["video_latents"] = tensors["latents"]
+        return decoded
+
+    latent_keys = []
+    for key in tensors:
+        match = _LATENTS_KEY_RE.fullmatch(key)
+        if match is not None:
+            latent_keys.append((int(match.group(1)), key))
+
+    if not latent_keys:
+        raise KeyError("Expected either 'latents' or 'latents_<n>' tensors in latent sample")
+
+    latent_keys.sort()
+    decoded["video_latents"] = [tensors[key] for _, key in latent_keys]
+    return decoded
 
 
 class VBVRLatentDataset(IterableDataset):

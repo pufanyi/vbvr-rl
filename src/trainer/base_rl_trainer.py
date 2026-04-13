@@ -21,7 +21,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from src.data.i2v_dataset import I2VDataset
 from src.data.vbvr_latent_dataset import VBVRLatentDataset
 from src.models.wan_i2v import LoRATrainConfig, WanI2VForTraining
-from src.trainer.checkpoint import TrainState
+from src.trainer.checkpoint import TrainState, load_dcp_into_pipeline
 from src.trainer.config import TrainConfig
 from src.trainer.ema import EMA
 from src.trainer.optimizer import build_optimizer
@@ -561,6 +561,43 @@ class BaseRLTrainer:
         self._barrier()
 
     def _load_checkpoint(self, path: str):
+        ckpt_path = Path(path)
+        is_ep_checkpoint = any((ckpt_path / expert / ".metadata").exists() for expert in ("high", "low"))
+        is_flat_checkpoint = (ckpt_path / ".metadata").exists()
+        if not self.expert_parallel and is_ep_checkpoint and not is_flat_checkpoint:
+            if not self._reset_on_load:
+                raise ValueError(
+                    "Cannot fully resume non-expert-parallel training from an expert-parallel checkpoint. "
+                    "Set reset_dataloader: true, disable auto_resume, or load with expert_parallel: true."
+                )
+
+            logger.info(
+                "Loading expert-parallel checkpoint {} into non-expert-parallel run as weights-only init",
+                path,
+            )
+            load_dcp_into_pipeline(self.model, path, use_ema=False)
+            if self.ema is not None:
+                self.ema.reinitialize()
+                logger.info("EMA reinitialized from loaded model weights")
+
+            self.train_state.step = 0
+            self.train_state.epoch = 0
+            self.train_state.batch_idx = 0
+            (
+                self.params, self.optimizers,
+                self.optimizer_te, self.optimizer_1, self.optimizer_2,
+                self.fallback_te, self.fallback_1, self.fallback_2,
+            ) = self._build_optimizers(self.cfg)
+            self.train_state.optimizer_te = self.optimizer_te
+            self.train_state.optimizer_1 = self.optimizer_1
+            self.train_state.optimizer_2 = self.optimizer_2
+            self.train_state.fallback_te = self.fallback_te
+            self.train_state.fallback_1 = self.fallback_1
+            self.train_state.fallback_2 = self.fallback_2
+            self.total_steps = self._compute_total_steps()
+            logger.info("Initialized from expert-parallel checkpoint with reset optimizer state, total_steps={}", self.total_steps)
+            return
+
         if self.expert_parallel:
             expert_name = "high" if self.expert_group == 0 else "low"
             ep_path = Path(path) / expert_name

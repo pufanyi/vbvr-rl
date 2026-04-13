@@ -7,7 +7,12 @@ import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from loguru import logger
-from torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict
+from torch.distributed.checkpoint.state_dict import (
+    get_model_state_dict,
+    get_state_dict,
+    set_model_state_dict,
+    set_state_dict,
+)
 from torch.distributed.checkpoint.stateful import Stateful
 
 
@@ -157,9 +162,9 @@ def load_dcp_into_pipeline(pipe, checkpoint_path: str, use_ema: bool = False) ->
 
 def _load_weights_single(name: str, model: torch.nn.Module, dcp_path: str) -> None:
     """Load model weights for a single expert from a DCP checkpoint."""
-    state: dict = {"train_state": {name: model.state_dict()}}
+    state: dict = {"train_state": {name: get_model_state_dict(model)}}
     dcp.load(state, checkpoint_id=dcp_path)
-    model.load_state_dict(state["train_state"][name])
+    set_model_state_dict(model, model_state_dict=state["train_state"][name])
     logger.info("Loaded {} weights from {}", name, dcp_path)
 
 
