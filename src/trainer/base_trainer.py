@@ -51,6 +51,13 @@ class BaseTrainer:
 
         setup_loguru(self.rank)
         logger.info("World size: {}", self.world_size)
+        if self.expert_parallel:
+            effective_data_replicas = self.dp_size if self._expert_parallel_duplicates_data(cfg) else self.world_size
+            logger.info(
+                "Expert parallel: data_mode={} effective_data_replicas={}",
+                cfg.expert_parallel_data_mode,
+                effective_data_replicas,
+            )
 
         # ---- Model ----
         self.model = self._build_model(cfg)
@@ -176,13 +183,16 @@ class BaseTrainer:
         """
         return cfg.seed
 
+    def _expert_parallel_duplicates_data(self, cfg: TrainConfig) -> bool:
+        return self.expert_parallel and cfg.expert_parallel_data_mode == "duplicate"
+
     def _post_init(self, cfg: TrainConfig) -> None:
         """Called after base init, before wandb/resume. Override for MFU etc."""
 
     def _compute_total_steps(self) -> int:
         """Total optimizer steps. Override for different accumulation strategies."""
         if self.cfg.dataset_size is not None:
-            dp = self.dp_size if self.expert_parallel else self.world_size
+            dp = self.dp_size if self._expert_parallel_duplicates_data(self.cfg) else self.world_size
             batches_per_epoch = self.cfg.dataset_size // (dp * self.cfg.batch_size)
             return self.cfg.num_epochs * batches_per_epoch // self.cfg.gradient_accumulation_steps
         return self.cfg.num_epochs * len(self.dataloader) // self.cfg.gradient_accumulation_steps
@@ -409,14 +419,23 @@ class BaseTrainer:
                 fps=cfg.fps,
             )
         if self.expert_parallel:
-            seed = self._get_expert_parallel_sampler_seed(cfg)
-            sampler = DistributedSampler(
-                dataset,
-                num_replicas=self.dp_size,
-                rank=self.dp_rank,
-                shuffle=True,
-                seed=seed,
-            )
+            if self._expert_parallel_duplicates_data(cfg):
+                seed = self._get_expert_parallel_sampler_seed(cfg)
+                sampler = DistributedSampler(
+                    dataset,
+                    num_replicas=self.dp_size,
+                    rank=self.dp_rank,
+                    shuffle=True,
+                    seed=seed,
+                )
+            else:
+                sampler = DistributedSampler(
+                    dataset,
+                    num_replicas=self.world_size,
+                    rank=self.rank,
+                    shuffle=True,
+                    seed=cfg.seed,
+                )
         else:
             sampler = DistributedSampler(
                 dataset,

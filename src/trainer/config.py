@@ -131,3 +131,6 @@ class TrainConfig(BaseModel):
 
     # Expert parallel: split MoE experts across GPU sub-groups
     expert_parallel: bool = False  # each expert gets world_size/2 GPUs with independent FSDP
+    expert_parallel_data_mode: Literal["duplicate", "split"] = "duplicate"
+    # duplicate: each expert group iterates a full copy of the dataset (old SFT behavior)
+    # split: shard data across all ranks so expert-parallel uses full global throughput
