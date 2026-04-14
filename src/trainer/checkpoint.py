@@ -11,30 +11,51 @@ from loguru import logger
 from torch.distributed.checkpoint.filesystem import FileSystemReader
 from torch.distributed.checkpoint.state_dict import (
     get_model_state_dict,
+    get_optimizer_state_dict,
     get_state_dict,
     set_model_state_dict,
+    set_optimizer_state_dict,
     set_state_dict,
 )
 from torch.distributed.checkpoint.stateful import Stateful
 
 
-def _save_pair(sd: dict, key: str, model, optimizer):
-    """Save model + optimizer state_dict pair into sd[key] and sd[key_optim]."""
-    if model is not None and optimizer is not None:
+def _save_component(
+    sd: dict,
+    key: str,
+    model,
+    optimizer,
+    *,
+    include_optimizer: bool,
+    save_model_without_optimizer: bool,
+):
+    """Save a model state, optionally alongside its optimizer state."""
+    if model is None:
+        return
+    if include_optimizer and optimizer is not None:
         m_sd, o_sd = get_state_dict(model, optimizer)
         sd[key] = m_sd
         sd[f"optimizer_{key}"] = o_sd
+        return
+    if not save_model_without_optimizer:
+        return
+    sd[key] = get_model_state_dict(model)
 
 
-def _load_pair(state_dict: dict, key: str, model, optimizer):
-    """Load model + optimizer state_dict pair from state_dict."""
-    if model is not None and optimizer is not None and key in state_dict:
+def _load_component(state_dict: dict, key: str, model, optimizer):
+    """Load a model state, plus optimizer state when present."""
+    if model is None or key not in state_dict:
+        return
+    optimizer_key = f"optimizer_{key}"
+    if optimizer is not None and optimizer_key in state_dict:
         set_state_dict(
             model,
             optimizer,
             model_state_dict=state_dict[key],
-            optim_state_dict=state_dict[f"optimizer_{key}"],
+            optim_state_dict=state_dict[optimizer_key],
         )
+        return
+    set_model_state_dict(model, model_state_dict=state_dict[key])
 
 
 class TrainState(Stateful):
@@ -55,6 +76,8 @@ class TrainState(Stateful):
         fallback_te: torch.optim.Optimizer | None = None,
         fallback_1: torch.optim.Optimizer | None = None,
         fallback_2: torch.optim.Optimizer | None = None,
+        include_optimizers: bool = True,
+        optimizer_keys: set[str] | frozenset[str] | None = None,
         step: int = 0,
         epoch: int = 0,
         batch_idx: int = 0,
@@ -68,32 +91,107 @@ class TrainState(Stateful):
         self.fallback_te = fallback_te
         self.fallback_1 = fallback_1
         self.fallback_2 = fallback_2
+        self.include_optimizers = include_optimizers
+        self.optimizer_keys = None if optimizer_keys is None else set(optimizer_keys)
         self.step = step
         self.epoch = epoch
         self.batch_idx = batch_idx
 
+    def checkpoint_view(
+        self,
+        *,
+        include_optimizers: bool,
+        optimizer_keys: set[str] | frozenset[str] | None = None,
+    ) -> "TrainState":
+        """Create a save/load view over the same live modules and optimizers."""
+        return TrainState(
+            text_encoder=self.text_encoder,
+            transformer=self.transformer,
+            transformer_2=self.transformer_2,
+            optimizer_te=self.optimizer_te,
+            optimizer_1=self.optimizer_1,
+            optimizer_2=self.optimizer_2,
+            fallback_te=self.fallback_te,
+            fallback_1=self.fallback_1,
+            fallback_2=self.fallback_2,
+            include_optimizers=include_optimizers,
+            optimizer_keys=optimizer_keys,
+            step=self.step,
+            epoch=self.epoch,
+            batch_idx=self.batch_idx,
+        )
+
+    def _include_optimizer_key(self, optimizer_key: str) -> bool:
+        if not self.include_optimizers:
+            return False
+        if self.optimizer_keys is None:
+            return True
+        return optimizer_key in self.optimizer_keys
+
     def state_dict(self):
         sd = {"step": self.step, "epoch": self.epoch, "batch_idx": self.batch_idx}
-        _save_pair(sd, "text_encoder", self.text_encoder, self.optimizer_te)
-        _save_pair(sd, "transformer", self.transformer, self.optimizer_1)
-        _save_pair(sd, "transformer_2", self.transformer_2, self.optimizer_2)
+        _save_component(
+            sd,
+            "text_encoder",
+            self.text_encoder,
+            self.optimizer_te,
+            include_optimizer=self._include_optimizer_key("optimizer_text_encoder"),
+            save_model_without_optimizer=True,
+        )
+        _save_component(
+            sd,
+            "transformer",
+            self.transformer,
+            self.optimizer_1,
+            include_optimizer=self._include_optimizer_key("optimizer_transformer"),
+            save_model_without_optimizer=True,
+        )
+        _save_component(
+            sd,
+            "transformer_2",
+            self.transformer_2,
+            self.optimizer_2,
+            include_optimizer=self._include_optimizer_key("optimizer_transformer_2"),
+            save_model_without_optimizer=True,
+        )
         # Fallback optimizers (e.g. AdamW for non-2D params under Muon)
-        _save_pair(sd, "text_encoder_fallback", self.text_encoder, self.fallback_te)
-        _save_pair(sd, "transformer_fallback", self.transformer, self.fallback_1)
-        _save_pair(sd, "transformer_2_fallback", self.transformer_2, self.fallback_2)
+        _save_component(
+            sd,
+            "text_encoder_fallback",
+            self.text_encoder,
+            self.fallback_te,
+            include_optimizer=self._include_optimizer_key("optimizer_text_encoder_fallback"),
+            save_model_without_optimizer=False,
+        )
+        _save_component(
+            sd,
+            "transformer_fallback",
+            self.transformer,
+            self.fallback_1,
+            include_optimizer=self._include_optimizer_key("optimizer_transformer_fallback"),
+            save_model_without_optimizer=False,
+        )
+        _save_component(
+            sd,
+            "transformer_2_fallback",
+            self.transformer_2,
+            self.fallback_2,
+            include_optimizer=self._include_optimizer_key("optimizer_transformer_2_fallback"),
+            save_model_without_optimizer=False,
+        )
         # RNG states for reproducibility on resume
         sd["rng_cpu"] = torch.random.get_rng_state()
         sd["rng_cuda"] = torch.cuda.get_rng_state()
         return sd
 
     def load_state_dict(self, state_dict):
-        _load_pair(state_dict, "text_encoder", self.text_encoder, self.optimizer_te)
-        _load_pair(state_dict, "transformer", self.transformer, self.optimizer_1)
-        _load_pair(state_dict, "transformer_2", self.transformer_2, self.optimizer_2)
+        _load_component(state_dict, "text_encoder", self.text_encoder, self.optimizer_te)
+        _load_component(state_dict, "transformer", self.transformer, self.optimizer_1)
+        _load_component(state_dict, "transformer_2", self.transformer_2, self.optimizer_2)
         # Fallback optimizers — missing in old checkpoints, just skip
-        _load_pair(state_dict, "text_encoder_fallback", self.text_encoder, self.fallback_te)
-        _load_pair(state_dict, "transformer_fallback", self.transformer, self.fallback_1)
-        _load_pair(state_dict, "transformer_2_fallback", self.transformer_2, self.fallback_2)
+        _load_component(state_dict, "text_encoder_fallback", self.text_encoder, self.fallback_te)
+        _load_component(state_dict, "transformer_fallback", self.transformer, self.fallback_1)
+        _load_component(state_dict, "transformer_2_fallback", self.transformer_2, self.fallback_2)
         self.step = state_dict["step"]
         self.epoch = state_dict["epoch"]
         self.batch_idx = state_dict.get("batch_idx", 0)
@@ -102,6 +200,59 @@ class TrainState(Stateful):
             torch.random.set_rng_state(state_dict["rng_cpu"])
         if "rng_cuda" in state_dict:
             torch.cuda.set_rng_state(state_dict["rng_cuda"])
+
+
+def save_optimizer_shard(
+    path: Path,
+    model: torch.nn.Module | None,
+    optimizer: torch.optim.Optimizer | None,
+    *,
+    process_group_size: int | None = None,
+) -> bool:
+    """Save one optimizer shard outside DCP to keep the DCP save plan small."""
+    if model is None or optimizer is None:
+        return False
+
+    payload = {
+        "format_version": 1,
+        "process_group_size": process_group_size,
+        "optimizer_state": get_optimizer_state_dict(model, optimizer),
+    }
+    torch.save(payload, path)
+    return True
+
+
+def load_optimizer_shard(
+    path: Path,
+    model: torch.nn.Module | None,
+    optimizer: torch.optim.Optimizer | None,
+    *,
+    expected_process_group_size: int | None = None,
+) -> bool:
+    """Load one optimizer shard saved by save_optimizer_shard()."""
+    if model is None or optimizer is None or not path.exists():
+        return False
+
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    optimizer_state = payload
+    if isinstance(payload, dict) and "optimizer_state" in payload:
+        saved_group_size = payload.get("process_group_size")
+        if (
+            expected_process_group_size is not None
+            and saved_group_size is not None
+            and saved_group_size != expected_process_group_size
+        ):
+            logger.warning(
+                "Skipping optimizer shard {}: saved process_group_size={}, current process_group_size={}",
+                path,
+                saved_group_size,
+                expected_process_group_size,
+            )
+            return False
+        optimizer_state = payload["optimizer_state"]
+
+    set_optimizer_state_dict(model, optimizer, optimizer_state)
+    return True
 
 
 def _detect_checkpoint_layout(checkpoint_path: str) -> dict[str, str]:
@@ -130,6 +281,18 @@ def _get_checkpoint_fqns(dcp_path: str) -> frozenset[str]:
     reader = FileSystemReader(dcp_path)
     metadata = reader.read_metadata()
     return frozenset(metadata.state_dict_metadata.keys())
+
+
+def get_checkpoint_optimizer_keys(dcp_path: str) -> frozenset[str]:
+    """Return top-level optimizer entries present in a checkpoint."""
+    optimizer_keys: set[str] = set()
+    for fqn in _get_checkpoint_fqns(dcp_path):
+        if not fqn.startswith("train_state."):
+            continue
+        component = fqn.removeprefix("train_state.").split(".", 1)[0]
+        if component.startswith("optimizer_"):
+            optimizer_keys.add(component)
+    return frozenset(optimizer_keys)
 
 
 def _should_plain_to_lora_remap(name: str, model_state: dict[str, torch.Tensor], checkpoint_fqns: set[str]) -> bool:

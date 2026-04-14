@@ -15,7 +15,13 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from src.data.i2v_dataset import I2VDataset
 from src.data.vbvr_latent_dataset import VBVRLatentDataset
 from src.models.wan_i2v import LoRATrainConfig, WanI2VForTraining
-from src.trainer.checkpoint import TrainState, load_dcp_into_pipeline
+from src.trainer.checkpoint import (
+    TrainState,
+    get_checkpoint_optimizer_keys,
+    load_dcp_into_pipeline,
+    load_optimizer_shard,
+    save_optimizer_shard,
+)
 from src.trainer.config import TrainConfig
 from src.trainer.ema import EMA
 from src.trainer.optimizer import build_optimizer
@@ -544,6 +550,44 @@ class BaseTrainer:
     def _barrier(self) -> None:
         dist.barrier()
 
+    def _checkpoint_rank(self) -> int:
+        return self.dp_rank if self.expert_parallel else self.rank
+
+    def _checkpoint_process_group_size(self) -> int:
+        return self.dp_size if self.expert_parallel else self.world_size
+
+    def _optimizer_checkpoint_entries(self):
+        return [
+            ("text_encoder", self.model.text_encoder, self.optimizer_te),
+            ("transformer", self.model.transformer, self.optimizer_1),
+            ("transformer_2", self.model.transformer_2, self.optimizer_2),
+        ]
+
+    def _save_optimizer_shards(self, path: Path) -> None:
+        shard_rank = self._checkpoint_rank()
+        shard_group_size = self._checkpoint_process_group_size()
+        for name, model, optimizer in self._optimizer_checkpoint_entries():
+            save_optimizer_shard(
+                path / f"optimizer_{name}_rank{shard_rank}.pt",
+                model,
+                optimizer,
+                process_group_size=shard_group_size,
+            )
+
+    def _load_optimizer_shards(self, path: Path) -> list[str]:
+        shard_rank = self._checkpoint_rank()
+        shard_group_size = self._checkpoint_process_group_size()
+        restored: list[str] = []
+        for name, model, optimizer in self._optimizer_checkpoint_entries():
+            if load_optimizer_shard(
+                path / f"optimizer_{name}_rank{shard_rank}.pt",
+                model,
+                optimizer,
+                expected_process_group_size=shard_group_size,
+            ):
+                restored.append(name)
+        return restored
+
     # ------------------------------------------------------------------
     # DCP checkpointing
     # ------------------------------------------------------------------
@@ -584,7 +628,7 @@ class BaseTrainer:
         return str(latest)
 
     def _save_checkpoint(self, path: Path):
-        state: dict = {"train_state": self.train_state}
+        state: dict = {"train_state": self.train_state.checkpoint_view(include_optimizers=False)}
         if self.ema is not None:
             state["ema"] = self.ema
 
@@ -592,6 +636,7 @@ class BaseTrainer:
             expert_name = "high" if self.expert_group == 0 else "low"
             save_path = path / expert_name
             dcp.save(state, checkpoint_id=str(save_path), process_group=self._dp_pg)
+            self._save_optimizer_shards(save_path)
             torch.save(self.dataloader.state_dict(), save_path / f"dataloader_rank{self.dp_rank}.pt")
             if self.dp_rank == 0 and self.model.lora_config is not None:
                 self.model.save_lora(str(save_path / "lora"))
@@ -599,6 +644,7 @@ class BaseTrainer:
                 logger.info("Saved checkpoint to {} (expert={})", save_path, expert_name)
         else:
             dcp.save(state, checkpoint_id=str(path))
+            self._save_optimizer_shards(path)
             torch.save(self.dataloader.state_dict(), path / f"dataloader_rank{self.rank}.pt")
             if self.rank == 0 and self.model.lora_config is not None:
                 self.model.save_lora(str(path / "lora"))
@@ -657,7 +703,12 @@ class BaseTrainer:
             dcp_kwargs = {}
 
         logger.info("Resuming from {} ...", load_path)
-        state: dict = {"train_state": self.train_state}
+        checkpoint_optimizer_keys = get_checkpoint_optimizer_keys(load_path)
+        load_train_state = self.train_state.checkpoint_view(
+            include_optimizers=True,
+            optimizer_keys=checkpoint_optimizer_keys,
+        )
+        state: dict = {"train_state": load_train_state}
         has_legacy_ema = (Path(load_path) / "ema").is_dir()
         if self.ema is not None and not has_legacy_ema:
             state["ema"] = self.ema
@@ -666,9 +717,12 @@ class BaseTrainer:
         except Exception:
             if "ema" in state:
                 logger.warning("Failed to load EMA from DCP, retrying without EMA")
-                dcp.load({"train_state": self.train_state}, checkpoint_id=load_path, **dcp_kwargs)
+                dcp.load({"train_state": load_train_state}, checkpoint_id=load_path, **dcp_kwargs)
             else:
                 raise
+        self.train_state.step = load_train_state.step
+        self.train_state.epoch = load_train_state.epoch
+        self.train_state.batch_idx = load_train_state.batch_idx
         if self.ema is not None and "ema" not in state:
             self.ema.reinitialize()
             logger.warning("EMA not in DCP checkpoint, reinitialized from loaded model weights")
@@ -690,6 +744,15 @@ class BaseTrainer:
             self.total_steps = self._compute_total_steps()
             logger.info("reset_dataloader=True: reset step/epoch/optimizer, total_steps={}", self.total_steps)
         else:
+            restored_optimizers = self._load_optimizer_shards(Path(load_path))
+            if restored_optimizers:
+                logger.info("Restored optimizer shards: {}", ", ".join(restored_optimizers))
+            elif not checkpoint_optimizer_keys:
+                logger.warning(
+                    "Checkpoint {} has no optimizer state in DCP and no optimizer shard files; "
+                    "continuing with freshly initialized optimizer state",
+                    load_path,
+                )
             dl_state_path = Path(load_path) / f"dataloader_rank{dl_rank}.pt"
             if dl_state_path.exists():
                 self.dataloader.load_state_dict(torch.load(dl_state_path, weights_only=False))
