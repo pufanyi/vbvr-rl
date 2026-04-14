@@ -122,6 +122,7 @@ class I2VTrainer(BaseTrainer):
                 scaled_loss.backward()
 
                 if is_last_micro_step:
+                    self._all_reduce_gradients()
                     self._last_grad_norm = torch.nn.utils.clip_grad_norm_(self.params, cfg.max_grad_norm).item()
 
                     lr = cosine_lr(global_step, cfg.warmup_steps, self.total_steps, cfg.learning_rate)

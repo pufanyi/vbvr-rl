@@ -75,8 +75,9 @@ class BaseGRPOTrainer(BaseRLTrainer):
 
     def _setup_fsdp(self, cfg: TrainConfig) -> list[torch.nn.Module]:
         sync_modules = super()._setup_fsdp(cfg)
-        for _name, ref in self.ref_transformers.items():
-            shard_transformer(ref, self.mesh, self.mp_policy)
+        if cfg.fsdp:
+            for _name, ref in self.ref_transformers.items():
+                shard_transformer(ref, self.mesh, self.mp_policy)
         return sync_modules
 
     # ------------------------------------------------------------------
@@ -291,56 +292,64 @@ class BaseGRPOTrainer(BaseRLTrainer):
         model_input = torch.cat([noisy, condition], dim=1)
 
         rewards = torch.zeros(B, device=device, dtype=torch.float32)
+        # FSDP requires all ranks to participate in forward (all_gather).
+        # When selected is empty, run a dummy forward so ranks stay in sync.
+        # Without FSDP, we can skip the forward entirely when no samples match.
+        need_dummy_forward = self.cfg.fsdp
         if self.model.transformer is not None and expert_filter in (None, "high"):
             selected = (timesteps >= self.model.boundary_timestep).nonzero(as_tuple=False).flatten()
-            # FSDP requires all ranks to participate in forward (all_gather).
-            # When selected is empty, run a dummy forward so ranks stay in sync.
             if selected.numel() > 0:
                 sel_input = model_input.index_select(0, selected)
                 sel_ts = timesteps.index_select(0, selected)
                 sel_pe = prompt_embeds.index_select(0, selected)
-            else:
+            elif need_dummy_forward:
                 sel_input = model_input[:1]
                 sel_ts = timesteps[:1]
                 sel_pe = prompt_embeds[:1]
-            pred = self.model.transformer(
-                hidden_states=sel_input,
-                timestep=sel_ts,
-                encoder_hidden_states=sel_pe,
-                return_dict=False,
-            )[0]
-            if selected.numel() > 0:
-                per_sample_loss = F.mse_loss(
-                    pred.float(),
-                    target.index_select(0, selected).float(),
-                    reduction="none",
-                )
-                per_sample_loss = per_sample_loss.mean(dim=list(range(1, per_sample_loss.ndim)))
-                rewards.index_copy_(0, selected, -per_sample_loss)
+            else:
+                sel_input = None
+            if sel_input is not None:
+                pred = self.model.transformer(
+                    hidden_states=sel_input,
+                    timestep=sel_ts,
+                    encoder_hidden_states=sel_pe,
+                    return_dict=False,
+                )[0]
+                if selected.numel() > 0:
+                    per_sample_loss = F.mse_loss(
+                        pred.float(),
+                        target.index_select(0, selected).float(),
+                        reduction="none",
+                    )
+                    per_sample_loss = per_sample_loss.mean(dim=list(range(1, per_sample_loss.ndim)))
+                    rewards.index_copy_(0, selected, -per_sample_loss)
         if self.model.transformer_2 is not None and expert_filter in (None, "low"):
             selected = (timesteps < self.model.boundary_timestep).nonzero(as_tuple=False).flatten()
             if selected.numel() > 0:
                 sel_input = model_input.index_select(0, selected)
                 sel_ts = timesteps.index_select(0, selected)
                 sel_pe = prompt_embeds.index_select(0, selected)
-            else:
+            elif need_dummy_forward:
                 sel_input = model_input[:1]
                 sel_ts = timesteps[:1]
                 sel_pe = prompt_embeds[:1]
-            pred = self.model.transformer_2(
-                hidden_states=sel_input,
-                timestep=sel_ts,
-                encoder_hidden_states=sel_pe,
-                return_dict=False,
-            )[0]
-            if selected.numel() > 0:
-                per_sample_loss = F.mse_loss(
-                    pred.float(),
-                    target.index_select(0, selected).float(),
-                    reduction="none",
-                )
-                per_sample_loss = per_sample_loss.mean(dim=list(range(1, per_sample_loss.ndim)))
-                rewards.index_copy_(0, selected, -per_sample_loss)
+            else:
+                sel_input = None
+            if sel_input is not None:
+                pred = self.model.transformer_2(
+                    hidden_states=sel_input,
+                    timestep=sel_ts,
+                    encoder_hidden_states=sel_pe,
+                    return_dict=False,
+                )[0]
+                if selected.numel() > 0:
+                    per_sample_loss = F.mse_loss(
+                        pred.float(),
+                        target.index_select(0, selected).float(),
+                        reduction="none",
+                    )
+                    per_sample_loss = per_sample_loss.mean(dim=list(range(1, per_sample_loss.ndim)))
+                    rewards.index_copy_(0, selected, -per_sample_loss)
         return rewards
 
     # ------------------------------------------------------------------
@@ -424,6 +433,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
             for batch_idx, batch in enumerate(self.dataloader, start=enum_start):
                 metrics = self._grpo_step(batch)
 
+                self._all_reduce_gradients()
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.params, cfg.max_grad_norm).item()
 
                 lr = cosine_lr(global_step, cfg.warmup_steps, self.total_steps, cfg.learning_rate)

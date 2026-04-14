@@ -28,7 +28,7 @@ lora_rank: 32
 
 # GRPO
 grpo_group_size: 16
-grpo_sample_batch_size: 8
+grpo_sample_batch_size: 4
 grpo_num_sampling_steps: 10
 grpo_clip_range: 1.0e-3
 grpo_kl_coeff: 0.004

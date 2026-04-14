@@ -20,6 +20,11 @@ from torch.distributed.checkpoint.state_dict import (
 from torch.distributed.checkpoint.stateful import Stateful
 
 
+def _is_fsdp_wrapped(model: torch.nn.Module) -> bool:
+    """Check if a model has FSDP2 state (i.e. was wrapped with fully_shard)."""
+    return any(hasattr(p, "_local_tensor") for p in model.parameters())
+
+
 def _save_component(
     sd: dict,
     key: str,
@@ -33,13 +38,20 @@ def _save_component(
     if model is None:
         return
     if include_optimizer and optimizer is not None:
-        m_sd, o_sd = get_state_dict(model, optimizer)
+        if _is_fsdp_wrapped(model):
+            m_sd, o_sd = get_state_dict(model, optimizer)
+        else:
+            m_sd = model.state_dict()
+            o_sd = optimizer.state_dict()
         sd[key] = m_sd
         sd[f"optimizer_{key}"] = o_sd
         return
     if not save_model_without_optimizer:
         return
-    sd[key] = get_model_state_dict(model)
+    if _is_fsdp_wrapped(model):
+        sd[key] = get_model_state_dict(model)
+    else:
+        sd[key] = model.state_dict()
 
 
 def _load_component(state_dict: dict, key: str, model, optimizer):
@@ -48,14 +60,21 @@ def _load_component(state_dict: dict, key: str, model, optimizer):
         return
     optimizer_key = f"optimizer_{key}"
     if optimizer is not None and optimizer_key in state_dict:
-        set_state_dict(
-            model,
-            optimizer,
-            model_state_dict=state_dict[key],
-            optim_state_dict=state_dict[optimizer_key],
-        )
+        if _is_fsdp_wrapped(model):
+            set_state_dict(
+                model,
+                optimizer,
+                model_state_dict=state_dict[key],
+                optim_state_dict=state_dict[optimizer_key],
+            )
+        else:
+            model.load_state_dict(state_dict[key])
+            optimizer.load_state_dict(state_dict[optimizer_key])
         return
-    set_model_state_dict(model, model_state_dict=state_dict[key])
+    if _is_fsdp_wrapped(model):
+        set_model_state_dict(model, model_state_dict=state_dict[key])
+    else:
+        model.load_state_dict(state_dict[key])
 
 
 class TrainState(Stateful):
@@ -213,10 +232,14 @@ def save_optimizer_shard(
     if model is None or optimizer is None:
         return False
 
+    if _is_fsdp_wrapped(model):
+        opt_state = get_optimizer_state_dict(model, optimizer)
+    else:
+        opt_state = optimizer.state_dict()
     payload = {
         "format_version": 1,
         "process_group_size": process_group_size,
-        "optimizer_state": get_optimizer_state_dict(model, optimizer),
+        "optimizer_state": opt_state,
     }
     torch.save(payload, path)
     return True
@@ -251,7 +274,10 @@ def load_optimizer_shard(
             return False
         optimizer_state = payload["optimizer_state"]
 
-    set_optimizer_state_dict(model, optimizer, optimizer_state)
+    if _is_fsdp_wrapped(model):
+        set_optimizer_state_dict(model, optimizer, optimizer_state)
+    else:
+        optimizer.load_state_dict(optimizer_state)
     return True
 
 

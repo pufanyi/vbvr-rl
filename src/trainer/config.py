@@ -53,7 +53,8 @@ class TrainConfig(BaseModel):
     train_text_encoder: bool = False
     gradient_checkpointing: bool = True
 
-    # FSDP2 mixed precision
+    # FSDP2
+    fsdp: bool = True  # False = no sharding, manual gradient all-reduce (faster for LoRA / small models)
     param_dtype: Literal["bfloat16", "float32"] = "bfloat16"
     reduce_dtype: Literal["float32", "bfloat16"] = "float32"
 

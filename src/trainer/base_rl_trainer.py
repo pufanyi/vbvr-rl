@@ -72,8 +72,20 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         self._pre_fsdp_setup(cfg)
 
         # ---- FSDP2 ----
-        self.mesh, self.mp_policy = self._create_device_mesh(cfg)
-        self.sync_modules = self._setup_fsdp(cfg)
+        if cfg.fsdp:
+            self.mesh, self.mp_policy = self._create_device_mesh(cfg)
+            self.sync_modules = self._setup_fsdp(cfg)
+        else:
+            if cfg.expert_parallel:
+                raise ValueError("expert_parallel requires fsdp=True")
+            # Move transformers to GPU (FSDP normally handles this via fully_shard)
+            for m in [self.model.transformer, self.model.transformer_2]:
+                if m is not None:
+                    m.to(self.device)
+            self.mesh, self.mp_policy = None, None
+            self.sync_modules = []
+            self._dp_pg = None
+            logger.info("FSDP disabled — using manual gradient all-reduce")
 
         # ---- EMA ----
         self.ema = self._setup_ema(cfg)
@@ -499,6 +511,14 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         for module in self.sync_modules:
             if hasattr(module, "set_requires_gradient_sync"):
                 module.set_requires_gradient_sync(requires_gradient_sync, recurse=True)
+
+    def _all_reduce_gradients(self) -> None:
+        """Manual gradient all-reduce for non-FSDP mode. No-op when FSDP is active."""
+        if self.cfg.fsdp or self.world_size <= 1:
+            return
+        for p in self.params:
+            if p.grad is not None:
+                dist.all_reduce(p.grad, op=dist.ReduceOp.AVG)
 
     def _barrier(self) -> None:
         dist.barrier()
