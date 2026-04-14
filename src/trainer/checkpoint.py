@@ -1,12 +1,14 @@
 """DCP (Distributed Checkpoint) state management for FSDP2 training."""
 
 import os
+from functools import lru_cache
 from pathlib import Path
 
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from loguru import logger
+from torch.distributed.checkpoint.filesystem import FileSystemReader
 from torch.distributed.checkpoint.state_dict import (
     get_model_state_dict,
     get_state_dict,
@@ -122,6 +124,44 @@ def _detect_checkpoint_layout(checkpoint_path: str) -> dict[str, str]:
     return {"transformer": checkpoint_path, "transformer_2": checkpoint_path}
 
 
+@lru_cache(maxsize=32)
+def _get_checkpoint_fqns(dcp_path: str) -> frozenset[str]:
+    """Read DCP metadata once and return all saved FQNs for this path."""
+    reader = FileSystemReader(dcp_path)
+    metadata = reader.read_metadata()
+    return frozenset(metadata.state_dict_metadata.keys())
+
+
+def _should_plain_to_lora_remap(name: str, model_state: dict[str, torch.Tensor], checkpoint_fqns: set[str]) -> bool:
+    """Detect whether a plain checkpoint should be remapped into LoRA base_layer keys.
+
+    Current model keys may contain:
+      blocks.0.attn1.to_q.base_layer.weight
+    while a plain checkpoint contains:
+      train_state.transformer.blocks.0.attn1.to_q.weight
+    """
+    if not any(".base_layer." in key for key in model_state):
+        return False
+
+    direct_matches = 0
+    plain_matches = 0
+    for model_key in model_state:
+        if ".lora_" in model_key:
+            continue
+        if f"train_state.{name}.{model_key}" in checkpoint_fqns:
+            direct_matches += 1
+
+        plain_key = model_key.replace(".base_layer.", ".")
+        if f"train_state.{name}.{plain_key}" in checkpoint_fqns:
+            plain_matches += 1
+
+    if plain_matches == 0:
+        return False
+    if direct_matches == 0:
+        return True
+    return plain_matches > direct_matches
+
+
 def load_dcp_into_pipeline(pipe, checkpoint_path: str, use_ema: bool = False) -> None:
     """Load a DCP training checkpoint into a diffusers pipeline for inference.
 
@@ -162,7 +202,37 @@ def load_dcp_into_pipeline(pipe, checkpoint_path: str, use_ema: bool = False) ->
 
 def _load_weights_single(name: str, model: torch.nn.Module, dcp_path: str) -> None:
     """Load model weights for a single expert from a DCP checkpoint."""
-    state: dict = {"train_state": {name: get_model_state_dict(model)}}
+    model_state = get_model_state_dict(model)
+    checkpoint_fqns = _get_checkpoint_fqns(dcp_path)
+
+    if _should_plain_to_lora_remap(name, model_state, checkpoint_fqns):
+        logger.warning(
+            "Detected plain checkpoint keys for {} at {}. Loading into LoRA base_layer weights via remap.",
+            name,
+            dcp_path,
+        )
+
+        remapped_state: dict[str, torch.Tensor] = {}
+        key_mapping: dict[str, str] = {}
+        for model_key, tensor in model_state.items():
+            if ".lora_" in model_key:
+                continue
+            checkpoint_key = model_key.replace(".base_layer.", ".")
+            remapped_state[checkpoint_key] = torch.empty_like(tensor)
+            key_mapping[checkpoint_key] = model_key
+
+        state = {"train_state": {name: remapped_state}}
+        dcp.load(state, checkpoint_id=dcp_path)
+
+        merged_state = dict(model_state)
+        for checkpoint_key, tensor in state["train_state"][name].items():
+            merged_state[key_mapping[checkpoint_key]] = tensor
+
+        set_model_state_dict(model, model_state_dict=merged_state)
+        logger.info("Loaded {} weights from {} with plain->LoRA base remap", name, dcp_path)
+        return
+
+    state: dict = {"train_state": {name: model_state}}
     dcp.load(state, checkpoint_id=dcp_path)
     set_model_state_dict(model, model_state_dict=state["train_state"][name])
     logger.info("Loaded {} weights from {}", name, dcp_path)
