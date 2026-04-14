@@ -5,7 +5,6 @@ from pathlib import Path
 
 import torch
 import torch.distributed as dist
-import torch.distributed.checkpoint as dcp
 from loguru import logger
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
@@ -17,18 +16,17 @@ from src.data.vbvr_latent_dataset import VBVRLatentDataset
 from src.models.wan_i2v import LoRATrainConfig, WanI2VForTraining
 from src.trainer.checkpoint import (
     TrainState,
-    get_checkpoint_optimizer_keys,
-    load_dcp_into_pipeline,
     load_optimizer_shard,
     save_optimizer_shard,
 )
+from src.trainer.checkpoint_runtime import CheckpointRuntimeMixin
 from src.trainer.config import TrainConfig
 from src.trainer.ema import EMA
 from src.trainer.optimizer import build_optimizer
 from src.trainer.utils import apply_liger_rms_norm, collate, setup_loguru, shard_transformer
 
 
-class BaseTrainer:
+class BaseTrainer(CheckpointRuntimeMixin):
     """Shared infrastructure: distributed init, model, FSDP2, EMA, compile,
     dataset, optimizer, DCP checkpointing, wandb, and resume logic.
 
@@ -589,177 +587,5 @@ class BaseTrainer:
         return restored
 
     # ------------------------------------------------------------------
-    # DCP checkpointing
+    # DCP checkpointing — provided by CheckpointRuntimeMixin
     # ------------------------------------------------------------------
-
-    def _find_latest_checkpoint(self) -> str | None:
-        output_dir = Path(self.cfg.output_dir)
-        if not output_dir.exists():
-            return None
-        candidates: list[tuple[int, Path]] = []
-        for d in output_dir.iterdir():
-            if not d.is_dir():
-                continue
-            # Detect checkpoint: direct .metadata (non-EP) or EP subdirectory
-            is_ckpt = (d / ".metadata").exists()
-            if not is_ckpt and self.expert_parallel:
-                expert_name = "high" if self.expert_group == 0 else "low"
-                is_ckpt = (d / expert_name / ".metadata").exists()
-            if not is_ckpt:
-                continue
-            name = d.name
-            if name.startswith("checkpoint-epoch"):
-                try:
-                    int(name.removeprefix("checkpoint-epoch"))
-                    candidates.append((int(d.stat().st_mtime_ns), d))
-                except ValueError:
-                    continue
-            elif name.startswith("checkpoint-"):
-                try:
-                    int(name.removeprefix("checkpoint-"))
-                    candidates.append((int(d.stat().st_mtime_ns), d))
-                except ValueError:
-                    continue
-        if not candidates:
-            return None
-        candidates.sort()
-        latest = candidates[-1][1]
-        logger.info("Auto-resume: found checkpoint {}", latest)
-        return str(latest)
-
-    def _save_checkpoint(self, path: Path):
-        state: dict = {"train_state": self.train_state.checkpoint_view(include_optimizers=False)}
-        if self.ema is not None:
-            state["ema"] = self.ema
-
-        if self.expert_parallel:
-            expert_name = "high" if self.expert_group == 0 else "low"
-            save_path = path / expert_name
-            dcp.save(state, checkpoint_id=str(save_path), process_group=self._dp_pg)
-            self._save_optimizer_shards(save_path)
-            torch.save(self.dataloader.state_dict(), save_path / f"dataloader_rank{self.dp_rank}.pt")
-            if self.dp_rank == 0 and self.model.lora_config is not None:
-                self.model.save_lora(str(save_path / "lora"))
-            if self.dp_rank == 0:
-                logger.info("Saved checkpoint to {} (expert={})", save_path, expert_name)
-        else:
-            dcp.save(state, checkpoint_id=str(path))
-            self._save_optimizer_shards(path)
-            torch.save(self.dataloader.state_dict(), path / f"dataloader_rank{self.rank}.pt")
-            if self.rank == 0 and self.model.lora_config is not None:
-                self.model.save_lora(str(path / "lora"))
-            if self.rank == 0:
-                logger.info("Saved DCP checkpoint to {}", path)
-        self._barrier()
-
-    def _load_checkpoint(self, path: str):
-        ckpt_path = Path(path)
-        is_ep_checkpoint = any((ckpt_path / expert / ".metadata").exists() for expert in ("high", "low"))
-        is_flat_checkpoint = (ckpt_path / ".metadata").exists()
-        if not self.expert_parallel and is_ep_checkpoint and not is_flat_checkpoint:
-            if not self._reset_on_load:
-                raise ValueError(
-                    "Cannot fully resume non-expert-parallel training from an expert-parallel checkpoint. "
-                    "Set reset_dataloader: true, disable auto_resume, or load with expert_parallel: true."
-                )
-
-            logger.info(
-                "Loading expert-parallel checkpoint {} into non-expert-parallel run as weights-only init",
-                path,
-            )
-            load_dcp_into_pipeline(self.model, path, use_ema=False)
-            if self.ema is not None:
-                self.ema.reinitialize()
-                logger.info("EMA reinitialized from loaded model weights")
-
-            self.train_state.step = 0
-            self.train_state.epoch = 0
-            self.train_state.batch_idx = 0
-            (
-                self.params, self.optimizers,
-                self.optimizer_te, self.optimizer_1, self.optimizer_2,
-                self.fallback_te, self.fallback_1, self.fallback_2,
-            ) = self._build_optimizers(self.cfg)
-            self.train_state.optimizer_te = self.optimizer_te
-            self.train_state.optimizer_1 = self.optimizer_1
-            self.train_state.optimizer_2 = self.optimizer_2
-            self.train_state.fallback_te = self.fallback_te
-            self.train_state.fallback_1 = self.fallback_1
-            self.train_state.fallback_2 = self.fallback_2
-            self.total_steps = self._compute_total_steps()
-            logger.info("Initialized from expert-parallel checkpoint with reset optimizer state, total_steps={}", self.total_steps)
-            return
-
-        # Resolve path and DCP process group for expert parallel
-        if self.expert_parallel:
-            expert_name = "high" if self.expert_group == 0 else "low"
-            ep_path = Path(path) / expert_name
-            load_path = str(ep_path) if ep_path.exists() else path
-            dl_rank = self.dp_rank
-            dcp_kwargs: dict = {"process_group": self._dp_pg}
-        else:
-            load_path = path
-            dl_rank = self.rank
-            dcp_kwargs = {}
-
-        logger.info("Resuming from {} ...", load_path)
-        checkpoint_optimizer_keys = get_checkpoint_optimizer_keys(load_path)
-        load_train_state = self.train_state.checkpoint_view(
-            include_optimizers=True,
-            optimizer_keys=checkpoint_optimizer_keys,
-        )
-        state: dict = {"train_state": load_train_state}
-        has_legacy_ema = (Path(load_path) / "ema").is_dir()
-        if self.ema is not None and not has_legacy_ema:
-            state["ema"] = self.ema
-        try:
-            dcp.load(state, checkpoint_id=load_path, **dcp_kwargs)
-        except Exception:
-            if "ema" in state:
-                logger.warning("Failed to load EMA from DCP, retrying without EMA")
-                dcp.load({"train_state": load_train_state}, checkpoint_id=load_path, **dcp_kwargs)
-            else:
-                raise
-        self.train_state.step = load_train_state.step
-        self.train_state.epoch = load_train_state.epoch
-        self.train_state.batch_idx = load_train_state.batch_idx
-        if self.ema is not None and "ema" not in state:
-            self.ema.reinitialize()
-            logger.warning("EMA not in DCP checkpoint, reinitialized from loaded model weights")
-        if self._reset_on_load:
-            self.train_state.step = 0
-            self.train_state.epoch = 0
-            self.train_state.batch_idx = 0
-            (
-                self.params, self.optimizers,
-                self.optimizer_te, self.optimizer_1, self.optimizer_2,
-                self.fallback_te, self.fallback_1, self.fallback_2,
-            ) = self._build_optimizers(self.cfg)
-            self.train_state.optimizer_te = self.optimizer_te
-            self.train_state.optimizer_1 = self.optimizer_1
-            self.train_state.optimizer_2 = self.optimizer_2
-            self.train_state.fallback_te = self.fallback_te
-            self.train_state.fallback_1 = self.fallback_1
-            self.train_state.fallback_2 = self.fallback_2
-            self.total_steps = self._compute_total_steps()
-            logger.info("reset_dataloader=True: reset step/epoch/optimizer, total_steps={}", self.total_steps)
-        else:
-            restored_optimizers = self._load_optimizer_shards(Path(load_path))
-            if restored_optimizers:
-                logger.info("Restored optimizer shards: {}", ", ".join(restored_optimizers))
-            elif not checkpoint_optimizer_keys:
-                logger.warning(
-                    "Checkpoint {} has no optimizer state in DCP and no optimizer shard files; "
-                    "continuing with freshly initialized optimizer state",
-                    load_path,
-                )
-            dl_state_path = Path(load_path) / f"dataloader_rank{dl_rank}.pt"
-            if dl_state_path.exists():
-                self.dataloader.load_state_dict(torch.load(dl_state_path, weights_only=False))
-                logger.info("Restored dataloader state from {}", dl_state_path)
-        logger.info(
-            "Resumed at step={} epoch={} batch_idx={}",
-            self.train_state.step,
-            self.train_state.epoch,
-            self.train_state.batch_idx,
-        )
