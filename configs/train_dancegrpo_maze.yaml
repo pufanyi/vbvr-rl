@@ -2,13 +2,14 @@ trainer: dancegrpo
 model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
 dataset_json: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/data/train_maze_bfs_sft.json
 output_dir: storage/checkpoints/dancegrpo_maze_bfs
+resume_from: storage/checkpoints/sft_maze_bfs_3steps/checkpoint-epoch0
 
 num_frames: 17
 height: 256
 width: 256
 fps: 16
 
-batch_size: 1
+batch_size: 2
 gradient_accumulation_steps: 1
 num_epochs: 2
 learning_rate: 1.0e-5
@@ -23,10 +24,11 @@ ema_decay: 0.99
 
 expert_parallel: false
 train_experts: both
+lora_rank: 32
 
 # DanceGRPO
 grpo_group_size: 16
-grpo_sample_batch_size: 2
+grpo_sample_batch_size: 4
 grpo_num_sampling_steps: 10
 grpo_clip_range: 1.0e-3
 grpo_kl_coeff: 0.0

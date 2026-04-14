@@ -124,6 +124,7 @@ class COSTrainer(BaseTrainer):
 
         global_step = self.train_state.step
         start_epoch = self.train_state.epoch
+        start_batch_idx = self.train_state.batch_idx
         train_start_time = time.monotonic()
         train_start_step = global_step
 
@@ -140,7 +141,8 @@ class COSTrainer(BaseTrainer):
             for opt in self.optimizers:
                 opt.zero_grad(set_to_none=True)
 
-            for batch_idx, batch in enumerate(self.dataloader):
+            enum_start = start_batch_idx if epoch == start_epoch else 0
+            for batch_idx, batch in enumerate(self.dataloader, start=enum_start):
                 is_last_micro_step = (batch_idx + 1) % cfg.gradient_accumulation_steps == 0
                 self._set_requires_gradient_sync(is_last_micro_step)
                 loss, debug = self._train_step(batch)

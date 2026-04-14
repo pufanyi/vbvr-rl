@@ -412,6 +412,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
 
         global_step = self.train_state.step
         start_epoch = self.train_state.epoch
+        start_batch_idx = self.train_state.batch_idx
         train_start_time = time.monotonic()
         train_start_step = global_step
 
@@ -419,7 +420,8 @@ class BaseGRPOTrainer(BaseRLTrainer):
             if self.sampler is not None:
                 self.sampler.set_epoch(epoch)
 
-            for batch_idx, batch in enumerate(self.dataloader):
+            enum_start = start_batch_idx if epoch == start_epoch else 0
+            for batch_idx, batch in enumerate(self.dataloader, start=enum_start):
                 metrics = self._grpo_step(batch)
 
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.params, cfg.max_grad_norm).item()

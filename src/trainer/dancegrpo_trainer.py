@@ -44,12 +44,22 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         return shared.repeat_interleave(cur_s, dim=0)
 
     def _select_training_timesteps(self, num_sampling_steps: int) -> list[int]:
-        """Subsample replay timesteps following DanceGRPO's timestep selection idea."""
+        """Subsample replay timesteps following DanceGRPO's timestep selection idea.
+
+        The selection is generated on rank 0 and broadcast to all ranks so that
+        every rank replays the same timesteps.  This is required because
+        ``_get_expert_for_timestep`` routes to different FSDP-wrapped modules
+        depending on the timestep value — if ranks diverge, the per-parameter
+        all-gather in FSDP2 will deadlock.
+        """
         keep = max(1, math.ceil(num_sampling_steps * self.cfg.dancegrpo_timestep_selection_ratio))
         if keep >= num_sampling_steps:
             return list(range(num_sampling_steps))
-        selected = torch.randperm(num_sampling_steps, device=self.device)[:keep]
-        selected = selected.sort().values
+        if self.rank == 0:
+            selected = torch.randperm(num_sampling_steps, device=self.device)[:keep].sort().values
+        else:
+            selected = torch.empty(keep, dtype=torch.long, device=self.device)
+        dist.broadcast(selected, src=0)
         return selected.tolist()
 
     def _grpo_step(self, batch: dict) -> dict[str, float]:
