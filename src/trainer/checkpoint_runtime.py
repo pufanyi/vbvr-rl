@@ -10,16 +10,15 @@ from __future__ import annotations
 from pathlib import Path
 
 import torch
-import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from loguru import logger
 from torch.distributed.checkpoint.state_dict import get_model_state_dict
 
 from src.trainer.checkpoint import (
-    get_checkpoint_optimizer_keys,
-    load_dcp_into_pipeline,
     _get_checkpoint_fqns,
     _should_plain_to_lora_remap,
+    get_checkpoint_optimizer_keys,
+    load_dcp_into_pipeline,
 )
 
 

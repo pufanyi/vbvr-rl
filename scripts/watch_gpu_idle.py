@@ -19,11 +19,9 @@ from __future__ import annotations
 import argparse
 import shutil
 import subprocess
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
-
 
 DEFAULT_COMMAND = "torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_sft_maze.yaml"
 

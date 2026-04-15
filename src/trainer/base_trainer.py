@@ -6,8 +6,8 @@ from pathlib import Path
 import torch
 import torch.distributed as dist
 from loguru import logger
-from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
+from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 from torch.utils.data import DistributedSampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 

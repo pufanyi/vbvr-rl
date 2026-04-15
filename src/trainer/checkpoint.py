@@ -232,10 +232,7 @@ def save_optimizer_shard(
     if model is None or optimizer is None:
         return False
 
-    if _is_fsdp_wrapped(model):
-        opt_state = get_optimizer_state_dict(model, optimizer)
-    else:
-        opt_state = optimizer.state_dict()
+    opt_state = get_optimizer_state_dict(model, optimizer) if _is_fsdp_wrapped(model) else optimizer.state_dict()
     payload = {
         "format_version": 1,
         "process_group_size": process_group_size,
