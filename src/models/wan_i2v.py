@@ -410,7 +410,7 @@ class WanI2VForTraining:
                 continue
             pred = transformer(
                 hidden_states=model_input.index_select(0, selected),
-                timestep=timesteps.index_select(0, selected),
+                timestep=timesteps.index_select(0, selected).to(torch.bfloat16),
                 encoder_hidden_states=prompt_embeds.index_select(0, selected),
                 return_dict=False,
             )[0]
@@ -502,7 +502,7 @@ class WanI2VForTraining:
             model_input = torch.cat([x_t, condition], dim=1)
             pred = transformer(
                 hidden_states=model_input,
-                timestep=timesteps,
+                timestep=timesteps.to(torch.bfloat16),
                 encoder_hidden_states=prompt_embeds,
                 return_dict=False,
             )[0]

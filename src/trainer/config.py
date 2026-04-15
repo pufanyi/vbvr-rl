@@ -6,6 +6,8 @@ from pydantic import BaseModel, field_validator
 
 
 class TrainConfig(BaseModel):
+    """Base training configuration shared by all trainers."""
+
     # Model
     model_path: str = "storage/models/Wan2.2-I2V-A14B-Diffusers"
 
@@ -81,6 +83,50 @@ class TrainConfig(BaseModel):
     wandb_project: str | None = None
     wandb_run_name: str | None = None
 
+    # HSDP: shard within node, replicate across nodes.
+    # Keeps NCCL IB traffic to intra-node NVLink; cross-node uses only gradient
+    # all-reduce (much less locked-memory / IB registration pressure).
+    hsdp: bool = False  # Hybrid Sharded Data Parallel; shard within node, replicate across nodes
+    hsdp_replicate_backend: Literal["nccl", "gloo"] | None = None  # None = auto (prefer nccl)
+
+    # Expert parallel: split MoE experts across GPU sub-groups
+    expert_parallel: bool = False  # each expert gets world_size/2 GPUs with independent FSDP
+    expert_parallel_data_mode: Literal["duplicate", "split"] = "duplicate"
+    # duplicate: each expert group iterates a full copy of the dataset (old SFT behavior)
+    # split: shard data across all ranks so expert-parallel uses full global throughput
+
+
+class SFTConfig(TrainConfig):
+    """SFT training configuration."""
+
+    # Trainer selection
+    trainer: Literal["i2v", "cos"] = "i2v"
+
+    # COS (Chain-of-Step) piecewise flow matching
+    cos_tau_sigma: list[float] = [0.5]  # piecewise boundaries in sigma space (descending); len = num_intermediates
+    cos_boundary_noise_std: float = 0.02  # Gaussian perturbation std for x_tau in low stage
+    cos_use_standard_formula: bool = False  # ablation: use standard sigma formula per segment (discontinuous)
+    cos_path_type: Literal[
+        "linear", "cosine", "cubic_hermite", "smooth_blend", "quadratic_bezier", "target_linear", "target_cosine"
+    ] = "linear"
+    cos_smooth_blend_delta: float = 0.05  # half-width of blending window (only for smooth_blend path)
+
+    @field_validator("cos_tau_sigma", mode="before")
+    @classmethod
+    def _wrap_tau_sigma(cls, v):
+        if isinstance(v, (int, float)):
+            return [float(v)]
+        return v
+
+
+class RLConfig(TrainConfig):
+    """RL training configuration. Defaults to HSDP (falls back to plain FSDP on single node)."""
+
+    hsdp: bool = True
+
+    # Trainer selection
+    trainer: Literal["grpo", "dancegrpo"] = "grpo"
+
     # GRPO (set grpo_group_size > 0 to enable Flow-GRPO training)
     grpo_group_size: int | None = None  # G: number of samples per prompt. None = SFT mode
     grpo_sample_batch_size: int = 1  # how many G samples to batch together (tune for GPU memory)
@@ -94,25 +140,6 @@ class TrainConfig(BaseModel):
     grpo_reward_fn: str = "neg_loss"  # reward function name
     grpo_cfg_scale: float = 1.0  # classifier-free guidance scale during sampling
 
-    # COS (Chain-of-Step) piecewise flow matching
-    cos_tau_sigma: list[float] = [0.5]  # piecewise boundaries in sigma space (descending); len = num_intermediates
-    cos_boundary_noise_std: float = 0.02  # Gaussian perturbation std for x_tau in low stage
-    cos_use_standard_formula: bool = False  # ablation: use standard sigma formula per segment (discontinuous)
-    cos_path_type: Literal[
-        "linear", "cosine", "cubic_hermite", "smooth_blend", "quadratic_bezier", "target_linear", "target_cosine"
-    ] = "linear"
-    cos_smooth_blend_delta: float = 0.05  # half-width of blending window (only for smooth_blend path)
-
-    # Trainer selection
-    trainer: Literal["i2v", "cos", "grpo", "dancegrpo"] = "i2v"
-
-    @field_validator("cos_tau_sigma", mode="before")
-    @classmethod
-    def _wrap_tau_sigma(cls, v):
-        if isinstance(v, (int, float)):
-            return [float(v)]
-        return v
-
     # DanceGRPO (paper-inspired variant of GRPO)
     dancegrpo_share_group_init_noise: bool = True
     dancegrpo_timestep_selection_ratio: float = 1.0
@@ -123,15 +150,3 @@ class TrainConfig(BaseModel):
         if not (0.0 < v <= 1.0):
             raise ValueError(f"dancegrpo_timestep_selection_ratio must be in (0, 1], got {v}")
         return v
-
-    # HSDP: shard within node, replicate across nodes.
-    # Keeps NCCL IB traffic to intra-node NVLink; cross-node uses only gradient
-    # all-reduce (much less locked-memory / IB registration pressure).
-    hsdp: bool = False  # Hybrid Sharded Data Parallel; shard within node, replicate across nodes
-    hsdp_replicate_backend: Literal["nccl", "gloo"] | None = None  # None = auto (prefer nccl)
-
-    # Expert parallel: split MoE experts across GPU sub-groups
-    expert_parallel: bool = False  # each expert gets world_size/2 GPUs with independent FSDP
-    expert_parallel_data_mode: Literal["duplicate", "split"] = "duplicate"
-    # duplicate: each expert group iterates a full copy of the dataset (old SFT behavior)
-    # split: shard data across all ranks so expert-parallel uses full global throughput

@@ -26,7 +26,7 @@ from src.trainer.checkpoint import (
     save_optimizer_shard,
 )
 from src.trainer.checkpoint_runtime import CheckpointRuntimeMixin
-from src.trainer.config import TrainConfig
+from src.trainer.config import RLConfig
 from src.trainer.ema import EMA
 from src.trainer.optimizer import build_optimizer
 from src.trainer.utils import apply_liger_rms_norm, collate, setup_loguru, shard_transformer
@@ -47,7 +47,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         ``_compute_total_steps`` — controls total optimizer steps.
     """
 
-    def __init__(self, cfg: TrainConfig):
+    def __init__(self, cfg: RLConfig):
         self.cfg = cfg
 
         # ---- Distributed ----
@@ -160,10 +160,10 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
     # Hooks for subclasses
     # ------------------------------------------------------------------
 
-    def _pre_fsdp_setup(self, cfg: TrainConfig) -> None:
+    def _pre_fsdp_setup(self, cfg: RLConfig) -> None:
         """Called after model build, before FSDP. Override to create ref models etc."""
 
-    def _init_expert_parallel(self, cfg: TrainConfig) -> None:
+    def _init_expert_parallel(self, cfg: RLConfig) -> None:
         """Set up expert-parallel state: split GPUs into two groups, one per MoE expert."""
         self.expert_parallel = cfg.expert_parallel
         self.peer_rank = -1
@@ -187,11 +187,11 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         self._effective_train_experts = "high" if self.expert_group == 0 else "low"
         self._expert_log_peer = half if self.expert_group == 0 else 0
 
-    def _get_expert_parallel_sampler_seed(self, cfg: TrainConfig) -> int:
+    def _get_expert_parallel_sampler_seed(self, cfg: RLConfig) -> int:
         """Sampler seed for expert-parallel mode."""
         return cfg.seed
 
-    def _post_init(self, cfg: TrainConfig) -> None:
+    def _post_init(self, cfg: RLConfig) -> None:
         """Called after base init, before wandb/resume. Override for MFU etc."""
 
     def _compute_total_steps(self) -> int:
@@ -209,7 +209,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
     # Model
     # ------------------------------------------------------------------
 
-    def _build_model(self, cfg: TrainConfig) -> WanI2VForTraining:
+    def _build_model(self, cfg: RLConfig) -> WanI2VForTraining:
         train_experts = self._effective_train_experts
         lora_cfg = (
             LoRATrainConfig(rank=cfg.lora_rank, lora_alpha=cfg.lora_alpha, lora_dropout=cfg.lora_dropout)
@@ -253,7 +253,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
     # FSDP2
     # ------------------------------------------------------------------
 
-    def _create_device_mesh(self, cfg: TrainConfig):
+    def _create_device_mesh(self, cfg: RLConfig):
         if self.expert_parallel and cfg.hsdp:
             local_size = int(os.environ.get("LOCAL_WORLD_SIZE", torch.cuda.device_count()))
             assert self.dp_size % local_size == 0, (
@@ -341,7 +341,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         )
         return mesh, mp_policy
 
-    def _setup_fsdp(self, cfg: TrainConfig) -> list[torch.nn.Module]:
+    def _setup_fsdp(self, cfg: RLConfig) -> list[torch.nn.Module]:
         """Shard trainable modules with FSDP2. Override to shard additional modules."""
         if cfg.train_text_encoder and self.model.text_encoder is not None:
             fully_shard(self.model.text_encoder, mesh=self.mesh, mp_policy=self.mp_policy)
@@ -363,7 +363,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
     # EMA
     # ------------------------------------------------------------------
 
-    def _setup_ema(self, cfg: TrainConfig) -> EMA | None:
+    def _setup_ema(self, cfg: RLConfig) -> EMA | None:
         if cfg.ema_decay <= 0:
             return None
         ema_models: dict[str, torch.nn.Module] = {}
@@ -381,7 +381,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
     # torch.compile
     # ------------------------------------------------------------------
 
-    def _compile_modules(self, cfg: TrainConfig) -> None:
+    def _compile_modules(self, cfg: RLConfig) -> None:
         compile_kwargs = {"backend": cfg.torch_compile_backend}
         if cfg.torch_compile_mode is not None:
             compile_kwargs["mode"] = cfg.torch_compile_mode
@@ -403,9 +403,13 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
     # Dataset / DataLoader
     # ------------------------------------------------------------------
 
-    def _build_dataset(self, cfg: TrainConfig) -> tuple:
+    def _build_dataset(self, cfg: RLConfig) -> tuple:
         if cfg.latent_webdataset_dir is not None:
-            dataset = VBVRLatentDataset(cfg.latent_webdataset_dir)
+            epoch_length = None
+            if cfg.dataset_size is not None:
+                dp = self.dp_size if self.expert_parallel else self.world_size
+                epoch_length = cfg.dataset_size // dp
+            dataset = VBVRLatentDataset(cfg.latent_webdataset_dir, epoch_length=epoch_length)
             return dataset, None  # IterableDataset; shard splitting handled by wds
         else:
             dataset = I2VDataset(
@@ -435,7 +439,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
             )
         return dataset, sampler
 
-    def _build_dataloader(self, dataset, cfg: TrainConfig) -> StatefulDataLoader:
+    def _build_dataloader(self, dataset, cfg: RLConfig) -> StatefulDataLoader:
         kwargs = dict(
             dataset=dataset,
             batch_size=cfg.batch_size,
@@ -455,7 +459,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
     # Optimizer
     # ------------------------------------------------------------------
 
-    def _build_optimizers(self, cfg: TrainConfig):
+    def _build_optimizers(self, cfg: RLConfig):
         optimizer_te = None
         optimizer_1 = None
         optimizer_2 = None
@@ -524,10 +528,18 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         dist.barrier()
 
     def _checkpoint_rank(self) -> int:
-        return self.dp_rank if self.expert_parallel else self.rank
+        if self.expert_parallel:
+            return self.dp_rank
+        if self.mesh is not None and self.mesh.ndim == 2:
+            return self.mesh.get_local_rank("shard")
+        return self.rank
 
     def _checkpoint_process_group_size(self) -> int:
-        return self.dp_size if self.expert_parallel else self.world_size
+        if self.expert_parallel:
+            return self.dp_size
+        if self.mesh is not None and self.mesh.ndim == 2:
+            return self.mesh.size("shard")
+        return self.world_size
 
     def _optimizer_checkpoint_entries(self):
         return [
@@ -537,6 +549,9 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         ]
 
     def _save_optimizer_shards(self, path: Path) -> None:
+        # HSDP: replicas hold identical optimizer state; only first replica saves.
+        if self.mesh is not None and self.mesh.ndim == 2 and self.mesh.get_local_rank("replicate") > 0:
+            return
         shard_rank = self._checkpoint_rank()
         shard_group_size = self._checkpoint_process_group_size()
         for name, model, optimizer in self._optimizer_checkpoint_entries():

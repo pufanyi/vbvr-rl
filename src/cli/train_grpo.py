@@ -9,14 +9,14 @@ from pathlib import Path
 
 import yaml
 
-from src.trainer import DanceGRPOTrainer, GRPOTrainer, TrainConfig
+from src.trainer import DanceGRPOTrainer, GRPOTrainer, RLConfig
 
 
 def main():
     parser = argparse.ArgumentParser(description="Wan2.2 I2V Flow-GRPO Training")
     parser.add_argument("--config", type=str, default=None, help="YAML/JSON config file")
-    # CLI overrides (auto-generated from TrainConfig fields)
-    for name, field_info in TrainConfig.model_fields.items():
+    # CLI overrides (auto-generated from RLConfig fields)
+    for name, field_info in RLConfig.model_fields.items():
         if field_info.annotation is bool:
             parser.add_argument(f"--{name}", action=argparse.BooleanOptionalAction, default=None)
         elif field_info.annotation is int:
@@ -31,12 +31,12 @@ def main():
     cfg_dict = {}
     if args.config:
         cfg_dict = yaml.safe_load(Path(args.config).read_text()) or {}
-    for name in TrainConfig.model_fields:
+    for name in RLConfig.model_fields:
         v = getattr(args, name, None)
         if v is not None:
             cfg_dict[name] = v
 
-    cfg = TrainConfig(**cfg_dict)
+    cfg = RLConfig(**cfg_dict)
     trainer_cls = DanceGRPOTrainer if cfg.trainer == "dancegrpo" else GRPOTrainer
     trainer = trainer_cls(cfg)
     trainer.train()

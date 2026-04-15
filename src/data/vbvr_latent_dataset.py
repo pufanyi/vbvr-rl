@@ -66,13 +66,18 @@ class VBVRLatentDataset(IterableDataset):
         webdataset_dir: Directory containing ``shard-NNNNNN.tar`` files.
         max_text_len: Pad/truncate prompt embeddings to this length.
         shuffle_buffer: Buffer size for sample-level shuffle (0 to disable).
+        epoch_length: If set, cap each rank to exactly this many samples per
+            epoch via ``with_epoch()``.  This guarantees all ranks produce the
+            same number of batches, preventing FSDP/NCCL deadlocks at epoch
+            boundaries when shard counts are not evenly divisible by world_size.
     """
 
     def __init__(
         self,
         webdataset_dir: str,
         max_text_len: int = 512,
-        shuffle_buffer: int = 1000,
+        shuffle_buffer: int = 50000,
+        epoch_length: int | None = None,
     ):
         shard_dir = Path(webdataset_dir)
         shard_paths = sorted(shard_dir.glob("shard-*.tar"))
@@ -85,7 +90,11 @@ class VBVRLatentDataset(IterableDataset):
         pipeline = wds.WebDataset(urls, nodesplitter=wds.split_by_node, shardshuffle=len(urls))
         if shuffle_buffer > 0:
             pipeline = pipeline.shuffle(shuffle_buffer)
-        self._pipeline = pipeline.map(lambda s: _decode_sample(s, max_text_len))
+        pipeline = pipeline.map(lambda s: _decode_sample(s, max_text_len))
+        if epoch_length is not None:
+            pipeline = pipeline.with_epoch(epoch_length)
+            logger.info("VBVRLatentDataset: epoch_length=%d samples per rank", epoch_length)
+        self._pipeline = pipeline
 
     def __iter__(self):
         return iter(self._pipeline)

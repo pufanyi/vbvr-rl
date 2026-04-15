@@ -16,7 +16,8 @@ import torch.nn.functional as F
 from loguru import logger
 
 from src.trainer.base_rl_trainer import BaseRLTrainer
-from src.trainer.config import TrainConfig
+from src.trainer.config import RLConfig
+from src.trainer.flops import MFUMonitor, compute_wan_seq_len, estimate_wan_forward_flops, get_gpu_peak_flops_bf16
 from src.trainer.utils import cosine_lr, format_eta, shard_transformer, to_model_pixels
 
 
@@ -28,7 +29,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
     update for a single batch.
     """
 
-    def __init__(self, cfg: TrainConfig):
+    def __init__(self, cfg: RLConfig):
         assert cfg.grpo_group_size is not None and cfg.grpo_group_size > 0, (
             "grpo_group_size must be > 0 for GRPO training"
         )
@@ -52,11 +53,11 @@ class BaseGRPOTrainer(BaseRLTrainer):
     # Hooks
     # ------------------------------------------------------------------
 
-    def _get_expert_parallel_sampler_seed(self, cfg: TrainConfig) -> int:
+    def _get_expert_parallel_sampler_seed(self, cfg: RLConfig) -> int:
         """Keep high/low expert groups on the same batches for cooperative GRPO."""
         return cfg.seed
 
-    def _pre_fsdp_setup(self, cfg: TrainConfig) -> None:
+    def _pre_fsdp_setup(self, cfg: RLConfig) -> None:
         """Create frozen reference policy copies for full fine-tuning.
 
         Copies are made via CPU to avoid holding 4 full transformers on GPU
@@ -73,12 +74,83 @@ class BaseGRPOTrainer(BaseRLTrainer):
                     self.ref_transformers[name] = ref
                     logger.info("Reference {} created", name)
 
-    def _setup_fsdp(self, cfg: TrainConfig) -> list[torch.nn.Module]:
+    def _setup_fsdp(self, cfg: RLConfig) -> list[torch.nn.Module]:
         sync_modules = super()._setup_fsdp(cfg)
         if cfg.fsdp:
             for _name, ref in self.ref_transformers.items():
                 shard_transformer(ref, self.mesh, self.mp_policy)
         return sync_modules
+
+    # ------------------------------------------------------------------
+    # MFU
+    # ------------------------------------------------------------------
+
+    def _post_init(self, cfg: RLConfig) -> None:
+        self.mfu_monitor = self._setup_mfu(cfg)
+
+    def _setup_mfu(self, cfg: RLConfig) -> MFUMonitor | None:
+        """Pre-compute FLOPs per GRPO step and create MFU monitor.
+
+        A GRPO step has multiple phases with different forward counts:
+          Sampling:  G × T × (2 if CFG else 1)  forwards (no grad)
+          Reward:    G                           forwards (no grad)
+          Policy:    G × T_replay               forwards (with grad → 3× FLOPs)
+          Reference: G × T_replay               forwards (no grad, if kl > 0)
+        """
+        gpu_peak = get_gpu_peak_flops_bf16()
+        if gpu_peak is None:
+            return None
+
+        ref_t = self.model.transformer or self.model.transformer_2
+        if ref_t is None:
+            return None
+
+        # Sequence length
+        seq_len: int | None = None
+        if hasattr(self.dataset, "_configs"):
+            est_cfg = self.dataset._configs[0]
+            h = est_cfg.fixed_height or int(est_cfg.max_area**0.5)
+            w = est_cfg.fixed_width or int(est_cfg.max_area**0.5)
+            t_cfg = ref_t.config
+            seq_len = compute_wan_seq_len(
+                est_cfg.num_frames, h, w,
+                patch_size=tuple(t_cfg.patch_size),
+                vae_temporal_factor=self.model.vae_scale_factor_temporal,
+                vae_spatial_factor=self.model.vae_scale_factor_spatial,
+            )
+        if seq_len is None:
+            logger.info("MFU monitor: skipped (no resolution info available)")
+            return None
+
+        t_cfg = ref_t.config
+        fwd_flops = estimate_wan_forward_flops(
+            num_layers=t_cfg.num_layers,
+            num_heads=t_cfg.num_attention_heads,
+            head_dim=t_cfg.attention_head_dim,
+            ffn_dim=t_cfg.ffn_dim,
+            seq_len=seq_len,
+        )
+
+        G = cfg.grpo_group_size
+        T = cfg.grpo_num_sampling_steps
+        T_replay = math.ceil(T * cfg.dancegrpo_timestep_selection_ratio)
+        cfg_mult = 2 if cfg.grpo_cfg_scale > 1.0 else 1
+
+        n_no_grad = G * T * cfg_mult + G  # sampling + reward
+        n_with_grad = G * T_replay        # policy update
+        if cfg.grpo_kl_coeff > 0:
+            n_no_grad += G * T_replay     # reference forwards
+
+        flops_per_step = (n_no_grad * fwd_flops) + (n_with_grad * 3 * fwd_flops)
+
+        logger.info(
+            "MFU monitor: seq_len={} fwd={:.2e} FLOPs | "
+            "no_grad={} with_grad={} → step={:.2e} FLOPs | GPU={} ({:.0f} TFLOPS)",
+            seq_len, fwd_flops,
+            n_no_grad, n_with_grad, flops_per_step,
+            torch.cuda.get_device_name(0), gpu_peak / 1e12,
+        )
+        return MFUMonitor(flops_per_step, gpu_peak)
 
     # ------------------------------------------------------------------
     # Abstract: subclass must implement
@@ -200,7 +272,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
         timestep_vals: list[float],
         step_start: int,
         step_end: int,
-        cfg: TrainConfig,
+        cfg: RLConfig,
     ) -> dict:
         """Run only the local expert's segment of the SDE sampling schedule."""
         latent = start_latent
@@ -311,7 +383,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
             if sel_input is not None:
                 pred = self.model.transformer(
                     hidden_states=sel_input,
-                    timestep=sel_ts,
+                    timestep=sel_ts.to(torch.bfloat16),
                     encoder_hidden_states=sel_pe,
                     return_dict=False,
                 )[0]
@@ -338,7 +410,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
             if sel_input is not None:
                 pred = self.model.transformer_2(
                     hidden_states=sel_input,
-                    timestep=sel_ts,
+                    timestep=sel_ts.to(torch.bfloat16),
                     encoder_hidden_states=sel_pe,
                     return_dict=False,
                 )[0]
@@ -446,6 +518,9 @@ class BaseGRPOTrainer(BaseRLTrainer):
                 if self.ema is not None:
                     self.ema.update()
 
+                if self.mfu_monitor is not None:
+                    self.mfu_monitor.step()
+
                 global_step += 1
 
                 if self.expert_parallel and global_step % cfg.log_steps == 0 and self.dp_rank == 0:
@@ -465,6 +540,9 @@ class BaseGRPOTrainer(BaseRLTrainer):
                         }
 
                 if self.rank == 0 and global_step % cfg.log_steps == 0:
+                    mfu = self.mfu_monitor.flush() if self.mfu_monitor is not None else None
+                    mfu_str = f"{mfu:.1%}" if mfu is not None else "-"
+
                     elapsed = time.monotonic() - train_start_time
                     steps_done = global_step - train_start_step
                     if steps_done > 0:
@@ -482,13 +560,14 @@ class BaseGRPOTrainer(BaseRLTrainer):
                             del self._remote_grpo_ep_metrics
 
                         logger.info(
-                            "step={}/{} epoch={:.2f} reward={:.4f}+/-{:.4f} lr={:.2e} eta={} ({} s/it)",
+                            "step={}/{} epoch={:.2f} reward={:.4f}+/-{:.4f} lr={:.2e} mfu={} eta={} ({} s/it)",
                             global_step,
                             self.total_steps,
                             fractional_epoch,
                             merged_metrics.get("reward_mean", 0.0),
                             merged_metrics.get("reward_std", 0.0),
                             lr,
+                            mfu_str,
                             eta_str,
                             speed_str,
                         )
@@ -509,27 +588,27 @@ class BaseGRPOTrainer(BaseRLTrainer):
                         if self.use_wandb:
                             import wandb
 
-                            wandb.log(
-                                {
-                                    "grpo/policy_loss_high": merged_metrics.get("policy_loss_high", 0.0),
-                                    "grpo/kl_loss_high": merged_metrics.get("kl_loss_high", 0.0),
-                                    "grpo/policy_loss_low": merged_metrics.get("policy_loss_low", 0.0),
-                                    "grpo/kl_loss_low": merged_metrics.get("kl_loss_low", 0.0),
-                                    "grpo/reward_mean": merged_metrics.get("reward_mean", 0.0),
-                                    "grpo/reward_std": merged_metrics.get("reward_std", 0.0),
-                                    "grpo/advantage_mean": merged_metrics.get("advantage_mean", 0.0),
-                                    "train/lr": lr,
-                                    "train/grad_norm": grad_norm,
-                                    "train/grad_norm_high": grad_norm,
-                                    "train/grad_norm_low": merged_metrics.get("grad_norm_low", 0.0),
-                                    "train/epoch": fractional_epoch,
-                                },
-                                step=global_step,
-                            )
+                            ep_log_metrics = {
+                                "grpo/policy_loss_high": merged_metrics.get("policy_loss_high", 0.0),
+                                "grpo/kl_loss_high": merged_metrics.get("kl_loss_high", 0.0),
+                                "grpo/policy_loss_low": merged_metrics.get("policy_loss_low", 0.0),
+                                "grpo/kl_loss_low": merged_metrics.get("kl_loss_low", 0.0),
+                                "grpo/reward_mean": merged_metrics.get("reward_mean", 0.0),
+                                "grpo/reward_std": merged_metrics.get("reward_std", 0.0),
+                                "grpo/advantage_mean": merged_metrics.get("advantage_mean", 0.0),
+                                "train/lr": lr,
+                                "train/grad_norm": grad_norm,
+                                "train/grad_norm_high": grad_norm,
+                                "train/grad_norm_low": merged_metrics.get("grad_norm_low", 0.0),
+                                "train/epoch": fractional_epoch,
+                            }
+                            if mfu is not None:
+                                ep_log_metrics["train/mfu"] = mfu
+                            wandb.log(ep_log_metrics, step=global_step)
                     else:
                         logger.info(
                             "step={}/{} epoch={:.2f} policy_loss={:.4f} kl_loss={:.4f} reward={:.4f}+/-{:.4f} "
-                            "lr={:.2e} grad_norm={:.4f} eta={} ({} s/it)",
+                            "lr={:.2e} grad_norm={:.4f} mfu={} eta={} ({} s/it)",
                             global_step,
                             self.total_steps,
                             fractional_epoch,
@@ -539,6 +618,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
                             metrics["reward_std"],
                             lr,
                             grad_norm,
+                            mfu_str,
                             eta_str,
                             speed_str,
                         )
@@ -546,19 +626,19 @@ class BaseGRPOTrainer(BaseRLTrainer):
                         if self.use_wandb:
                             import wandb
 
-                            wandb.log(
-                                {
-                                    "grpo/policy_loss": metrics["policy_loss"],
-                                    "grpo/kl_loss": metrics["kl_loss"],
-                                    "grpo/reward_mean": metrics["reward_mean"],
-                                    "grpo/reward_std": metrics["reward_std"],
-                                    "grpo/advantage_mean": metrics["advantage_mean"],
-                                    "train/lr": lr,
-                                    "train/grad_norm": grad_norm,
-                                    "train/epoch": fractional_epoch,
-                                },
-                                step=global_step,
-                            )
+                            log_metrics = {
+                                "grpo/policy_loss": metrics["policy_loss"],
+                                "grpo/kl_loss": metrics["kl_loss"],
+                                "grpo/reward_mean": metrics["reward_mean"],
+                                "grpo/reward_std": metrics["reward_std"],
+                                "grpo/advantage_mean": metrics["advantage_mean"],
+                                "train/lr": lr,
+                                "train/grad_norm": grad_norm,
+                                "train/epoch": fractional_epoch,
+                            }
+                            if mfu is not None:
+                                log_metrics["train/mfu"] = mfu
+                            wandb.log(log_metrics, step=global_step)
 
                 if cfg.save_steps > 0 and global_step % cfg.save_steps == 0:
                     self.train_state.step = global_step

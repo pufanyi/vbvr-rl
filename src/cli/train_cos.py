@@ -9,14 +9,14 @@ from pathlib import Path
 
 import yaml
 
-from src.trainer import COSTrainer, TrainConfig
+from src.trainer import COSTrainer, SFTConfig
 
 
 def main():
     parser = argparse.ArgumentParser(description="Wan2.2 I2V COS Training")
     parser.add_argument("--config", type=str, default=None, help="YAML/JSON config file")
-    # CLI overrides (auto-generated from TrainConfig fields)
-    for name, field_info in TrainConfig.model_fields.items():
+    # CLI overrides (auto-generated from SFTConfig fields)
+    for name, field_info in SFTConfig.model_fields.items():
         if field_info.annotation is bool:
             parser.add_argument(f"--{name}", action=argparse.BooleanOptionalAction, default=None)
         elif field_info.annotation is int:
@@ -31,12 +31,12 @@ def main():
     cfg_dict = {}
     if args.config:
         cfg_dict = yaml.safe_load(Path(args.config).read_text()) or {}
-    for name in TrainConfig.model_fields:
+    for name in SFTConfig.model_fields:
         v = getattr(args, name, None)
         if v is not None:
             cfg_dict[name] = v
 
-    cfg = TrainConfig(**cfg_dict)
+    cfg = SFTConfig(**cfg_dict)
     trainer = COSTrainer(cfg)
     trainer.train()
 

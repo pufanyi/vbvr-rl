@@ -441,7 +441,13 @@ class BaseTrainer(CheckpointRuntimeMixin):
 
     def _build_dataset(self, cfg: TrainConfig) -> tuple:
         if cfg.latent_webdataset_dir is not None:
-            dataset = VBVRLatentDataset(cfg.latent_webdataset_dir)
+            # Compute per-rank epoch length so every rank produces the same
+            # number of batches — prevents FSDP/NCCL deadlocks at epoch end.
+            epoch_length = None
+            if cfg.dataset_size is not None:
+                dp = self.dp_size if self.expert_parallel else self.world_size
+                epoch_length = cfg.dataset_size // dp
+            dataset = VBVRLatentDataset(cfg.latent_webdataset_dir, epoch_length=epoch_length)
             return dataset, None  # IterableDataset; shard splitting handled by wds
         else:
             dataset = I2VDataset(
@@ -569,10 +575,18 @@ class BaseTrainer(CheckpointRuntimeMixin):
         dist.barrier()
 
     def _checkpoint_rank(self) -> int:
-        return self.dp_rank if self.expert_parallel else self.rank
+        if self.expert_parallel:
+            return self.dp_rank
+        if self.mesh is not None and self.mesh.ndim == 2:
+            return self.mesh.get_local_rank("shard")
+        return self.rank
 
     def _checkpoint_process_group_size(self) -> int:
-        return self.dp_size if self.expert_parallel else self.world_size
+        if self.expert_parallel:
+            return self.dp_size
+        if self.mesh is not None and self.mesh.ndim == 2:
+            return self.mesh.size("shard")
+        return self.world_size
 
     def _optimizer_checkpoint_entries(self):
         return [
@@ -582,6 +596,9 @@ class BaseTrainer(CheckpointRuntimeMixin):
         ]
 
     def _save_optimizer_shards(self, path: Path) -> None:
+        # HSDP: replicas hold identical optimizer state; only first replica saves.
+        if self.mesh is not None and self.mesh.ndim == 2 and self.mesh.get_local_rank("replicate") > 0:
+            return
         shard_rank = self._checkpoint_rank()
         shard_group_size = self._checkpoint_process_group_size()
         for name, model, optimizer in self._optimizer_checkpoint_entries():
