@@ -9,6 +9,12 @@ class EMA(Stateful):
 
     Works with FSDP2: each rank maintains EMA of its local parameter shards
     as DTensors, enabling DCP save/load with automatic resharding support.
+
+    ``set_save_filter`` restricts which ``shadow.<model_name>.*`` groups are
+    included in ``state_dict()``.  The unified save layout uses this so that
+    ``high/`` only carries ``transformer`` (+ ``text_encoder``) shadow, and
+    ``low/`` only carries ``transformer_2`` (+ ``text_encoder``) shadow.
+    ``None`` (the default) means "include everything".
     """
 
     def __init__(self, models: dict[str, torch.nn.Module], decay: float):
@@ -21,6 +27,10 @@ class EMA(Stateful):
                     s = p.data.clone()
                     self.shadow[f"{model_name}.{pname}"] = s
                     self._pairs.append((p, s))
+        self._save_filter: frozenset[str] | None = None
+
+    def set_save_filter(self, model_names: set[str] | frozenset[str] | None) -> None:
+        self._save_filter = None if model_names is None else frozenset(model_names)
 
     @torch.no_grad()
     def update(self):
@@ -33,7 +43,11 @@ class EMA(Stateful):
             s.copy_(p.data)
 
     def state_dict(self) -> dict:
-        return {"shadow": self.shadow, "decay": self.decay}
+        if self._save_filter is None:
+            return {"shadow": self.shadow, "decay": self.decay}
+        wanted = self._save_filter
+        shadow = {k: v for k, v in self.shadow.items() if k.split(".", 1)[0] in wanted}
+        return {"shadow": shadow, "decay": self.decay}
 
     def load_state_dict(self, state_dict: dict) -> None:
         loaded_shadow = state_dict["shadow"]

@@ -216,7 +216,8 @@ class BaseGRPOTrainer(BaseRLTrainer):
         if high_step_count <= 0 or low_step_count <= 0:
             raise ValueError(
                 "expert_parallel GRPO requires both experts to appear in the sampling schedule; "
-                f"got high={high_step_count}, low={low_step_count}. Increase grpo_num_sampling_steps or disable expert_parallel."
+                f"got high={high_step_count}, low={low_step_count}. "
+                "Increase grpo_num_sampling_steps or disable expert_parallel."
             )
         return high_step_count, low_step_count
 
@@ -287,7 +288,9 @@ class BaseGRPOTrainer(BaseRLTrainer):
 
             transformer = self._get_local_transformer(timestep_val)
             model_input = torch.cat([latent, condition], dim=1)
-            timestep_tensor = torch.tensor([timestep_val], device=latent.device, dtype=torch.bfloat16).expand(latent.shape[0])
+            timestep_tensor = torch.tensor(
+                [timestep_val], device=latent.device, dtype=torch.bfloat16
+            ).expand(latent.shape[0])
             model_output = transformer(
                 hidden_states=model_input,
                 timestep=timestep_tensor,
@@ -453,7 +456,11 @@ class BaseGRPOTrainer(BaseRLTrainer):
         timestep_tensor = torch.tensor([timestep_val], device=device, dtype=torch.bfloat16).expand(B)
 
         if self.is_lora:
-            transformer = self._get_local_transformer(timestep_val) if self.expert_parallel else self.model._get_expert_for_timestep(timestep_val)
+            transformer = (
+                self._get_local_transformer(timestep_val)
+                if self.expert_parallel
+                else self.model._get_expert_for_timestep(timestep_val)
+            )
             transformer.disable_adapters()
             try:
                 out = transformer(

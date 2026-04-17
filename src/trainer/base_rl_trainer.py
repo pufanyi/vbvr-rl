@@ -7,7 +7,6 @@ architecture — without affecting SFT trainers.
 """
 
 import os
-from pathlib import Path
 
 import torch
 import torch.distributed as dist
@@ -20,11 +19,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from src.data.i2v_dataset import I2VDataset
 from src.data.vbvr_latent_dataset import VBVRLatentDataset
 from src.models.wan_i2v import LoRATrainConfig, WanI2VForTraining
-from src.trainer.checkpoint import (
-    TrainState,
-    load_optimizer_shard,
-    save_optimizer_shard,
-)
+from src.trainer.checkpoint import TrainState
 from src.trainer.checkpoint_runtime import CheckpointRuntimeMixin
 from src.trainer.config import RLConfig
 from src.trainer.ema import EMA
@@ -127,12 +122,6 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
             else None,
             transformer=self.model.transformer,
             transformer_2=self.model.transformer_2,
-            optimizer_te=self.optimizer_te,
-            optimizer_1=self.optimizer_1,
-            optimizer_2=self.optimizer_2,
-            fallback_te=self.fallback_te,
-            fallback_1=self.fallback_1,
-            fallback_2=self.fallback_2,
         )
 
         # ---- Subclass hook (e.g. MFU monitor) ----
@@ -533,48 +522,6 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         if self.mesh is not None and self.mesh.ndim == 2:
             return self.mesh.get_local_rank("shard")
         return self.rank
-
-    def _checkpoint_process_group_size(self) -> int:
-        if self.expert_parallel:
-            return self.dp_size
-        if self.mesh is not None and self.mesh.ndim == 2:
-            return self.mesh.size("shard")
-        return self.world_size
-
-    def _optimizer_checkpoint_entries(self):
-        return [
-            ("text_encoder", self.model.text_encoder, self.optimizer_te),
-            ("transformer", self.model.transformer, self.optimizer_1),
-            ("transformer_2", self.model.transformer_2, self.optimizer_2),
-        ]
-
-    def _save_optimizer_shards(self, path: Path) -> None:
-        # HSDP: replicas hold identical optimizer state; only first replica saves.
-        if self.mesh is not None and self.mesh.ndim == 2 and self.mesh.get_local_rank("replicate") > 0:
-            return
-        shard_rank = self._checkpoint_rank()
-        shard_group_size = self._checkpoint_process_group_size()
-        for name, model, optimizer in self._optimizer_checkpoint_entries():
-            save_optimizer_shard(
-                path / f"optimizer_{name}_rank{shard_rank}.pt",
-                model,
-                optimizer,
-                process_group_size=shard_group_size,
-            )
-
-    def _load_optimizer_shards(self, path: Path) -> list[str]:
-        shard_rank = self._checkpoint_rank()
-        shard_group_size = self._checkpoint_process_group_size()
-        restored: list[str] = []
-        for name, model, optimizer in self._optimizer_checkpoint_entries():
-            if load_optimizer_shard(
-                path / f"optimizer_{name}_rank{shard_rank}.pt",
-                model,
-                optimizer,
-                expected_process_group_size=shard_group_size,
-            ):
-                restored.append(name)
-        return restored
 
     # ------------------------------------------------------------------
     # DCP checkpointing — provided by CheckpointRuntimeMixin

@@ -185,4 +185,4 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except KeyboardInterrupt:
         log("Interrupted by user.")
-        raise SystemExit(130)
+        raise SystemExit(130) from None

@@ -328,7 +328,7 @@ class TarShardWriter:
         self._tmp_path = self.output_dir / f".shard-{shard_id:06d}.rank{self.rank}.tmp"
         if self._final_path.exists():
             raise FileExistsError(f"Refusing to overwrite existing shard: {self._final_path}")
-        self._current_tar = tarfile.open(self._tmp_path, "w")
+        self._current_tar = tarfile.open(self._tmp_path, "w")  # noqa: SIM115
         self._samples_in_shard = 0
 
     def _close_current_shard(self) -> None:
@@ -565,7 +565,11 @@ def main():
         }
         (output_dir / "dataset_info.json").write_text(json.dumps(info, indent=2) + "\n")
         logger.info("Wrote {}", output_dir / "dataset_info.json")
-        logger.info("Recommended training fields: latent_webdataset_dir={}, dataset_size={}", output_dir, len(all_indices))
+        logger.info(
+            "Recommended training fields: latent_webdataset_dir={}, dataset_size={}",
+            output_dir,
+            len(all_indices),
+        )
 
     if _is_distributed():
         dist.barrier()

@@ -1,101 +1,92 @@
-"""Shared checkpoint save / load / discovery logic for SFT and RL trainers.
+"""Checkpoint save/load orchestration — unified ``high/`` + ``low/`` layout.
 
-This is a mixin, not a standalone utility.  It relies on attributes that the
-host trainer (BaseTrainer or BaseRLTrainer) is expected to provide — see the
-docstring on :class:`CheckpointRuntimeMixin` for the full contract.
+Every checkpoint on disk has the same shape regardless of whether the trainer
+was flat or expert-parallel when it wrote it::
+
+    checkpoint-N/
+      ├─ high/                          # transformer (+ shared scalars)
+      │   ├─ .metadata + *.distcp       # DCP: train_state (filter=text_encoder+transformer)
+      │   │                             #      + ema  (filter=text_encoder+transformer)
+      │   ├─ optimizer_transformer_rank{R}.pt
+      │   ├─ optimizer_text_encoder_rank{R}.pt   # if trained, duplicated in low/
+      │   ├─ dataloader_rank{R}.pt               # duplicated in low/
+      │   └─ lora/transformer/{adapter_model.safetensors, adapter_config.json}
+      └─ low/                           # transformer_2 (+ shared scalars — duplicated)
+          └─ ...                        # symmetric to high/
+
+Shared scalars (``step``, ``epoch``, ``batch_idx``, RNG, and ``text_encoder``
+weights when trained) are duplicated across both subdirs.  Duplicates are
+tiny relative to transformer weights.  The benefit: **a flat trainer and an
+EP trainer write and read exactly the same layout**, so cross-layout resume
+just works.
+
+Legacy flat checkpoints (top-level ``.metadata`` with no ``high``/``low``
+subdirs) are still loadable as a fallback; they are never *written* again.
+
+Host trainer contract — the mixin reads:
+
+    self.cfg, self.model, self.ema, self.train_state, self.dataloader,
+    self.rank, self.mesh,
+    self.expert_parallel, self.expert_group, self.dp_rank, self._dp_pg,
+    self._reset_on_load, self.optimizer_te, self.optimizer_1, self.optimizer_2,
+    self.total_steps,
+
+and calls:
+
+    self._barrier()
+    self._build_optimizers(cfg)
+    self._compute_total_steps()
+    self._checkpoint_rank() -> int
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
 import torch.distributed.checkpoint as dcp
 from loguru import logger
-from torch.distributed.checkpoint.state_dict import get_model_state_dict
+from torch.distributed.checkpoint.state_dict import StateDictOptions, set_model_state_dict
 
 from src.trainer.checkpoint import (
-    _get_checkpoint_fqns,
-    _should_plain_to_lora_remap,
-    get_checkpoint_optimizer_keys,
-    load_dcp_into_pipeline,
+    MODEL_KEYS,
+    extract_init_weights,
+    gather_full_state_dict,
+    load_optimizer_shard,
+    read_dcp_to_flat_dict,
+    remap_for_current_model,
+    save_optimizer_shard,
+    write_peft_lora_adapter,
 )
 
 
+@dataclass
+class _SubdirEntry:
+    """One ``high/`` or ``low/`` subdir that this rank should save or load."""
+
+    subdir: str                              # "high" | "low"
+    transformer_key: str                     # "transformer" | "transformer_2"
+    transformer_model: torch.nn.Module | None
+    transformer_optimizer: torch.optim.Optimizer | None
+    shard_rank: int
+    dcp_kwargs: dict                         # e.g. {"process_group": dp_pg} for EP
+
+
 class CheckpointRuntimeMixin:
-    """Checkpoint lifecycle methods shared between SFT and RL trainers.
-
-    The host trainer must provide the following attributes/methods::
-
-        self.cfg              — TrainConfig
-        self.model            — WanI2VForTraining (with .transformer, .transformer_2, .text_encoder, .lora_config)
-        self.ema              — EMA | None
-        self.train_state      — TrainState
-        self.dataloader       — StatefulDataLoader
-        self.rank             — int (global rank)
-        self.world_size       — int
-        self.expert_parallel  — bool
-        self.expert_group     — int (-1 when non-EP)
-        self.dp_rank          — int
-        self.dp_size          — int
-        self._dp_pg           — ProcessGroup | None
-        self._reset_on_load   — bool
-        self._barrier()       — sync all ranks
-        self._build_optimizers(cfg) — returns (params, optimizers, opt_te, opt_1, opt_2, fb_te, fb_1, fb_2)
-        self._compute_total_steps() — returns int
-        self._checkpoint_rank()     — int
-        self._checkpoint_process_group_size() — int
-        self._optimizer_checkpoint_entries() — list[(name, model, optimizer)]
-        self._save_optimizer_shards(path)
-        self._load_optimizer_shards(path) -> list[str]
-    """
-
     # ------------------------------------------------------------------
-    # Checkpoint discovery
+    # Discovery
     # ------------------------------------------------------------------
 
     def _find_latest_checkpoint(self) -> str | None:
-        """Scan *output_dir* for the most recent valid checkpoint.
-
-        Detects **both** flat and expert-parallel layouts regardless of the
-        current trainer's ``expert_parallel`` setting so that cross-mode
-        auto-resume (e.g. output_dir has EP checkpoints but the current run
-        is non-EP) can still discover and load them.
-        """
-        output_dir = Path(self.cfg.output_dir)
-        if not output_dir.exists():
+        out = Path(self.cfg.output_dir)
+        if not out.exists():
             return None
-
         candidates: list[tuple[int, Path]] = []
-        for d in output_dir.iterdir():
-            if not d.is_dir():
+        for d in out.iterdir():
+            if not d.is_dir() or not _is_checkpoint_dir(d) or not _has_valid_step_suffix(d.name):
                 continue
-
-            # Accept flat checkpoints (.metadata at root) …
-            is_ckpt = (d / ".metadata").exists()
-            # … and EP checkpoints (high/ or low/ subdirs with .metadata).
-            if not is_ckpt:
-                is_ckpt = any(
-                    (d / expert / ".metadata").exists()
-                    for expert in ("high", "low")
-                )
-            if not is_ckpt:
-                continue
-
-            name = d.name
-            if name.startswith("checkpoint-epoch"):
-                try:
-                    int(name.removeprefix("checkpoint-epoch"))
-                    candidates.append((int(d.stat().st_mtime_ns), d))
-                except ValueError:
-                    continue
-            elif name.startswith("checkpoint-"):
-                try:
-                    int(name.removeprefix("checkpoint-"))
-                    candidates.append((int(d.stat().st_mtime_ns), d))
-                except ValueError:
-                    continue
-
+            candidates.append((d.stat().st_mtime_ns, d))
         if not candidates:
             return None
         candidates.sort()
@@ -108,278 +99,365 @@ class CheckpointRuntimeMixin:
     # ------------------------------------------------------------------
 
     def _save_checkpoint(self, path: Path):
-        state: dict = {"train_state": self.train_state.checkpoint_view(include_optimizers=False)}
-        if self.ema is not None:
-            state["ema"] = self.ema
-
-        if self.expert_parallel:
-            expert_name = "high" if self.expert_group == 0 else "low"
-            save_path = path / expert_name
-            dcp.save(state, checkpoint_id=str(save_path), process_group=self._dp_pg)
-            self._save_optimizer_shards(save_path)
-            torch.save(self.dataloader.state_dict(), save_path / f"dataloader_rank{self.dp_rank}.pt")
-            if self.dp_rank == 0 and self.model.lora_config is not None:
-                self.model.save_lora(str(save_path / "lora"))
-            if self.dp_rank == 0:
-                logger.info("Saved checkpoint to {} (expert={})", save_path, expert_name)
-        else:
-            dcp.save(state, checkpoint_id=str(path))
-            self._save_optimizer_shards(path)
-            torch.save(self.dataloader.state_dict(), path / f"dataloader_rank{self.rank}.pt")
-            if self.rank == 0 and self.model.lora_config is not None:
-                self.model.save_lora(str(path / "lora"))
-            if self.rank == 0:
-                logger.info("Saved DCP checkpoint to {}", path)
+        path.mkdir(parents=True, exist_ok=True)
+        entries = list(self._save_plan())
+        if not entries:
+            raise RuntimeError("Nothing to save — no transformer is attached to this trainer.")
+        for entry in entries:
+            self._save_subdir(path, entry)
         self._barrier()
+        if entries[0].shard_rank == 0:
+            logger.info(
+                "Saved checkpoint to {} (subdirs: {})",
+                path,
+                ", ".join(e.subdir for e in entries),
+            )
+
+    def _save_plan(self):
+        if self.expert_parallel:
+            sub = "high" if self.expert_group == 0 else "low"
+            key = "transformer" if sub == "high" else "transformer_2"
+            model = self.model.transformer if sub == "high" else self.model.transformer_2
+            optimizer = self.optimizer_1 if sub == "high" else self.optimizer_2
+            yield _SubdirEntry(
+                subdir=sub,
+                transformer_key=key,
+                transformer_model=model,
+                transformer_optimizer=optimizer,
+                shard_rank=self.dp_rank,
+                dcp_kwargs={"process_group": self._dp_pg},
+            )
+            return
+        # Flat: save each attached transformer to its own subdir, all ranks
+        # participate in each DCP collective on the default world pg.
+        for sub, key, model, optimizer in [
+            ("high", "transformer", self.model.transformer, self.optimizer_1),
+            ("low", "transformer_2", self.model.transformer_2, self.optimizer_2),
+        ]:
+            if model is None:
+                continue
+            yield _SubdirEntry(
+                subdir=sub,
+                transformer_key=key,
+                transformer_model=model,
+                transformer_optimizer=optimizer,
+                shard_rank=self.rank,
+                dcp_kwargs={},
+            )
+
+    def _save_subdir(self, root: Path, entry: _SubdirEntry) -> None:
+        sub_path = root / entry.subdir
+        sub_path.mkdir(parents=True, exist_ok=True)
+        filter_keys = self._subdir_filter_keys(entry.transformer_key)
+
+        # 1. DCP — train_state + EMA, restricted to this subdir's models.
+        self.train_state.set_save_filter(filter_keys)
+        if self.ema is not None:
+            self.ema.set_save_filter(filter_keys)
+        try:
+            state: dict = {"train_state": self.train_state}
+            if self.ema is not None:
+                state["ema"] = self.ema
+            dcp.save(state, checkpoint_id=str(sub_path), **entry.dcp_kwargs)
+        finally:
+            self.train_state.set_save_filter(None)
+            if self.ema is not None:
+                self.ema.set_save_filter(None)
+
+        # 2. Optimizer shards — transformer for this subdir, plus text_encoder
+        #    when trained (duplicated across both subdirs).
+        if not self._hsdp_skip_optimizer_shard():
+            save_optimizer_shard(
+                sub_path / f"optimizer_{entry.transformer_key}_rank{entry.shard_rank}.pt",
+                entry.transformer_model,
+                entry.transformer_optimizer,
+            )
+            if self.cfg.train_text_encoder and self.model.text_encoder is not None:
+                save_optimizer_shard(
+                    sub_path / f"optimizer_text_encoder_rank{entry.shard_rank}.pt",
+                    self.model.text_encoder,
+                    self.optimizer_te,
+                )
+
+        # 3. Dataloader — per shard rank (duplicated across subdirs).
+        torch.save(self.dataloader.state_dict(), sub_path / f"dataloader_rank{entry.shard_rank}.pt")
+
+        # 4. LoRA adapter — gather is collective, writer is rank 0.
+        if self.model.lora_config is not None and entry.transformer_model is not None:
+            full_sd = gather_full_state_dict(entry.transformer_model)
+            if entry.shard_rank == 0:
+                write_peft_lora_adapter(
+                    sub_path / "lora" / entry.transformer_key,
+                    entry.transformer_model,
+                    full_sd,
+                )
+
+    def _subdir_filter_keys(self, transformer_key: str) -> frozenset[str]:
+        """Keys this subdir is responsible for (transformer + text_encoder if trained)."""
+        keys = {transformer_key}
+        if self.cfg.train_text_encoder and self.model.text_encoder is not None:
+            keys.add("text_encoder")
+        return frozenset(keys)
+
+    def _hsdp_skip_optimizer_shard(self) -> bool:
+        """Under HSDP, only the first replica writes optimizer shards."""
+        return (
+            self.mesh is not None
+            and self.mesh.ndim == 2
+            and self.mesh.get_local_rank("replicate") > 0
+        )
 
     # ------------------------------------------------------------------
     # Load
     # ------------------------------------------------------------------
 
     def _load_checkpoint(self, path: str):
-        ckpt_path = Path(path)
-        is_ep_checkpoint = any(
-            (ckpt_path / expert / ".metadata").exists() for expert in ("high", "low")
-        )
-        is_flat_checkpoint = (ckpt_path / ".metadata").exists()
-
-        # ---- Cross-layout transitions ----
-        if not self.expert_parallel and is_ep_checkpoint and not is_flat_checkpoint:
-            self._load_ep_into_non_ep(path)
-            return
-
-        if self.expert_parallel and is_flat_checkpoint and not is_ep_checkpoint:
-            self._load_flat_into_ep(path)
-            return
-
-        # ---- Same-layout resume ----
-        self._load_same_layout(path, is_ep_checkpoint)
-
-    # ------------------------------------------------------------------
-    # Load helpers
-    # ------------------------------------------------------------------
-
-    def _load_ep_into_non_ep(self, path: str):
-        """Load an expert-parallel checkpoint into a non-EP trainer (weights only)."""
-        if not self._reset_on_load:
+        ckpt = Path(path)
+        entries = list(self._load_plan(ckpt))
+        if not entries:
             raise ValueError(
-                "Cannot fully resume non-expert-parallel training from an expert-parallel checkpoint. "
-                "Set reset_dataloader: true, disable auto_resume, or load with expert_parallel: true."
+                f"Checkpoint at {path} is missing both high/.metadata and low/.metadata "
+                f"(and no legacy top-level .metadata). Cannot resume."
             )
 
+        mode = "init" if self._reset_on_load else "resume"
         logger.info(
-            "Loading expert-parallel checkpoint {} into non-expert-parallel run as weights-only init",
-            path,
+            "{} from {} ({}) ...",
+            "Initializing" if mode == "init" else "Resuming",
+            ckpt,
+            "legacy flat root" if entries[0].subdir == "" else
+            "subdirs: " + ", ".join(e.subdir for e in entries),
         )
-        load_dcp_into_pipeline(self.model, path, use_ema=False)
-        if self.ema is not None:
-            self.ema.reinitialize()
-            logger.info("EMA reinitialized from loaded model weights")
+        for entry in entries:
+            self._load_subdir(entry)
 
-        self._reset_training_state()
-        logger.info(
-            "Initialized from expert-parallel checkpoint with reset optimizer state, total_steps={}",
-            self.total_steps,
-        )
-
-    def _load_flat_into_ep(self, path: str):
-        """Load a flat (non-EP) checkpoint into an EP trainer (weights only).
-
-        Each expert group loads the full flat checkpoint and keeps only the
-        weights relevant to its own transformer.  Optimizer and dataloader
-        state are always reset because the parallelism topology changed.
-        """
-        if not self._reset_on_load:
-            raise ValueError(
-                "Cannot fully resume expert-parallel training from a flat checkpoint. "
-                "Set reset_dataloader: true, disable auto_resume, or load with expert_parallel: true."
-            )
-
-        logger.info(
-            "Loading flat checkpoint {} into expert-parallel run as weights-only init",
-            path,
-        )
-        load_dcp_into_pipeline(self.model, path, use_ema=False)
-        if self.ema is not None:
-            self.ema.reinitialize()
-            logger.info("EMA reinitialized from loaded model weights")
-
-        self._reset_training_state()
-        logger.info(
-            "Initialized from flat checkpoint with reset optimizer state, total_steps={}",
-            self.total_steps,
-        )
-
-    def _detect_lora_mismatch(self, load_path: str) -> str | None:
-        """Detect LoRA ↔ plain weight mismatches between checkpoint and current model.
-
-        Returns:
-            "plain_to_lora" — checkpoint has plain weights, model expects LoRA base_layer
-            "lora_to_plain" — checkpoint has LoRA base_layer weights, model has plain weights
-            "lora_rank_mismatch" — both are LoRA but shapes differ
-            None — no mismatch (or no LoRA involved)
-        """
-        checkpoint_fqns = _get_checkpoint_fqns(load_path)
-
-        for name, model_module in [
-            ("transformer", self.model.transformer),
-            ("transformer_2", self.model.transformer_2),
-        ]:
-            if model_module is None:
-                continue
-            model_state = get_model_state_dict(model_module)
-            model_has_lora = any(".base_layer." in k for k in model_state)
-            ckpt_has_lora = any(
-                f"train_state.{name}." in fqn and ".base_layer." in fqn
-                for fqn in checkpoint_fqns
-            )
-
-            if not model_has_lora and not ckpt_has_lora:
-                continue
-
-            if model_has_lora and not ckpt_has_lora:
-                # Plain checkpoint → LoRA model
-                if _should_plain_to_lora_remap(name, model_state, checkpoint_fqns):
-                    return "plain_to_lora"
-
-            if ckpt_has_lora and not model_has_lora:
-                return "lora_to_plain"
-
-            if model_has_lora and ckpt_has_lora:
-                # Both LoRA — check for rank mismatch by comparing lora_A shapes
-                for fqn in checkpoint_fqns:
-                    if f"train_state.{name}." in fqn and ".lora_A." in fqn:
-                        # Extract the corresponding model key
-                        model_key = fqn.removeprefix(f"train_state.{name}.")
-                        if model_key in model_state:
-                            # Shapes match — this key is fine
-                            pass
-                        else:
-                            # Key exists in checkpoint but not model (rank change may cause different key structure)
-                            return "lora_rank_mismatch"
-                        break
-
-        return None
-
-    def _load_same_layout(self, path: str, is_ep_checkpoint: bool):
-        """Standard resume: same EP/non-EP layout between checkpoint and trainer."""
-        # Resolve path and DCP process group for expert parallel
-        if self.expert_parallel:
-            expert_name = "high" if self.expert_group == 0 else "low"
-            ep_path = Path(path) / expert_name
-            load_path = str(ep_path) if ep_path.exists() else path
-            dl_rank = self.dp_rank
-            dcp_kwargs: dict = {"process_group": self._dp_pg}
-        else:
-            load_path = path
-            dl_rank = self.rank
-            dcp_kwargs = {}
-
-        logger.info("Resuming from {} ...", load_path)
-
-        # ---- Detect LoRA mismatches before DCP load ----
-        lora_mismatch = self._detect_lora_mismatch(load_path)
-
-        if lora_mismatch == "lora_to_plain":
-            raise ValueError(
-                f"Checkpoint at {load_path} contains LoRA weights but the current model "
-                f"has lora_rank=0 (no LoRA). To load a LoRA checkpoint into a full-rank model, "
-                f"first merge the LoRA weights or set lora_rank to match the checkpoint."
-            )
-
-        if lora_mismatch == "lora_rank_mismatch":
-            if not self._reset_on_load:
-                raise ValueError(
-                    f"Checkpoint at {load_path} has LoRA weights with a different rank than "
-                    f"the current model. Set reset_dataloader: true to load base weights only, "
-                    f"or use the same lora_rank as the checkpoint."
-                )
-            logger.warning(
-                "LoRA rank mismatch detected. Loading base weights only from {}, "
-                "LoRA adapters will be freshly initialized.",
-                load_path,
-            )
-            load_dcp_into_pipeline(self.model, load_path, use_ema=False)
+        if self._reset_on_load:
+            # Weight-only init: EMA tracks the newly-initialised model weights.
             if self.ema is not None:
                 self.ema.reinitialize()
-            self._reset_training_state()
-            logger.info("Initialized from LoRA checkpoint (rank mismatch) with base weights only")
-            return
-
-        if lora_mismatch == "plain_to_lora":
-            logger.info(
-                "Plain checkpoint detected, loading into LoRA model via base_layer remap from {}",
-                load_path,
-            )
-            load_dcp_into_pipeline(self.model, load_path, use_ema=False)
-            if self.ema is not None:
-                self.ema.reinitialize()
-                logger.info("EMA reinitialized from loaded model weights")
+                logger.info("EMA reinitialized from loaded model weights.")
             self._reset_training_state()
             logger.info(
-                "Initialized from plain checkpoint into LoRA model, total_steps={}",
+                "reset_dataloader=True: reset step/epoch/optimizer, total_steps={}",
                 self.total_steps,
             )
-            return
 
-        # ---- Standard DCP load (no LoRA mismatch) ----
-        checkpoint_optimizer_keys = get_checkpoint_optimizer_keys(load_path)
-        load_train_state = self.train_state.checkpoint_view(
-            include_optimizers=True,
-            optimizer_keys=checkpoint_optimizer_keys,
-        )
-        state: dict = {"train_state": load_train_state}
-        has_legacy_ema = (Path(load_path) / "ema").is_dir()
-        if self.ema is not None and not has_legacy_ema:
-            state["ema"] = self.ema
-        try:
-            dcp.load(state, checkpoint_id=load_path, **dcp_kwargs)
-        except Exception:
-            if "ema" in state:
-                logger.warning("Failed to load EMA from DCP, retrying without EMA")
-                dcp.load({"train_state": load_train_state}, checkpoint_id=load_path, **dcp_kwargs)
-            else:
-                raise
-        self.train_state.step = load_train_state.step
-        self.train_state.epoch = load_train_state.epoch
-        self.train_state.batch_idx = load_train_state.batch_idx
-        if self.ema is not None and "ema" not in state:
-            self.ema.reinitialize()
-            logger.warning("EMA not in DCP checkpoint, reinitialized from loaded model weights")
-        if self._reset_on_load:
-            self._reset_training_state()
-            logger.info("reset_dataloader=True: reset step/epoch/optimizer, total_steps={}", self.total_steps)
-        else:
-            restored_optimizers = self._load_optimizer_shards(Path(load_path))
-            if restored_optimizers:
-                logger.info("Restored optimizer shards: {}", ", ".join(restored_optimizers))
-            elif not checkpoint_optimizer_keys:
-                logger.warning(
-                    "Checkpoint {} has no optimizer state in DCP and no optimizer shard files; "
-                    "continuing with freshly initialized optimizer state",
-                    load_path,
-                )
-            dl_state_path = Path(load_path) / f"dataloader_rank{dl_rank}.pt"
-            if dl_state_path.exists():
-                self.dataloader.load_state_dict(torch.load(dl_state_path, weights_only=False))
-                logger.info("Restored dataloader state from {}", dl_state_path)
         logger.info(
             "Resumed at step={} epoch={} batch_idx={}",
-            self.train_state.step,
-            self.train_state.epoch,
-            self.train_state.batch_idx,
+            self.train_state.step, self.train_state.epoch, self.train_state.batch_idx,
         )
 
+    def _load_plan(self, ckpt: Path):
+        """Build the list of subdirs (or a single legacy-root entry) to load from."""
+        high_ok = (ckpt / "high" / ".metadata").exists()
+        low_ok = (ckpt / "low" / ".metadata").exists()
+
+        if not high_ok and not low_ok:
+            # Legacy flat layout: single DCP at the root holding every model.
+            if not (ckpt / ".metadata").exists():
+                return
+            yield _LoadEntry(
+                subdir="",
+                path=ckpt,
+                filter_keys=None,     # load everything that matches what's in TrainState
+                shard_rank=self._checkpoint_rank(),
+                dcp_kwargs={"process_group": self._dp_pg} if self.expert_parallel else {},
+                transformer_key=None,
+            )
+            return
+
+        # Unified layout: iterate high/ then low/.  EP trainers only load their
+        # own group's subdir; flat trainers load both when both are present.
+        for sub, key in [("high", "transformer"), ("low", "transformer_2")]:
+            sub_path = ckpt / sub
+            if not (sub_path / ".metadata").exists():
+                continue
+            if self.expert_parallel:
+                want = "high" if self.expert_group == 0 else "low"
+                if sub != want:
+                    continue
+            if getattr(self.model, key) is None:
+                # Trainer doesn't actually own this transformer; skip.
+                logger.warning(
+                    "Skipping {} (trainer has no {} attached).", sub_path, key
+                )
+                continue
+            yield _LoadEntry(
+                subdir=sub,
+                path=sub_path,
+                filter_keys=self._subdir_filter_keys(key),
+                shard_rank=self.dp_rank if self.expert_parallel else self.rank,
+                dcp_kwargs={"process_group": self._dp_pg} if self.expert_parallel else {},
+                transformer_key=key,
+            )
+
+    def _load_subdir(self, entry: _LoadEntry) -> None:
+        if self._reset_on_load:
+            self._load_for_init(entry)
+        else:
+            self._load_for_resume(entry)
+
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Resume — full state (model + optimizer + dataloader + EMA + counters).
+    # ------------------------------------------------------------------
+
+    def _load_for_resume(self, entry: _LoadEntry) -> None:
+        # 1. DCP — train_state + EMA.
+        self.train_state.set_save_filter(entry.filter_keys)
+        if self.ema is not None:
+            self.ema.set_save_filter(entry.filter_keys)
+        try:
+            state: dict = {"train_state": self.train_state}
+            if self.ema is not None:
+                state["ema"] = self.ema
+            try:
+                dcp.load(state, checkpoint_id=str(entry.path), **entry.dcp_kwargs)
+            except Exception as e:
+                if "ema" in state:
+                    logger.warning(
+                        "Failed to load EMA from {} ({}); retrying without it.",
+                        entry.path, type(e).__name__,
+                    )
+                    dcp.load({"train_state": self.train_state}, checkpoint_id=str(entry.path), **entry.dcp_kwargs)
+                    self.ema.reinitialize()
+                    logger.warning("EMA reinitialized from loaded model weights.")
+                else:
+                    raise
+        finally:
+            self.train_state.set_save_filter(None)
+            if self.ema is not None:
+                self.ema.set_save_filter(None)
+
+        # 2. Optimizer shards + dataloader.
+        restored = self._load_optimizer_shards_for(entry)
+        if restored:
+            logger.info("Restored optimizer shards from {}: {}", entry.path, ", ".join(restored))
+        elif entry.transformer_key is not None:
+            logger.warning(
+                "No optimizer shards found in {} for {}; optimizer state starts fresh.",
+                entry.path, entry.transformer_key,
+            )
+        dl_state_path = entry.path / f"dataloader_rank{entry.shard_rank}.pt"
+        if dl_state_path.exists():
+            self.dataloader.load_state_dict(torch.load(dl_state_path, weights_only=False))
+            logger.info("Restored dataloader state from {}", dl_state_path)
+
+    # ------------------------------------------------------------------
+    # Init — weight-only load (prefer EMA shadow; auto plain → LoRA remap).
+    # ------------------------------------------------------------------
+
+    def _load_for_init(self, entry: _LoadEntry) -> None:
+        """Weight-only init from a previous checkpoint.
+
+        Rank 0 materialises the entire DCP into a CPU flat dict once (~28 GB
+        for a 14B bf16 model — one-shot, acceptable for startup), extracts
+        and remaps weights per model, then all ranks reshard via
+        ``set_model_state_dict(broadcast_from_rank0=True)`` — the canonical
+        DCP pattern for going from a full CPU dict to an FSDP2-wrapped model.
+
+        EMA is *not* loaded here; it will be reinitialised once at the end of
+        ``_load_checkpoint`` to track the newly-initialised model weights.
+        Optimizer and dataloader state are not loaded either — they are reset
+        via ``_reset_training_state()`` also at the end of ``_load_checkpoint``.
+        """
+        # Which models to init from this subdir.
+        if entry.transformer_key is not None:
+            model_specs: list[tuple[str, torch.nn.Module | None]] = [
+                (entry.transformer_key, getattr(self.model, entry.transformer_key)),
+            ]
+        else:
+            # Legacy flat root — a single DCP with all models.
+            model_specs = [
+                ("transformer", self.model.transformer),
+                ("transformer_2", self.model.transformer_2),
+            ]
+        # text_encoder (when trained) is duplicated in both subdirs, so loading
+        # it twice across high/low is idempotent — same CPU tensors broadcast.
+        if self.cfg.train_text_encoder and self.model.text_encoder is not None:
+            model_specs.append(("text_encoder", self.model.text_encoder))
+
+        flat: dict[str, torch.Tensor] | None = None
+        if self.rank == 0:
+            flat = read_dcp_to_flat_dict(entry.path)
+
+        try:
+            for model_key, model in model_specs:
+                if model is None:
+                    continue
+                self._broadcast_init_weights(flat, model_key, model, entry.path)
+        finally:
+            # Release the full CPU dict before the next subdir's pass.
+            del flat
+
+    def _broadcast_init_weights(
+        self,
+        flat: dict[str, torch.Tensor] | None,
+        model_key: str,
+        model: torch.nn.Module,
+        source_path: Path,
+    ) -> None:
+        """Extract + remap on rank 0, then broadcast-reshard into ``model``."""
+        remapped: dict[str, torch.Tensor] = {}
+        source_tag: str | None = None
+
+        if self.rank == 0 and flat is not None:
+            try:
+                weights, source_tag = extract_init_weights(flat, model_key)
+                remapped = remap_for_current_model(weights, model)
+            except RuntimeError as e:
+                # Model simply isn't in this subdir's DCP (e.g. transformer_2
+                # not in a high/ subdir) — skip it silently.
+                logger.debug("No {} data in {}: {}", model_key, source_path, e)
+                remapped, source_tag = {}, None
+
+        # Collective: every rank participates, even with an empty dict.
+        set_model_state_dict(
+            model,
+            model_state_dict=remapped,
+            options=StateDictOptions(
+                full_state_dict=True,
+                broadcast_from_rank0=True,
+                strict=False,  # tolerate lora_A/B absent from plain source
+            ),
+        )
+        if self.rank == 0 and source_tag is not None:
+            logger.info("Initialized {} from {} shadows at {}", model_key, source_tag, source_path)
+
+    def _load_optimizer_shards_for(self, entry: _LoadEntry) -> list[str]:
+        """Load any optimizer shards present in this subdir (new layout).
+
+        Shard names are ``optimizer_<name>_rank{R}.pt``.  We look for
+        ``transformer`` / ``transformer_2`` / ``text_encoder`` variants; absent
+        files are skipped silently.  Legacy checkpoints (where optimizers were
+        stored inside DCP) have no shard files here, so this returns ``[]``
+        and the trainer runs with freshly initialised optimizer state.
+        """
+        restored: list[str] = []
+        candidates: list[tuple[str, torch.nn.Module | None, torch.optim.Optimizer | None]] = []
+        if entry.transformer_key == "transformer":
+            candidates.append(("transformer", self.model.transformer, self.optimizer_1))
+        elif entry.transformer_key == "transformer_2":
+            candidates.append(("transformer_2", self.model.transformer_2, self.optimizer_2))
+        else:
+            # Legacy root: try all three names.
+            candidates.extend([
+                ("transformer", self.model.transformer, self.optimizer_1),
+                ("transformer_2", self.model.transformer_2, self.optimizer_2),
+            ])
+        if self.cfg.train_text_encoder and self.model.text_encoder is not None:
+            candidates.append(("text_encoder", self.model.text_encoder, self.optimizer_te))
+
+        for name, model, optimizer in candidates:
+            path = entry.path / f"optimizer_{name}_rank{entry.shard_rank}.pt"
+            if load_optimizer_shard(path, model, optimizer):
+                restored.append(name)
+        return restored
+
+    # ------------------------------------------------------------------
+    # Reset helper
     # ------------------------------------------------------------------
 
     def _reset_training_state(self):
-        """Reset step counters, rebuild optimizers, and recompute total_steps.
-
-        Used after any load that is incompatible with full optimizer/dataloader
-        resume (cross-layout, LoRA mismatch, or explicit reset_dataloader=True).
-        """
         self.train_state.step = 0
         self.train_state.epoch = 0
         self.train_state.batch_idx = 0
@@ -388,10 +466,40 @@ class CheckpointRuntimeMixin:
             self.optimizer_te, self.optimizer_1, self.optimizer_2,
             self.fallback_te, self.fallback_1, self.fallback_2,
         ) = self._build_optimizers(self.cfg)
-        self.train_state.optimizer_te = self.optimizer_te
-        self.train_state.optimizer_1 = self.optimizer_1
-        self.train_state.optimizer_2 = self.optimizer_2
-        self.train_state.fallback_te = self.fallback_te
-        self.train_state.fallback_1 = self.fallback_1
-        self.train_state.fallback_2 = self.fallback_2
         self.total_steps = self._compute_total_steps()
+
+
+@dataclass
+class _LoadEntry:
+    subdir: str                              # "high" | "low" | "" (legacy root)
+    path: Path
+    filter_keys: frozenset[str] | None       # which models to load (None = no filter)
+    shard_rank: int
+    dcp_kwargs: dict
+    transformer_key: str | None              # transformer | transformer_2 | None (legacy)
+
+
+def _is_checkpoint_dir(d: Path) -> bool:
+    return (
+        (d / ".metadata").exists()
+        or (d / "high" / ".metadata").exists()
+        or (d / "low" / ".metadata").exists()
+    )
+
+
+def _has_valid_step_suffix(name: str) -> bool:
+    if name.startswith("checkpoint-epoch"):
+        suffix = name.removeprefix("checkpoint-epoch")
+    elif name.startswith("checkpoint-"):
+        suffix = name.removeprefix("checkpoint-")
+    else:
+        return False
+    try:
+        int(suffix)
+        return True
+    except ValueError:
+        return False
+
+
+# Re-export so call sites that import MODEL_KEYS from checkpoint_runtime still work.
+__all__ = ["CheckpointRuntimeMixin", "MODEL_KEYS"]

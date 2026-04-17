@@ -201,17 +201,6 @@ class WanI2VForTraining:
                 params.extend(p for p in m.parameters() if p.requires_grad)
         return params
 
-    def save_lora(self, path: str):
-        """Save LoRA adapter weights for active transformers."""
-        from pathlib import Path
-
-        out = Path(path)
-        out.mkdir(parents=True, exist_ok=True)
-        if self.transformer is not None:
-            self.transformer.save_pretrained(out / "transformer")
-        if self.transformer_2 is not None:
-            self.transformer_2.save_pretrained(out / "transformer_2")
-
     def _get_latent_stats(self, device: torch.device, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
         key = (str(device), str(dtype))
         cached = self._latent_stat_cache.get(key)
