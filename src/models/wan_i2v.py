@@ -190,6 +190,20 @@ class WanI2VForTraining:
         self._latent_stat_cache: dict[tuple[str, str], tuple[torch.Tensor, torch.Tensor]] = {}
         self._training_buffer_cache: dict[str, tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = {}
         self._condition_mask_cache: dict[tuple[str, int, int, int, torch.dtype], torch.Tensor] = {}
+        # Rank-synchronized generator for timestep sampling. Under non-EP FSDP,
+        # both experts live on every rank; per-rank timestep sampling can route
+        # all samples to one expert and skip the other, desyncing FSDP
+        # collectives and hanging NCCL. Trainer seeds this with a rank-invariant
+        # seed via set_sync_seed after device placement.
+        self._sync_generator: torch.Generator | None = None
+
+    def set_sync_seed(self, seed: int, device: torch.device) -> None:
+        self._sync_generator = torch.Generator(device=device).manual_seed(int(seed))
+
+    def _sync_randint(self, low: int, high: int, size: tuple[int, ...], device: torch.device) -> torch.Tensor:
+        if self._sync_generator is None:
+            return torch.randint(low, high, size, device=device)
+        return torch.randint(low, high, size, generator=self._sync_generator, device=device)
 
     def trainable_parameters(self) -> list[torch.nn.Parameter]:
         """Return a list (not generator) of all trainable parameters."""
@@ -364,11 +378,11 @@ class WanI2VForTraining:
 
         # Sample random timestep indices, then look up shifted sigma / timestep
         if self.train_experts == "high":
-            indices = torch.randint(0, self.boundary_idx, (B,), device=device)
+            indices = self._sync_randint(0, self.boundary_idx, (B,), device=device)
         elif self.train_experts == "low":
-            indices = torch.randint(self.boundary_idx, self.num_train_timesteps, (B,), device=device)
+            indices = self._sync_randint(self.boundary_idx, self.num_train_timesteps, (B,), device=device)
         else:
-            indices = torch.randint(0, self.num_train_timesteps, (B,), device=device)
+            indices = self._sync_randint(0, self.num_train_timesteps, (B,), device=device)
 
         sigmas = shifted_sigmas.index_select(0, indices).view(B, 1, 1, 1, 1)
         timesteps = shifted_timesteps.index_select(0, indices)
@@ -409,6 +423,111 @@ class WanI2VForTraining:
             selected_weights = weights.index_select(0, selected)
             loss = loss + (per_sample_loss * selected_weights).sum()
             total_weight = total_weight + selected_weights.sum()
+
+        return loss / total_weight if total_weight > 0 else loss
+
+    # ------------------------------------------------------------------
+    # On-policy correction loss
+    # ------------------------------------------------------------------
+
+    def compute_correction_loss(
+        self,
+        video_latents: torch.Tensor,
+        condition: torch.Tensor,
+        prompt_embeds: torch.Tensor,
+        num_teacher_steps: int = 4,
+        use_sde: bool = True,
+        sde_sigma_max: float = 1.0,
+        sigma_clip: tuple[float, float] = (0.05, 0.9),
+        cfg_scale: float = 1.0,
+    ) -> torch.Tensor:
+        """On-policy correction loss.
+
+        Sample training points on the straight line between the sampling noise ε
+        and the teacher's generated endpoint x̂ = ODE/SDE(ε, c):
+
+            x_σ     = σ · ε + (1 - σ) · x̂
+            target  = (x_σ - x_GT) / σ
+
+        When x̂ == x_GT this reduces exactly to the standard flow-matching
+        target (ε - x_GT). When x̂ drifts off the GT, the target applies a
+        corrective pressure that re-aims the velocity at the real GT.
+
+        The caller is responsible for activating the EMA teacher (e.g. via
+        ``self.ema.swap_to_shadow()``) around this call so the rollout uses
+        teacher weights.
+        """
+        B = video_latents.shape[0]
+        device = video_latents.device
+        dtype = video_latents.dtype
+        shifted_sigmas, shifted_timesteps, bsmntw = self._get_training_buffers(device)
+
+        # ---- 1) teacher rollout ----
+        noise = torch.randn_like(video_latents)
+        teacher_sigma_max = sde_sigma_max if use_sde else 0.0
+        with torch.no_grad():
+            rollout = self.sde_generate(
+                condition=condition,
+                prompt_embeds=prompt_embeds,
+                num_sampling_steps=num_teacher_steps,
+                sigma_min=0.0,
+                sigma_max=teacher_sigma_max,
+                cfg_scale=cfg_scale,
+                initial_latent=noise,
+            )
+        # Clone-and-drop: sde_generate returns a list of K+1 intermediate
+        # latents; we only need the final one, so copy it out and drop the
+        # list so Python can free the intermediates before the student's
+        # forward/backward.
+        x_hat = rollout["latents"][-1].detach().clone().to(dtype=dtype)
+        del rollout
+
+        # ---- 2) sample σ from the shifted schedule inside [lo, hi] ----
+        lo, hi = sigma_clip
+        mask = (shifted_sigmas >= lo) & (shifted_sigmas <= hi)
+        valid = mask.nonzero(as_tuple=False).flatten()
+        if valid.numel() == 0:
+            raise ValueError(f"No shifted sigmas fall in [{lo}, {hi}]; widen sigma_clip.")
+        indices = valid[self._sync_randint(0, valid.numel(), (B,), device=device)]
+        sigmas = shifted_sigmas.index_select(0, indices).view(B, 1, 1, 1, 1).to(dtype)
+        timesteps = shifted_timesteps.index_select(0, indices)
+        weights = bsmntw.index_select(0, indices)
+
+        # ---- 3) training point on the ε ↔ x_hat line ----
+        x_sigma = sigmas * noise + (1.0 - sigmas) * x_hat
+
+        # ---- 4) target velocity: land at x_GT when marching with dσ = -σ ----
+        # clamp is a belt-and-suspenders guard; sigma_clip already keeps σ ≥ lo.
+        target = (x_sigma - video_latents) / sigmas.clamp_min(1e-4)
+
+        # ---- 5) MoE-routed forward (mirrors compute_loss) ----
+        model_input = torch.cat([x_sigma, condition], dim=1)
+        experts = []
+        if self.transformer is not None:
+            experts.append(((timesteps >= self.boundary_timestep).nonzero(as_tuple=False).flatten(), self.transformer))
+        if self.transformer_2 is not None:
+            experts.append(((timesteps < self.boundary_timestep).nonzero(as_tuple=False).flatten(), self.transformer_2))
+
+        loss = torch.tensor(0.0, device=device, dtype=torch.float32)
+        total_weight = torch.tensor(0.0, device=device, dtype=torch.float32)
+        for selected, transformer in experts:
+            if selected.numel() == 0:
+                continue
+            pred = transformer(
+                hidden_states=model_input.index_select(0, selected),
+                timestep=timesteps.index_select(0, selected).to(torch.bfloat16),
+                encoder_hidden_states=prompt_embeds.index_select(0, selected),
+                return_dict=False,
+            )[0]
+            per_sample = F.mse_loss(
+                pred.float(),
+                target.index_select(0, selected).float(),
+                reduction="none",
+            )
+            per_sample = per_sample.mean(dim=list(range(1, per_sample.ndim)))
+            sel_w = weights.index_select(0, selected)
+            loss = loss + (per_sample * sel_w).sum()
+            total_weight = total_weight + sel_w.sum()
 
         return loss / total_weight if total_weight > 0 else loss
 

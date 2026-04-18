@@ -1,5 +1,7 @@
 """Exponential Moving Average for FSDP2 training with DCP support."""
 
+import contextlib
+
 import torch
 from torch.distributed.checkpoint.stateful import Stateful
 
@@ -41,6 +43,26 @@ class EMA(Stateful):
         """Reset shadow parameters to current model weights."""
         for p, s in self._pairs:
             s.copy_(p.data)
+
+    @contextlib.contextmanager
+    def swap_to_shadow(self):
+        """Temporarily swap live params with EMA shadow. Restore on exit.
+
+        Intended for teacher rollouts (no_grad) inside a training step. Safe
+        under FSDP2 because the swap is a per-rank local tensor copy — the
+        sharded layout is unchanged and no collectives run.
+        """
+        saved: list[torch.Tensor] = []
+        try:
+            with torch.no_grad():
+                for p, s in self._pairs:
+                    saved.append(p.data.clone())
+                    p.data.copy_(s)
+            yield
+        finally:
+            with torch.no_grad():
+                for (p, _), orig in zip(self._pairs, saved, strict=True):
+                    p.data.copy_(orig)
 
     def state_dict(self) -> dict:
         if self._save_filter is None:

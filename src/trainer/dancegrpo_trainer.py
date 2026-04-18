@@ -120,16 +120,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             all_chunk_trajs.append((traj, cur_s))
 
         rewards = torch.cat(reward_chunks, dim=1)
-
-        if self.world_size > 1:
-            all_ranks_rewards = [torch.zeros_like(rewards) for _ in range(self.world_size)]
-            dist.all_gather(all_ranks_rewards, rewards)
-            gathered_rewards = torch.cat(all_ranks_rewards, dim=0)
-            global_mean = gathered_rewards.mean()
-            global_std = gathered_rewards.std() + 1e-4
-            advantages = ((rewards - global_mean) / global_std).clamp(-cfg.grpo_adv_clip_max, cfg.grpo_adv_clip_max)
-        else:
-            advantages = self._compute_advantages(rewards)
+        advantages = self._compute_advantages(rewards)
 
         for m in [self.model.transformer, self.model.transformer_2]:
             if m is not None:

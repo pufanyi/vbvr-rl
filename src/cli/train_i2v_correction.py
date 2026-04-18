@@ -1,7 +1,8 @@
-"""Wan2.2 I2V training entry point.
+"""Wan2.2 I2V training with on-policy correction loss.
 
 Usage:
-    torchrun --nproc_per_node=2 -m src.cli.train_i2v --config configs/train_i2v.yaml
+    torchrun --nproc_per_node=8 -m src.cli.train_i2v_correction \
+        --config configs/train_i2v_correction.yaml
 """
 
 import argparse
@@ -9,14 +10,13 @@ from pathlib import Path
 
 import yaml
 
-from src.trainer import COSTrainer, I2VTrainer, SFTConfig
+from src.trainer import CorrectionConfig, I2VCorrectionTrainer
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Wan2.2 I2V Training")
+    parser = argparse.ArgumentParser(description="Wan2.2 I2V + on-policy correction training")
     parser.add_argument("--config", type=str, default=None, help="YAML/JSON config file")
-    # CLI overrides (auto-generated from SFTConfig fields)
-    for name, field_info in SFTConfig.model_fields.items():
+    for name, field_info in CorrectionConfig.model_fields.items():
         if field_info.annotation is bool:
             parser.add_argument(f"--{name}", action=argparse.BooleanOptionalAction, default=None)
         elif field_info.annotation is int:
@@ -27,18 +27,16 @@ def main():
             parser.add_argument(f"--{name}", type=str, default=None)
     args = parser.parse_args()
 
-    # Build config: defaults -> JSON -> CLI
-    cfg_dict = {}
+    cfg_dict: dict = {}
     if args.config:
         cfg_dict = yaml.safe_load(Path(args.config).read_text()) or {}
-    for name in SFTConfig.model_fields:
+    for name in CorrectionConfig.model_fields:
         v = getattr(args, name, None)
         if v is not None:
             cfg_dict[name] = v
 
-    cfg = SFTConfig(**cfg_dict)
-    trainer_cls = COSTrainer if cfg.trainer == "cos" else I2VTrainer
-    trainer = trainer_cls(cfg)
+    cfg = CorrectionConfig(**cfg_dict)
+    trainer = I2VCorrectionTrainer(cfg)
     trainer.train()
 
 

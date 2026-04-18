@@ -60,6 +60,8 @@ class BaseTrainer(CheckpointRuntimeMixin):
 
         # ---- Model ----
         self.model = self._build_model(cfg)
+        if hasattr(self.model, "set_sync_seed"):
+            self.model.set_sync_seed(cfg.seed, self.device)
         logger.info("Model loaded")
 
         # ---- Subclass hook (e.g. create reference policy copies) ----
