@@ -53,4 +53,6 @@ correction_every_n_steps: 4
 
 lora_rank: 32
 
+hsdp: true
+
 wandb_project: wan-correction-vbvr
