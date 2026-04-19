@@ -55,6 +55,10 @@ end
 
 . .venv/bin/activate.fish
 
+set -x PYTORCH_CUDA_ALLOC_CONF expandable_segments:True
+set -x NCCL_DEBUG INFO
+set -x NCCL_DEBUG_SUBSYS INIT,NET,ENV
+
 torchrun \
     --nnodes=$WORLD_SIZE \
     --nproc_per_node=$nproc \

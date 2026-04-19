@@ -3,10 +3,10 @@ latent_webdataset_dir: data/vbvr/latents/sft
 dataset_size: 1000000
 output_dir: storage/checkpoints/correction_vbvr
 
-batch_size: 4
+batch_size: 16
 gradient_accumulation_steps: 1
 num_epochs: 2
-learning_rate: 1.0e-5
+learning_rate: 1.0e-3
 weight_decay: 0.01
 max_grad_norm: 1.0
 warmup_steps: 100
@@ -53,6 +53,6 @@ correction_every_n_steps: 4
 
 lora_rank: 32
 
-hsdp: true
+fsdp: true
 
 wandb_project: wan-correction-vbvr

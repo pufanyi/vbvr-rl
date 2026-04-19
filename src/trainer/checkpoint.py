@@ -14,21 +14,18 @@ Disk layout per checkpoint directory (`R` = shard rank within the DCP group):
 For expert-parallel runs the same layout sits inside `high/` (transformer) and
 `low/` (transformer_2) subdirectories.
 
-Resume requires the **same layout** (flat ↔ EP transitions raise). For weight-
-only initialisation from an incompatible checkpoint, run
-`scripts/convert_dcp_to_lora.py` and load the resulting safetensors via
-`pipe.load_lora_weights(...)`.
+Resume requires the **same layout** (flat ↔ EP transitions raise). For
+inference, ``load_dcp_into_pipeline`` handles both full-FT and LoRA
+checkpoints — LoRA is auto-detected from the ``lora/<transformer>/``
+sidecars and applied to the pipeline before weight load.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import torch
-import torch.distributed as dist
-import torch.distributed.checkpoint as dcp
 from loguru import logger
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
@@ -214,38 +211,63 @@ def write_peft_lora_adapter(
 
     cfg = model.peft_config[adapter_name]
     cfg_dict = cfg.to_dict() if hasattr(cfg, "to_dict") else dict(cfg.__dict__)
+    # PEFT stores ``target_modules`` as a set internally; serialize sets as
+    # sorted lists so ``LoraConfig.from_pretrained`` round-trips them as lists
+    # rather than stringifying via ``default=str``.
+    for k, v in list(cfg_dict.items()):
+        if isinstance(v, set):
+            cfg_dict[k] = sorted(v)
     with open(out_dir / "adapter_config.json", "w") as f:
-        json.dump(cfg_dict, f, indent=2, default=str)
+        json.dump(cfg_dict, f, indent=2)
 
 
 # ---------------------------------------------------------------------------
 # Inference: load DCP into a non-FSDP diffusers pipeline (single process).
-# Only handles **full fine-tune** checkpoints — for LoRA, convert offline with
-# scripts/convert_dcp_to_lora.py and use ``pipe.load_lora_weights(...)``.
+# Handles both full fine-tune and LoRA checkpoints — LoRA is auto-detected
+# from the ``lora/<transformer>/adapter_config.json`` sidecars written by
+# ``write_peft_lora_adapter`` during training.
 # ---------------------------------------------------------------------------
 
 
 def load_dcp_into_pipeline(pipe, checkpoint_path: str, use_ema: bool = False) -> None:
-    needs_cleanup = False
-    if not dist.is_initialized():
-        os.environ.setdefault("MASTER_ADDR", "localhost")
-        os.environ.setdefault("MASTER_PORT", "29500")
-        os.environ.setdefault("RANK", "0")
-        os.environ.setdefault("WORLD_SIZE", "1")
-        dist.init_process_group(backend="gloo")
-        needs_cleanup = True
-    try:
-        for name, dcp_path in _detect_layout(checkpoint_path).items():
-            model = getattr(pipe, name, None)
-            if model is None:
+    """Load a DCP checkpoint into a diffusers pipeline (single-process, no FSDP).
+
+    Auto-detects LoRA by probing for ``adapter_config.json`` under
+    ``high/lora/transformer/`` and ``low/lora/transformer_2/``; when present,
+    wraps the corresponding pipeline module with the stored ``LoraConfig``
+    before loading so the DCP keys line up. Reuses the training-time init
+    primitives (``read_dcp_to_flat_dict`` + ``extract_init_weights`` +
+    ``remap_for_current_model``) so plain↔LoRA mismatches surface with the
+    same diagnostics as training.
+    """
+    apply_lora_adapters_from_checkpoint(pipe, checkpoint_path)
+
+    for name, dcp_path in _detect_layout(checkpoint_path).items():
+        model = getattr(pipe, name, None)
+        if model is None:
+            continue
+        flat = read_dcp_to_flat_dict(dcp_path)
+        weights, source_tag = None, None
+        if use_ema:
+            try:
+                weights, source_tag = extract_init_weights(flat, name, prefer="ema")
+            except RuntimeError:
+                logger.warning(
+                    "No EMA shadow for {} in {}; falling back to raw train_state weights.",
+                    name, dcp_path,
+                )
+        if weights is None:
+            try:
+                weights, source_tag = extract_init_weights(flat, name, prefer="raw")
+            except RuntimeError as e:
+                logger.debug("No {} data in {}: {}", name, dcp_path, e)
                 continue
-            if use_ema:
-                _load_ema_into_module(name, model, dcp_path)
-            else:
-                _load_weights_into_module(name, model, dcp_path)
-    finally:
-        if needs_cleanup:
-            dist.destroy_process_group()
+        remapped = remap_for_current_model(weights, model)
+        missing, unexpected = model.load_state_dict(remapped, strict=False)
+        logger.info(
+            "Loaded {} {} weights from {} (missing={}, unexpected={})",
+            name, source_tag, dcp_path, len(missing), len(unexpected),
+        )
 
 
 def _detect_layout(checkpoint_path: str) -> dict[str, str]:
@@ -262,25 +284,76 @@ def _detect_layout(checkpoint_path: str) -> dict[str, str]:
     return {"transformer": checkpoint_path, "transformer_2": checkpoint_path}
 
 
-def _load_weights_into_module(name: str, model: torch.nn.Module, dcp_path: str) -> None:
-    placeholder = {pname: torch.empty_like(t, device="cpu") for pname, t in model.state_dict().items()}
-    state = {"train_state": {name: placeholder}}
-    dcp.load(state, checkpoint_id=dcp_path)
-    model.load_state_dict(state["train_state"][name])
-    logger.info("Loaded {} weights from {}", name, dcp_path)
+def apply_lora_adapters_from_checkpoint(pipe, checkpoint_path: str) -> bool:
+    """Wrap the pipeline's transformers with LoRA adapters stored in a checkpoint.
+
+    Looks for PEFT adapter sidecars written by ``write_peft_lora_adapter``:
+
+        {ckpt}/high/lora/transformer/     → pipe.transformer
+        {ckpt}/low/lora/transformer_2/    → pipe.transformer_2
+
+    For each present adapter, instantiates a ``LoraConfig`` from the sidecar
+    and calls ``model.add_adapter(cfg)`` so the model's ``state_dict`` keys
+    match the wrapped layout saved in the DCP. If the target module already
+    carries a PEFT adapter (e.g. a prior checkpoint in a multi-checkpoint
+    eval loop), skips re-wrapping — the subsequent DCP load will refresh
+    the LoRA weights in place.
+
+    Returns ``True`` if the checkpoint contains any LoRA adapter sidecars.
+    """
+    from peft import LoraConfig
+
+    p = Path(checkpoint_path)
+    targets = [
+        ("transformer", p / "high" / "lora" / "transformer"),
+        ("transformer_2", p / "low" / "lora" / "transformer_2"),
+    ]
+    found = False
+    for name, adapter_dir in targets:
+        if not (adapter_dir / "adapter_config.json").exists():
+            continue
+        found = True
+        model = getattr(pipe, name, None)
+        if model is None:
+            continue
+        if getattr(model, "peft_config", None):
+            logger.info("{} already has a PEFT adapter; skipping add_adapter", name)
+            continue
+        cfg = LoraConfig.from_pretrained(str(adapter_dir))
+        _repair_stringified_collections(cfg)
+        model.add_adapter(cfg)
+        logger.info("Applied LoRA adapter to {} from {}", name, adapter_dir)
+    return found
 
 
-def _load_ema_into_module(name: str, model: torch.nn.Module, dcp_path: str) -> None:
-    shadow: dict[str, torch.Tensor] = {
-        f"{name}.{pname}": torch.empty_like(p, device="cpu")
-        for pname, p in model.named_parameters()
-    }
-    state = {"ema": {"shadow": shadow, "decay": torch.tensor(0.0)}}
-    dcp.load(state, checkpoint_id=dcp_path)
-    prefix = f"{name}."
-    sd = {k.removeprefix(prefix): v for k, v in shadow.items() if k.startswith(prefix)}
-    model.load_state_dict(sd, strict=False)
-    logger.info("Loaded {} EMA weights from {}", name, dcp_path)
+def _repair_stringified_collections(cfg) -> None:
+    """Backfill for legacy adapter_config.json that stored sets via ``default=str``.
+
+    Older ``write_peft_lora_adapter`` calls dumped ``target_modules`` as e.g.
+    ``"{'to_q', 'to_k'}"`` because ``json.dump(default=str)`` stringified
+    the PEFT-internal set. ``LoraConfig.from_pretrained`` then surfaces that
+    as a bare ``str``, which ``add_adapter`` would interpret as a single
+    regex pattern and silently match nothing. Parse it back to a list.
+    """
+    import ast
+
+    for field in ("target_modules", "exclude_modules", "modules_to_save"):
+        value = getattr(cfg, field, None)
+        if isinstance(value, str) and value.startswith(("{", "[")):
+            try:
+                parsed = ast.literal_eval(value)
+            except (ValueError, SyntaxError):
+                continue
+            if isinstance(parsed, (set, frozenset)):
+                parsed = sorted(parsed)
+            elif isinstance(parsed, tuple):
+                parsed = list(parsed)
+            if isinstance(parsed, list):
+                setattr(cfg, field, parsed)
+                logger.info(
+                    "Repaired stringified {} in adapter_config: {!r} -> {!r}",
+                    field, value, parsed,
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -330,26 +403,39 @@ def _flatten_nested(d, prefix: str = "") -> dict[str, torch.Tensor]:
 def extract_init_weights(
     flat: dict[str, torch.Tensor],
     model_key: str,
+    prefer: str = "auto",
 ) -> tuple[dict[str, torch.Tensor], str]:
     """Pull a single model's init weights out of a flat DCP dict.
 
-    Prefers ``ema.shadow.<model_key>.*`` over ``train_state.<model_key>.*``
-    (EMA is a higher-quality init when available).  Keys in the returned dict
-    are local to the model (e.g. ``blocks.0.attn1.to_q.weight``).
+    ``prefer`` selects which shadow to use:
+      * ``"auto"`` (default): EMA if present, else raw — used by training
+        init-from-checkpoint (EMA is a higher-quality init when available).
+      * ``"ema"``: EMA only; raises if absent.
+      * ``"raw"``: raw ``train_state`` only; raises if absent.
+
+    Keys in the returned dict are local to the model (e.g.
+    ``blocks.0.attn1.to_q.weight``).
 
     Returns ``(weights, source_tag)`` where ``source_tag`` is ``"EMA"`` or
-    ``"raw"``.  Raises ``RuntimeError`` if neither source is present.
+    ``"raw"``.  Raises ``RuntimeError`` if the requested source is absent.
     """
+    assert prefer in ("auto", "ema", "raw"), f"prefer must be auto/ema/raw, got {prefer!r}"
     ema_prefix = f"ema.shadow.{model_key}."
     raw_prefix = f"train_state.{model_key}."
 
-    ema_keys = [k for k in flat if k.startswith(ema_prefix)]
-    if ema_keys:
-        return {k[len(ema_prefix):]: flat[k] for k in ema_keys}, "EMA"
+    if prefer in ("auto", "ema"):
+        ema_keys = [k for k in flat if k.startswith(ema_prefix)]
+        if ema_keys:
+            return {k[len(ema_prefix):]: flat[k] for k in ema_keys}, "EMA"
+        if prefer == "ema":
+            raise RuntimeError(
+                f"Checkpoint has no EMA data for {model_key} (prefix {ema_prefix!r})."
+            )
 
-    raw_keys = [k for k in flat if k.startswith(raw_prefix)]
-    if raw_keys:
-        return {k[len(raw_prefix):]: flat[k] for k in raw_keys}, "raw"
+    if prefer in ("auto", "raw"):
+        raw_keys = [k for k in flat if k.startswith(raw_prefix)]
+        if raw_keys:
+            return {k[len(raw_prefix):]: flat[k] for k in raw_keys}, "raw"
 
     raise RuntimeError(
         f"Checkpoint has no data for {model_key} "
