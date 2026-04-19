@@ -49,6 +49,7 @@ from tqdm import tqdm
 # Distributed helpers
 # ---------------------------------------------------------------------------
 
+
 def _is_distributed() -> bool:
     return "RANK" in os.environ
 
@@ -78,6 +79,7 @@ def _barrier():
 # Args
 # ---------------------------------------------------------------------------
 
+
 def parse_args():
     p = argparse.ArgumentParser(description="Precompute VAE + T5 embeddings to parquet")
     p.add_argument("--input", required=True, help="Dataset JSON config (same format as training)")
@@ -96,6 +98,7 @@ def parse_args():
 # Tensor serialization
 # ---------------------------------------------------------------------------
 
+
 def tensor_to_bytes(t: torch.Tensor) -> bytes:
     return t.contiguous().cpu().numpy().tobytes()
 
@@ -103,6 +106,7 @@ def tensor_to_bytes(t: torch.Tensor) -> bytes:
 # ---------------------------------------------------------------------------
 # Model loading
 # ---------------------------------------------------------------------------
+
 
 def load_model_components(model_path: str, device: str):
     """Load only VAE + T5 (no transformers needed)."""
@@ -114,9 +118,7 @@ def load_model_components(model_path: str, device: str):
     tokenizer = AutoTokenizer.from_pretrained(model_dir / "tokenizer")
     logger.info("Loaded tokenizer")
 
-    text_encoder = UMT5EncoderModel.from_pretrained(
-        model_dir / "text_encoder", torch_dtype=torch.bfloat16
-    )
+    text_encoder = UMT5EncoderModel.from_pretrained(model_dir / "text_encoder", torch_dtype=torch.bfloat16)
     text_encoder.to(device).eval().requires_grad_(False)
     logger.info("Loaded text encoder")
 
@@ -144,6 +146,7 @@ def load_model_components(model_path: str, device: str):
 # ---------------------------------------------------------------------------
 # Encoding helpers
 # ---------------------------------------------------------------------------
+
 
 @torch.no_grad()
 def encode_text(components, prompts: list[str], device: str) -> torch.Tensor:
@@ -218,6 +221,7 @@ def prepare_condition(components, image: torch.Tensor, num_frames: int, height: 
 # Video loading
 # ---------------------------------------------------------------------------
 
+
 def load_video(video_path: str, height: int, width: int, num_frames: int) -> torch.Tensor:
     """Load video frames as uint8 (C, T, H, W)."""
     import decord
@@ -232,6 +236,7 @@ def load_video(video_path: str, height: int, width: int, num_frames: int) -> tor
 # ---------------------------------------------------------------------------
 # Core processing
 # ---------------------------------------------------------------------------
+
 
 def process_rows(
     table: pa.Table,
@@ -286,9 +291,7 @@ def process_rows(
         h, w = 0, 0
 
         for i in batch_rows:
-            video_paths = (
-                table.column("videos")[i].as_py() if "videos" in cols else [table.column("video")[i].as_py()]
-            )
+            video_paths = table.column("videos")[i].as_py() if "videos" in cols else [table.column("video")[i].as_py()]
 
             prompt = table.column("prompt")[i].as_py() if "prompt" in cols else ""
             image_path = table.column("image")[i].as_py() if "image" in cols else None
@@ -307,6 +310,7 @@ def process_rows(
 
             if image_path is not None:
                 from PIL import Image
+
                 with Image.open(resolve(image_path)) as img:
                     img = img.convert("RGB").resize((w, h), Image.LANCZOS)
                     image_tensor = torch.from_numpy(np.array(img, dtype=np.uint8)).permute(2, 0, 1).contiguous()
@@ -323,10 +327,7 @@ def process_rows(
         step_latents: list[torch.Tensor] = []
         for step_idx in range(num_steps):
             video_batch = (
-                torch.stack(batch_all_videos[step_idx])
-                .to(device=device, dtype=torch.bfloat16)
-                .div(127.5)
-                .sub(1.0)
+                torch.stack(batch_all_videos[step_idx]).to(device=device, dtype=torch.bfloat16).div(127.5).sub(1.0)
             )
             step_latents.append(encode_video(components, video_batch))
 
@@ -354,19 +355,22 @@ def process_rows(
     for step_idx in range(num_steps - 1):
         out_columns[f"video_latents_{step_idx}"] = step_latents_cols[step_idx]
     out_columns["final_latents"] = step_latents_cols[-1]
-    out_columns.update({
-        "condition": condition_col,
-        "num_steps": [num_steps] * n,
-        "embed_shape": embed_shape_col,
-        "latent_shape": latent_shape_col,
-        "condition_shape": condition_shape_col,
-    })
+    out_columns.update(
+        {
+            "condition": condition_col,
+            "num_steps": [num_steps] * n,
+            "embed_shape": embed_shape_col,
+            "latent_shape": latent_shape_col,
+            "condition_shape": condition_shape_col,
+        }
+    )
     return pa.table(out_columns)
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     args = parse_args()
@@ -416,8 +420,16 @@ def main():
             logger.info("  Rank 0 processing {} rows", len(my_indices))
 
         shard_table = process_rows(
-            table, my_indices, root, components, device, args.batch_size,
-            cfg_num_frames, cfg_max_area, cfg_height, cfg_width,
+            table,
+            my_indices,
+            root,
+            components,
+            device,
+            args.batch_size,
+            cfg_num_frames,
+            cfg_max_area,
+            cfg_height,
+            cfg_width,
         )
 
         # Write per-rank shard

@@ -124,7 +124,7 @@ def extract_lora(
     for fqn, tensor in flat_sd.items():
         if not fqn.startswith(prefix):
             continue
-        local = fqn[len(prefix):]
+        local = fqn[len(prefix) :]
         # Keep only LoRA-specific tensors (lora_A, lora_B, lora_magnitude_vector, ...).
         if ".lora_" not in local and not local.startswith("lora_"):
             continue

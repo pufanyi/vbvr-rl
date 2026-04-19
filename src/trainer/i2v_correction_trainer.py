@@ -126,12 +126,7 @@ class I2VCorrectionTrainer(BaseTrainer):
         #     amortized over N micro-steps → (K + 3) / N extra forwards per micro-step
         corr_extra_per_micro = (cfg.correction_num_teacher_steps + 3) / max(cfg.correction_every_n_steps, 1)
         total_fwd_per_micro = 3 + corr_extra_per_micro
-        flops_per_step = (
-            total_fwd_per_micro
-            * weighted_fwd
-            * cfg.batch_size
-            * cfg.gradient_accumulation_steps
-        )
+        flops_per_step = total_fwd_per_micro * weighted_fwd * cfg.batch_size * cfg.gradient_accumulation_steps
 
         logger.info(
             "MFU monitor: seq_len={}, fwd={:.2e} FLOPs/sample, step={:.2e} FLOPs "
@@ -159,9 +154,7 @@ class I2VCorrectionTrainer(BaseTrainer):
             video = to_model_pixels(batch["videos"][-1], self.device)
             image = to_model_pixels(batch["image"], self.device)
             video_latents = self.model.encode_video(video)
-            condition = self.model.prepare_condition(
-                image, video.shape[2], video.shape[-2], video.shape[-1]
-            )
+            condition = self.model.prepare_condition(image, video.shape[2], video.shape[-2], video.shape[-1])
         return video_latents, condition, prompt_embeds
 
     def _train_step(self, batch: dict, is_last_micro_step: bool) -> torch.Tensor:
@@ -198,9 +191,7 @@ class I2VCorrectionTrainer(BaseTrainer):
         if do_correction:
             effective_lambda = cfg.correction_weight * cfg.correction_every_n_steps
             self._set_requires_gradient_sync(is_last_micro_step)
-            teacher_ctx = (
-                self.ema.swap_to_shadow() if self.ema is not None else contextlib.nullcontext()
-            )
+            teacher_ctx = self.ema.swap_to_shadow() if self.ema is not None else contextlib.nullcontext()
             with teacher_ctx:
                 loss_corr = self.model.compute_correction_loss(
                     video_latents=video_latents,
@@ -261,9 +252,7 @@ class I2VCorrectionTrainer(BaseTrainer):
 
                 if is_last_micro_step:
                     self._all_reduce_gradients()
-                    self._last_grad_norm = torch.nn.utils.clip_grad_norm_(
-                        self.params, cfg.max_grad_norm
-                    ).item()
+                    self._last_grad_norm = torch.nn.utils.clip_grad_norm_(self.params, cfg.max_grad_norm).item()
 
                     lr = cosine_lr(global_step, cfg.warmup_steps, self.total_steps, cfg.learning_rate)
                     for opt in self.optimizers:
@@ -303,9 +292,7 @@ class I2VCorrectionTrainer(BaseTrainer):
                             batches = None
                         fractional_epoch = epoch + (batch_idx + 1) / batches if batches else float(epoch)
 
-                        corr_str = (
-                            f"{self._last_corr_loss:.4f}" if self._last_corr_loss is not None else "-"
-                        )
+                        corr_str = f"{self._last_corr_loss:.4f}" if self._last_corr_loss is not None else "-"
                         logger.info(
                             "step={}/{} epoch={:.2f} loss={:.4f} fm={:.4f} corr={} "
                             "lr={:.2e} grad_norm={:.4f} mfu={} eta={} ({} s/it)",

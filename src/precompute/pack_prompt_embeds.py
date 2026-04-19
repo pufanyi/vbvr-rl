@@ -71,14 +71,16 @@ def main():
             seq_len = info["shape"][0]
             idx = int(key)
             sm = samples_meta[idx] if idx < len(samples_meta) else {}
-            all_samples.append({
-                "source_file": str(sf_path),
-                "key": key,
-                "seq_len": seq_len,
-                "prompt": sm.get("prompt", ""),
-                "tar": sm.get("tar", ""),
-                "index_in_tar": sm.get("index_in_tar", -1),
-            })
+            all_samples.append(
+                {
+                    "source_file": str(sf_path),
+                    "key": key,
+                    "seq_len": seq_len,
+                    "prompt": sm.get("prompt", ""),
+                    "tar": sm.get("tar", ""),
+                    "index_in_tar": sm.get("index_in_tar", -1),
+                }
+            )
 
     logger.info("Total samples: {}", len(all_samples))
 
@@ -138,20 +140,25 @@ def main():
     # Write index parquet
     # ------------------------------------------------------------------
     logger.info("Writing index.parquet …")
-    table = pa.table({
-        "shard_id": pa.array([s["shard_id"] for s in all_samples], type=pa.int32()),
-        "local_idx": pa.array([s["local_idx"] for s in all_samples], type=pa.int32()),
-        "seq_len": pa.array([s["seq_len"] for s in all_samples], type=pa.int32()),
-        "prompt": pa.array([s["prompt"] for s in all_samples], type=pa.string()),
-        "tar": pa.array([s["tar"] for s in all_samples], type=pa.string()),
-        "index_in_tar": pa.array([s["index_in_tar"] for s in all_samples], type=pa.int32()),
-    })
+    table = pa.table(
+        {
+            "shard_id": pa.array([s["shard_id"] for s in all_samples], type=pa.int32()),
+            "local_idx": pa.array([s["local_idx"] for s in all_samples], type=pa.int32()),
+            "seq_len": pa.array([s["seq_len"] for s in all_samples], type=pa.int32()),
+            "prompt": pa.array([s["prompt"] for s in all_samples], type=pa.string()),
+            "tar": pa.array([s["tar"] for s in all_samples], type=pa.string()),
+            "index_in_tar": pa.array([s["index_in_tar"] for s in all_samples], type=pa.int32()),
+        }
+    )
     pq.write_table(table, str(output_dir / "index.parquet"))
 
     embed_gb = total_tokens * 4096 * 2 / 1e9
     logger.info(
         "Done! {} shards, {} samples, {} total tokens, ~{:.1f} GB (embeds only)",
-        num_shards, len(all_samples), total_tokens, embed_gb,
+        num_shards,
+        len(all_samples),
+        total_tokens,
+        embed_gb,
     )
 
 

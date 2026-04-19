@@ -107,19 +107,23 @@ def _write_shard(
                 condition = vae_sf.get_tensor("condition")
 
             # Serialize tensors
-            st_bytes = st_save({
-                "prompt_embeds": prompt_embeds,
-                "latents": latents,
-                "condition": condition,
-            })
+            st_bytes = st_save(
+                {
+                    "prompt_embeds": prompt_embeds,
+                    "latents": latents,
+                    "condition": condition,
+                }
+            )
 
             # Serialize metadata
-            meta_bytes = json.dumps({
-                "prompt": sample["prompt"],
-                "tar": sample["tar"],
-                "index_in_tar": sample["index_in_tar"],
-                "seq_len": sample["seq_len"],
-            }).encode()
+            meta_bytes = json.dumps(
+                {
+                    "prompt": sample["prompt"],
+                    "tar": sample["tar"],
+                    "index_in_tar": sample["index_in_tar"],
+                    "seq_len": sample["seq_len"],
+                }
+            ).encode()
 
             key = f"{global_offset + local_idx:07d}"
             _add_tar_entry(tar_file, f"{key}.safetensors", st_bytes)
@@ -172,15 +176,17 @@ def main():
             idx = int(key)
             sm = samples_meta[idx] if idx < len(samples_meta) else {}
             tar_name = sm.get("tar", "")
-            all_samples.append({
-                "source_file": str(sf_path),
-                "key": key,
-                "seq_len": info["shape"][0],
-                "prompt": sm.get("prompt", ""),
-                "tar": tar_name,
-                "tar_stem": Path(tar_name).stem if tar_name else "",
-                "index_in_tar": sm.get("index_in_tar", -1),
-            })
+            all_samples.append(
+                {
+                    "source_file": str(sf_path),
+                    "key": key,
+                    "seq_len": info["shape"][0],
+                    "prompt": sm.get("prompt", ""),
+                    "tar": tar_name,
+                    "tar_stem": Path(tar_name).stem if tar_name else "",
+                    "index_in_tar": sm.get("index_in_tar", -1),
+                }
+            )
 
     logger.info("Total prompt embed samples: {}", len(all_samples))
 
@@ -188,9 +194,7 @@ def main():
     # Filter to samples that have VAE latents (inner join)
     # ------------------------------------------------------------------
     logger.info("Scanning VAE latent directory …")
-    vae_available = set(
-        f.name for f in vae_dir.iterdir() if f.suffix == ".safetensors"
-    )
+    vae_available = set(f.name for f in vae_dir.iterdir() if f.suffix == ".safetensors")
     logger.info("Found {} VAE latent files", len(vae_available))
 
     complete: list[dict] = []
@@ -203,7 +207,9 @@ def main():
     missing = len(all_samples) - len(complete)
     logger.info(
         "Complete samples (have both): {} / {} (missing VAE: {})",
-        len(complete), len(all_samples), missing,
+        len(complete),
+        len(all_samples),
+        missing,
     )
     if not complete:
         logger.error("No complete samples found!")
@@ -228,15 +234,15 @@ def main():
     num_workers = min(args.num_workers, num_shards)
     logger.info(
         "Writing {} shards (~{} samples each) with {} workers …",
-        num_shards, sps, num_workers,
+        num_shards,
+        sps,
+        num_workers,
     )
 
     counter = Value("i", 0)
     done_event = threading.Event()
     pbar = tqdm(total=len(complete), desc="Writing samples", unit="sample")
-    monitor = threading.Thread(
-        target=_progress_monitor, args=(counter, len(complete), pbar, done_event)
-    )
+    monitor = threading.Thread(target=_progress_monitor, args=(counter, len(complete), pbar, done_event))
     monitor.start()
 
     total_bytes = 0
@@ -246,9 +252,7 @@ def main():
         initargs=(counter,),
     ) as executor:
         futures = {
-            executor.submit(
-                _write_shard, shard_id, samples, str(output_dir), offset
-            ): shard_id
+            executor.submit(_write_shard, shard_id, samples, str(output_dir), offset): shard_id
             for shard_id, samples, offset in shard_chunks
         }
         for future in as_completed(futures):
@@ -261,7 +265,10 @@ def main():
 
     logger.info(
         "Done! {} shards, {} samples, {:.1f} GB → {}",
-        num_shards, len(complete), total_bytes / 1e9, output_dir,
+        num_shards,
+        len(complete),
+        total_bytes / 1e9,
+        output_dir,
     )
 
 

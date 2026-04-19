@@ -155,7 +155,7 @@ class I2VTrainer(BaseTrainer):
                             eta_str = "?"
                             s_it_str = "?"
 
-                        if hasattr(self.dataloader.dataset, '__len__'):
+                        if hasattr(self.dataloader.dataset, "__len__"):
                             batches = len(self.dataloader)
                         elif cfg.dataset_size is not None:
                             dp = self.dp_size if self.expert_parallel else self.world_size

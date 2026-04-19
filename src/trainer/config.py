@@ -137,7 +137,7 @@ class CorrectionConfig(TrainConfig):
 
     # Teacher rollout
     correction_num_teacher_steps: int = 4
-    correction_use_sde: bool = True       # False -> deterministic ODE
+    correction_use_sde: bool = True  # False -> deterministic ODE
     correction_sde_sigma_max: float = 1.0
     correction_cfg_scale: float = 1.0
 

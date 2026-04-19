@@ -5,10 +5,12 @@ from torch.distributed.device_mesh import DeviceMesh as _DeviceMesh
 
 _orig_device_mesh_size = _DeviceMesh.size
 
+
 def _device_mesh_size_patched(self, mesh_dim=None):
     if isinstance(mesh_dim, str) and self.mesh_dim_names:
         mesh_dim = list(self.mesh_dim_names).index(mesh_dim)
     return _orig_device_mesh_size(self, mesh_dim)
+
 
 _DeviceMesh.size = _device_mesh_size_patched
 

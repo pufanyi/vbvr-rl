@@ -500,8 +500,7 @@ def main():
 
             if args.encode_all_videos:
                 all_video_latents = [
-                    encode_video(vae_components, to_model_pixels(video, torch.device(device)))
-                    for video in videos
+                    encode_video(vae_components, to_model_pixels(video, torch.device(device))) for video in videos
                 ]
             else:
                 all_video_latents = [encode_video(vae_components, final_video_pixels)]

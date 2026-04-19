@@ -134,8 +134,7 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--samples-per-shard", type=int, default=1000)
     ap.add_argument("--num-workers", type=int, default=os.cpu_count() or 32)
-    ap.add_argument("--scan-workers", type=int, default=None,
-                    help="defaults to min(num-workers, 64)")
+    ap.add_argument("--scan-workers", type=int, default=None, help="defaults to min(num-workers, 64)")
     args = ap.parse_args()
 
     if not 0.0 < args.sft_ratio < 1.0:
@@ -176,9 +175,11 @@ def main() -> None:
     subsets = [("sft", sft_dst, shuffled[:cut]), ("rl", rl_dst, shuffled[cut:])]
     logger.info("split: sft=%d rl=%d", cut, n - cut)
 
-    logger.info("mmap'ing %d input shards in parent (~%.1f GB virtual)",
-                len(src_paths),
-                sum(os.path.getsize(p) for p in src_paths) / 1e9)
+    logger.info(
+        "mmap'ing %d input shards in parent (~%.1f GB virtual)",
+        len(src_paths),
+        sum(os.path.getsize(p) for p in src_paths) / 1e9,
+    )
     _mmap_all(src_paths)
 
     write_ctx = mp.get_context("fork")

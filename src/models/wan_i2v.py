@@ -83,9 +83,7 @@ class WanI2VForTraining:
             logger.info("Loaded tokenizer")
 
             # ---- Text encoder ----
-            self.text_encoder = UMT5EncoderModel.from_pretrained(
-                model_dir / "text_encoder", torch_dtype=torch.bfloat16
-            )
+            self.text_encoder = UMT5EncoderModel.from_pretrained(model_dir / "text_encoder", torch_dtype=torch.bfloat16)
             logger.info("Loaded text_encoder")
             if train_text_encoder:
                 self.text_encoder.train()

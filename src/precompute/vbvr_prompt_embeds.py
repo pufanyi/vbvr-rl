@@ -34,6 +34,7 @@ from tqdm import tqdm
 # Distributed helpers
 # ---------------------------------------------------------------------------
 
+
 def _is_distributed() -> bool:
     return "RANK" in os.environ
 
@@ -58,6 +59,7 @@ def _init_distributed():
 # Args
 # ---------------------------------------------------------------------------
 
+
 def parse_args():
     p = argparse.ArgumentParser(description="Precompute T5 prompt embeddings for VBVR")
     p.add_argument("--metadata", required=True, help="Path to VBVR metadata.parquet")
@@ -75,6 +77,7 @@ def parse_args():
 # Model loading (T5 only)
 # ---------------------------------------------------------------------------
 
+
 def load_text_encoder(model_path: str, device: str):
     from transformers import AutoTokenizer, UMT5EncoderModel
 
@@ -83,9 +86,7 @@ def load_text_encoder(model_path: str, device: str):
     tokenizer = AutoTokenizer.from_pretrained(model_dir / "tokenizer")
     logger.info("Loaded tokenizer")
 
-    text_encoder = UMT5EncoderModel.from_pretrained(
-        model_dir / "text_encoder", torch_dtype=torch.bfloat16
-    )
+    text_encoder = UMT5EncoderModel.from_pretrained(model_dir / "text_encoder", torch_dtype=torch.bfloat16)
     text_encoder.to(device).eval().requires_grad_(False)
     logger.info("Loaded text encoder")
 
@@ -98,6 +99,7 @@ def load_text_encoder(model_path: str, device: str):
 # ---------------------------------------------------------------------------
 # Encoding
 # ---------------------------------------------------------------------------
+
 
 @torch.no_grad()
 def encode_text(components, prompts: list[str], device: str) -> torch.Tensor:
@@ -143,6 +145,7 @@ def encode_text(components, prompts: list[str], device: str) -> torch.Tensor:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     args = parse_args()
     _init_distributed()
@@ -177,12 +180,14 @@ def main():
     for tar_name in sorted(tar_to_rows.keys()):
         tar_stem = Path(tar_name).stem
         for idx, row in enumerate(tar_to_rows[tar_name]):
-            all_samples.append({
-                "prompt": row["prompt"],
-                "tar_name": tar_name,
-                "tar_stem": tar_stem,
-                "index_in_tar": idx,
-            })
+            all_samples.append(
+                {
+                    "prompt": row["prompt"],
+                    "tar_name": tar_name,
+                    "tar_stem": tar_stem,
+                    "index_in_tar": idx,
+                }
+            )
 
     if rank == 0:
         logger.info("Total samples: {}", len(all_samples))
@@ -195,8 +200,7 @@ def main():
     if args.skip_existing:
         before = len(my_samples)
         my_samples = [
-            s for s in my_samples
-            if not (output_dir / f"{s['tar_stem']}_{s['index_in_tar']}.safetensors").exists()
+            s for s in my_samples if not (output_dir / f"{s['tar_stem']}_{s['index_in_tar']}.safetensors").exists()
         ]
         skipped = before - len(my_samples)
         if skipped > 0:
@@ -221,10 +225,9 @@ def main():
         tensors = {str(j): embeds_cpu[j] for j in range(len(batch))}
         meta = {
             "count": str(len(batch)),
-            "samples": json.dumps([
-                {"tar": s["tar_name"], "index_in_tar": s["index_in_tar"], "prompt": s["prompt"]}
-                for s in batch
-            ]),
+            "samples": json.dumps(
+                [{"tar": s["tar_name"], "index_in_tar": s["index_in_tar"], "prompt": s["prompt"]} for s in batch]
+            ),
         }
         out_path = output_dir / f"rank{rank}_batch{batch_idx}.safetensors"
         tmp_path = out_path.with_suffix(".safetensors.tmp")

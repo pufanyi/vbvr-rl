@@ -139,11 +139,7 @@ def save_optimizer_shard(
 ) -> bool:
     if model is None or optimizer is None:
         return False
-    state = (
-        get_optimizer_state_dict(model, optimizer)
-        if _is_fsdp_wrapped(model)
-        else optimizer.state_dict()
-    )
+    state = get_optimizer_state_dict(model, optimizer) if _is_fsdp_wrapped(model) else optimizer.state_dict()
     torch.save(state, path)
     return True
 
@@ -203,9 +199,7 @@ def write_peft_lora_adapter(
     from safetensors.torch import save_file
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    adapter_sd = get_peft_model_state_dict(
-        model, state_dict=full_state_dict, adapter_name=adapter_name
-    )
+    adapter_sd = get_peft_model_state_dict(model, state_dict=full_state_dict, adapter_name=adapter_name)
     adapter_sd = {k: v.detach().contiguous().cpu() for k, v in adapter_sd.items()}
     save_file(adapter_sd, str(out_dir / "adapter_model.safetensors"))
 
@@ -254,7 +248,8 @@ def load_dcp_into_pipeline(pipe, checkpoint_path: str, use_ema: bool = False) ->
             except RuntimeError:
                 logger.warning(
                     "No EMA shadow for {} in {}; falling back to raw train_state weights.",
-                    name, dcp_path,
+                    name,
+                    dcp_path,
                 )
         if weights is None:
             try:
@@ -266,7 +261,11 @@ def load_dcp_into_pipeline(pipe, checkpoint_path: str, use_ema: bool = False) ->
         missing, unexpected = model.load_state_dict(remapped, strict=False)
         logger.info(
             "Loaded {} {} weights from {} (missing={}, unexpected={})",
-            name, source_tag, dcp_path, len(missing), len(unexpected),
+            name,
+            source_tag,
+            dcp_path,
+            len(missing),
+            len(unexpected),
         )
 
 
@@ -352,7 +351,9 @@ def _repair_stringified_collections(cfg) -> None:
                 setattr(cfg, field, parsed)
                 logger.info(
                     "Repaired stringified {} in adapter_config: {!r} -> {!r}",
-                    field, value, parsed,
+                    field,
+                    value,
+                    parsed,
                 )
 
 
@@ -426,20 +427,17 @@ def extract_init_weights(
     if prefer in ("auto", "ema"):
         ema_keys = [k for k in flat if k.startswith(ema_prefix)]
         if ema_keys:
-            return {k[len(ema_prefix):]: flat[k] for k in ema_keys}, "EMA"
+            return {k[len(ema_prefix) :]: flat[k] for k in ema_keys}, "EMA"
         if prefer == "ema":
-            raise RuntimeError(
-                f"Checkpoint has no EMA data for {model_key} (prefix {ema_prefix!r})."
-            )
+            raise RuntimeError(f"Checkpoint has no EMA data for {model_key} (prefix {ema_prefix!r}).")
 
     if prefer in ("auto", "raw"):
         raw_keys = [k for k in flat if k.startswith(raw_prefix)]
         if raw_keys:
-            return {k[len(raw_prefix):]: flat[k] for k in raw_keys}, "raw"
+            return {k[len(raw_prefix) :]: flat[k] for k in raw_keys}, "raw"
 
     raise RuntimeError(
-        f"Checkpoint has no data for {model_key} "
-        f"(looked for prefixes {ema_prefix!r} and {raw_prefix!r})."
+        f"Checkpoint has no data for {model_key} (looked for prefixes {ema_prefix!r} and {raw_prefix!r})."
     )
 
 
@@ -487,18 +485,14 @@ def _has_peft_segments(keys) -> bool:
     return False
 
 
-def _remap_same_arch(
-    weights: dict[str, torch.Tensor], model_keys: dict[str, torch.Size]
-) -> dict[str, torch.Tensor]:
+def _remap_same_arch(weights: dict[str, torch.Tensor], model_keys: dict[str, torch.Size]) -> dict[str, torch.Tensor]:
     out = {}
     for k, v in weights.items():
         if k not in model_keys:
             logger.warning("Source key {!r} has no counterpart in model; dropped.", k)
             continue
         if tuple(v.shape) != tuple(model_keys[k]):
-            raise ValueError(
-                f"Shape mismatch on {k}: source {tuple(v.shape)} vs model {tuple(model_keys[k])}."
-            )
+            raise ValueError(f"Shape mismatch on {k}: source {tuple(v.shape)} vs model {tuple(model_keys[k])}.")
         out[k] = v
     return out
 
@@ -512,8 +506,7 @@ def _remap_plain_to_lora(
         if src_key in model_keys:
             if tuple(tensor.shape) != tuple(model_keys[src_key]):
                 raise ValueError(
-                    f"Shape mismatch on {src_key}: source {tuple(tensor.shape)} "
-                    f"vs model {tuple(model_keys[src_key])}."
+                    f"Shape mismatch on {src_key}: source {tuple(tensor.shape)} vs model {tuple(model_keys[src_key])}."
                 )
             out[src_key] = tensor
             continue
@@ -537,9 +530,7 @@ def _remap_plain_to_lora(
     return out
 
 
-def _remap_lora_to_lora(
-    weights: dict[str, torch.Tensor], model_keys: dict[str, torch.Size]
-) -> dict[str, torch.Tensor]:
+def _remap_lora_to_lora(weights: dict[str, torch.Tensor], model_keys: dict[str, torch.Size]) -> dict[str, torch.Tensor]:
     out = {}
     mismatches: list[str] = []
     for k, v in weights.items():
@@ -547,9 +538,7 @@ def _remap_lora_to_lora(
             mismatches.append(f"  - key missing in model: {k}")
             continue
         if tuple(v.shape) != tuple(model_keys[k]):
-            mismatches.append(
-                f"  - {k}: source {tuple(v.shape)} vs model {tuple(model_keys[k])}"
-            )
+            mismatches.append(f"  - {k}: source {tuple(v.shape)} vs model {tuple(model_keys[k])}")
             continue
         out[k] = v
     if mismatches:

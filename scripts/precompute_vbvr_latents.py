@@ -84,6 +84,7 @@ from tqdm import tqdm
 # Distributed helpers
 # ---------------------------------------------------------------------------
 
+
 def _is_distributed() -> bool:
     return "RANK" in os.environ
 
@@ -113,6 +114,7 @@ def _barrier():
 # Args
 # ---------------------------------------------------------------------------
 
+
 def parse_args():
     p = argparse.ArgumentParser(description="Precompute VBVR VAE + T5 embeddings to parquet")
     p.add_argument("--metadata", required=True, help="Path to VBVR metadata.parquet")
@@ -135,6 +137,7 @@ def parse_args():
 # Model loading (reused from precompute_latents.py)
 # ---------------------------------------------------------------------------
 
+
 def load_model_components(model_path: str, device: str):
     from diffusers import AutoencoderKLWan
     from transformers import AutoTokenizer, UMT5EncoderModel
@@ -144,9 +147,7 @@ def load_model_components(model_path: str, device: str):
     tokenizer = AutoTokenizer.from_pretrained(model_dir / "tokenizer")
     logger.info("Loaded tokenizer")
 
-    text_encoder = UMT5EncoderModel.from_pretrained(
-        model_dir / "text_encoder", torch_dtype=torch.bfloat16
-    )
+    text_encoder = UMT5EncoderModel.from_pretrained(model_dir / "text_encoder", torch_dtype=torch.bfloat16)
     text_encoder.to(device).eval().requires_grad_(False)
     logger.info("Loaded text encoder")
 
@@ -174,6 +175,7 @@ def load_model_components(model_path: str, device: str):
 # ---------------------------------------------------------------------------
 # Encoding helpers (reused from precompute_latents.py)
 # ---------------------------------------------------------------------------
+
 
 @torch.no_grad()
 def encode_text(components, prompts: list[str], device: str) -> torch.Tensor:
@@ -245,11 +247,13 @@ def prepare_condition(components, image: torch.Tensor, num_frames: int, height: 
 # Video loading from tar
 # ---------------------------------------------------------------------------
 
+
 def load_video_from_tar(
     tar: tarfile.TarFile, member_path: str, height: int, width: int, num_frames: int
 ) -> torch.Tensor:
     """Load and resize a video from inside a tar archive. Returns uint8 (C, T, H, W)."""
     import decord
+
     decord.bridge.set_bridge("torch")
 
     f = tar.extractfile(member_path)
@@ -282,6 +286,7 @@ def load_image_from_tar(tar: tarfile.TarFile, member_path: str, height: int, wid
 # ---------------------------------------------------------------------------
 # Process one tar file
 # ---------------------------------------------------------------------------
+
 
 def process_tar(
     tar_path: Path,
@@ -360,21 +365,11 @@ def process_tar(
             prompt_emb = encode_text(components, batch_prompts, device)
 
             # Encode video
-            video_batch = (
-                torch.stack(batch_videos)
-                .to(device=device, dtype=torch.bfloat16)
-                .div(127.5)
-                .sub(1.0)
-            )
+            video_batch = torch.stack(batch_videos).to(device=device, dtype=torch.bfloat16).div(127.5).sub(1.0)
             latents = encode_video(components, video_batch)
 
             # Encode condition
-            image_batch = (
-                torch.stack(batch_images)
-                .to(device=device, dtype=torch.bfloat16)
-                .div(127.5)
-                .sub(1.0)
-            )
+            image_batch = torch.stack(batch_images).to(device=device, dtype=torch.bfloat16).div(127.5).sub(1.0)
             cond = prepare_condition(components, image_batch, args.num_frames, h, w)
 
             # Save each sample immediately
@@ -402,7 +397,11 @@ def process_tar(
             if samples_done - last_logged >= log_every:
                 logger.info(
                     "[rank {}] {} — {}/{} samples encoded ({:.1f}%)",
-                    rank, tar_stem, samples_done, n, samples_done / n * 100,
+                    rank,
+                    tar_stem,
+                    samples_done,
+                    n,
+                    samples_done / n * 100,
                 )
                 last_logged = samples_done
 
@@ -414,6 +413,7 @@ def process_tar(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     args = parse_args()
@@ -483,17 +483,33 @@ def main():
         rows = tar_to_rows[tar_name]
         logger.info(
             "[rank {}] ({}/{}) Processing {} ({} samples, global {}/{})",
-            rank, tar_idx + 1, len(my_tars), tar_name, len(rows), global_done, total_my_samples,
+            rank,
+            tar_idx + 1,
+            len(my_tars),
+            tar_name,
+            len(rows),
+            global_done,
+            total_my_samples,
         )
 
         num_written = process_tar(
-            tar_path, rows, components, device, args, output_dir,
+            tar_path,
+            rows,
+            components,
+            device,
+            args,
+            output_dir,
             skip_existing=args.skip_existing,
         )
         global_done += num_written
         logger.info(
             "[rank {}] Done {} ({} samples, global {}/{} = {:.1f}%)",
-            rank, tar_name, num_written, global_done, total_my_samples, global_done / total_my_samples * 100,
+            rank,
+            tar_name,
+            num_written,
+            global_done,
+            total_my_samples,
+            global_done / total_my_samples * 100,
         )
 
     # ---- Gather output paths and write config (rank 0) ----

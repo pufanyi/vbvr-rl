@@ -38,6 +38,7 @@ from tqdm import tqdm
 # Distributed helpers
 # ---------------------------------------------------------------------------
 
+
 def _is_distributed() -> bool:
     return "RANK" in os.environ
 
@@ -62,6 +63,7 @@ def _init_distributed():
 # Args
 # ---------------------------------------------------------------------------
 
+
 def parse_args():
     p = argparse.ArgumentParser(description="Precompute VAE latents + condition for VBVR")
     p.add_argument("--metadata", required=True, help="Path to VBVR metadata.parquet")
@@ -82,6 +84,7 @@ def parse_args():
 # ---------------------------------------------------------------------------
 # Model loading (VAE only)
 # ---------------------------------------------------------------------------
+
 
 def load_vae(model_path: str, device: str):
     from diffusers import AutoencoderKLWan
@@ -110,6 +113,7 @@ def load_vae(model_path: str, device: str):
 # ---------------------------------------------------------------------------
 # Encoding helpers
 # ---------------------------------------------------------------------------
+
 
 @torch.no_grad()
 def encode_video(components, video: torch.Tensor) -> torch.Tensor:
@@ -151,10 +155,12 @@ def prepare_condition(components, image: torch.Tensor, num_frames: int, height: 
 # Video/image loading from tar
 # ---------------------------------------------------------------------------
 
+
 def load_video_from_tar(
     tar: tarfile.TarFile, member_path: str, height: int, width: int, num_frames: int
 ) -> torch.Tensor:
     import decord
+
     decord.bridge.set_bridge("torch")
 
     f = tar.extractfile(member_path)
@@ -187,6 +193,7 @@ def load_image_from_tar(tar: tarfile.TarFile, member_path: str, height: int, wid
 # Process one tar
 # ---------------------------------------------------------------------------
 
+
 def process_samples(
     samples: list[dict],
     tar_dir: Path,
@@ -211,6 +218,7 @@ def process_samples(
 
     # Group by tar to avoid reopening the same tar repeatedly
     from collections import OrderedDict
+
     tar_groups: OrderedDict[str, list[dict]] = OrderedDict()
     for s in samples:
         tar_groups.setdefault(s["tar_name"], []).append(s)
@@ -235,21 +243,11 @@ def process_samples(
                     batch_images.append(image)
 
                 # Encode video
-                video_batch = (
-                    torch.stack(batch_videos)
-                    .to(device=device, dtype=torch.bfloat16)
-                    .div(127.5)
-                    .sub(1.0)
-                )
+                video_batch = torch.stack(batch_videos).to(device=device, dtype=torch.bfloat16).div(127.5).sub(1.0)
                 latents = encode_video(components, video_batch)
 
                 # Encode condition
-                image_batch = (
-                    torch.stack(batch_images)
-                    .to(device=device, dtype=torch.bfloat16)
-                    .div(127.5)
-                    .sub(1.0)
-                )
+                image_batch = torch.stack(batch_images).to(device=device, dtype=torch.bfloat16).div(127.5).sub(1.0)
                 cond = prepare_condition(components, image_batch, args.num_frames, h, w)
 
                 # Save each sample immediately
@@ -280,6 +278,7 @@ def process_samples(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     args = parse_args()
@@ -316,14 +315,16 @@ def main():
         tar_stem = Path(tar_basename).stem
         if args.tars and tar_basename not in args.tars:
             continue
-        all_samples.append({
-            "prompt": metadata.column("prompt")[i].as_py(),
-            "first_frame_path": metadata.column("first_frame_path")[i].as_py(),
-            "ground_truth_video_path": metadata.column("ground_truth_video_path")[i].as_py(),
-            "tar_name": tar_basename,
-            "tar_stem": tar_stem,
-            "index_in_tar": 0,  # will be assigned below
-        })
+        all_samples.append(
+            {
+                "prompt": metadata.column("prompt")[i].as_py(),
+                "first_frame_path": metadata.column("first_frame_path")[i].as_py(),
+                "ground_truth_video_path": metadata.column("ground_truth_video_path")[i].as_py(),
+                "tar_name": tar_basename,
+                "tar_stem": tar_stem,
+                "index_in_tar": 0,  # will be assigned below
+            }
+        )
 
     # Assign per-tar indices
     tar_counters: dict[str, int] = {}
@@ -343,8 +344,7 @@ def main():
     if args.skip_existing:
         before = len(my_samples)
         my_samples = [
-            s for s in my_samples
-            if not (output_dir / f"{s['tar_stem']}_{s['index_in_tar']}.safetensors").exists()
+            s for s in my_samples if not (output_dir / f"{s['tar_stem']}_{s['index_in_tar']}.safetensors").exists()
         ]
         skipped = before - len(my_samples)
         if skipped > 0:
@@ -364,7 +364,14 @@ def main():
 
     # ---- Process ----
     num_written = process_samples(
-        my_samples, tar_dir, components, device, args, output_dir, h, w,
+        my_samples,
+        tar_dir,
+        components,
+        device,
+        args,
+        output_dir,
+        h,
+        w,
     )
     logger.info("[rank {}] All done — {} samples written", rank, num_written)
 

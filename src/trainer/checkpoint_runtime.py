@@ -65,12 +65,12 @@ from src.trainer.checkpoint import (
 class _SubdirEntry:
     """One ``high/`` or ``low/`` subdir that this rank should save or load."""
 
-    subdir: str                              # "high" | "low"
-    transformer_key: str                     # "transformer" | "transformer_2"
+    subdir: str  # "high" | "low"
+    transformer_key: str  # "transformer" | "transformer_2"
     transformer_model: torch.nn.Module | None
     transformer_optimizer: torch.optim.Optimizer | None
     shard_rank: int
-    dcp_kwargs: dict                         # e.g. {"process_group": dp_pg} for EP
+    dcp_kwargs: dict  # e.g. {"process_group": dp_pg} for EP
 
 
 class CheckpointRuntimeMixin:
@@ -201,11 +201,7 @@ class CheckpointRuntimeMixin:
 
     def _hsdp_skip_optimizer_shard(self) -> bool:
         """Under HSDP, only the first replica writes optimizer shards."""
-        return (
-            self.mesh is not None
-            and self.mesh.ndim == 2
-            and self.mesh.get_local_rank("replicate") > 0
-        )
+        return self.mesh is not None and self.mesh.ndim == 2 and self.mesh.get_local_rank("replicate") > 0
 
     # ------------------------------------------------------------------
     # Load
@@ -225,8 +221,7 @@ class CheckpointRuntimeMixin:
             "{} from {} ({}) ...",
             "Initializing" if mode == "init" else "Resuming",
             ckpt,
-            "legacy flat root" if entries[0].subdir == "" else
-            "subdirs: " + ", ".join(e.subdir for e in entries),
+            "legacy flat root" if entries[0].subdir == "" else "subdirs: " + ", ".join(e.subdir for e in entries),
         )
         for entry in entries:
             self._load_subdir(entry)
@@ -244,7 +239,9 @@ class CheckpointRuntimeMixin:
 
         logger.info(
             "Resumed at step={} epoch={} batch_idx={}",
-            self.train_state.step, self.train_state.epoch, self.train_state.batch_idx,
+            self.train_state.step,
+            self.train_state.epoch,
+            self.train_state.batch_idx,
         )
 
     def _load_plan(self, ckpt: Path):
@@ -259,7 +256,7 @@ class CheckpointRuntimeMixin:
             yield _LoadEntry(
                 subdir="",
                 path=ckpt,
-                filter_keys=None,     # load everything that matches what's in TrainState
+                filter_keys=None,  # load everything that matches what's in TrainState
                 shard_rank=self._checkpoint_rank(),
                 dcp_kwargs={"process_group": self._dp_pg} if self.expert_parallel else {},
                 transformer_key=None,
@@ -278,9 +275,7 @@ class CheckpointRuntimeMixin:
                     continue
             if getattr(self.model, key) is None:
                 # Trainer doesn't actually own this transformer; skip.
-                logger.warning(
-                    "Skipping {} (trainer has no {} attached).", sub_path, key
-                )
+                logger.warning("Skipping {} (trainer has no {} attached).", sub_path, key)
                 continue
             yield _LoadEntry(
                 subdir=sub,
@@ -316,7 +311,8 @@ class CheckpointRuntimeMixin:
                 if "ema" in state:
                     logger.warning(
                         "Failed to load EMA from {} ({}); retrying without it.",
-                        entry.path, type(e).__name__,
+                        entry.path,
+                        type(e).__name__,
                     )
                     dcp.load({"train_state": self.train_state}, checkpoint_id=str(entry.path), **entry.dcp_kwargs)
                     self.ema.reinitialize()
@@ -335,7 +331,8 @@ class CheckpointRuntimeMixin:
         elif entry.transformer_key is not None:
             logger.warning(
                 "No optimizer shards found in {} for {}; optimizer state starts fresh.",
-                entry.path, entry.transformer_key,
+                entry.path,
+                entry.transformer_key,
             )
         dl_state_path = entry.path / f"dataloader_rank{entry.shard_rank}.pt"
         if dl_state_path.exists():
@@ -440,10 +437,12 @@ class CheckpointRuntimeMixin:
             candidates.append(("transformer_2", self.model.transformer_2, self.optimizer_2))
         else:
             # Legacy root: try all three names.
-            candidates.extend([
-                ("transformer", self.model.transformer, self.optimizer_1),
-                ("transformer_2", self.model.transformer_2, self.optimizer_2),
-            ])
+            candidates.extend(
+                [
+                    ("transformer", self.model.transformer, self.optimizer_1),
+                    ("transformer_2", self.model.transformer_2, self.optimizer_2),
+                ]
+            )
         if self.cfg.train_text_encoder and self.model.text_encoder is not None:
             candidates.append(("text_encoder", self.model.text_encoder, self.optimizer_te))
 
@@ -462,29 +461,30 @@ class CheckpointRuntimeMixin:
         self.train_state.epoch = 0
         self.train_state.batch_idx = 0
         (
-            self.params, self.optimizers,
-            self.optimizer_te, self.optimizer_1, self.optimizer_2,
-            self.fallback_te, self.fallback_1, self.fallback_2,
+            self.params,
+            self.optimizers,
+            self.optimizer_te,
+            self.optimizer_1,
+            self.optimizer_2,
+            self.fallback_te,
+            self.fallback_1,
+            self.fallback_2,
         ) = self._build_optimizers(self.cfg)
         self.total_steps = self._compute_total_steps()
 
 
 @dataclass
 class _LoadEntry:
-    subdir: str                              # "high" | "low" | "" (legacy root)
+    subdir: str  # "high" | "low" | "" (legacy root)
     path: Path
-    filter_keys: frozenset[str] | None       # which models to load (None = no filter)
+    filter_keys: frozenset[str] | None  # which models to load (None = no filter)
     shard_rank: int
     dcp_kwargs: dict
-    transformer_key: str | None              # transformer | transformer_2 | None (legacy)
+    transformer_key: str | None  # transformer | transformer_2 | None (legacy)
 
 
 def _is_checkpoint_dir(d: Path) -> bool:
-    return (
-        (d / ".metadata").exists()
-        or (d / "high" / ".metadata").exists()
-        or (d / "low" / ".metadata").exists()
-    )
+    return (d / ".metadata").exists() or (d / "high" / ".metadata").exists() or (d / "low" / ".metadata").exists()
 
 
 def _has_valid_step_suffix(name: str) -> bool:

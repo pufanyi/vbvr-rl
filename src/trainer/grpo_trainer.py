@@ -278,9 +278,7 @@ class GRPOTrainer(BaseGRPOTrainer):
             gathered_rewards = torch.cat(all_dp_rewards, dim=0)
             global_mean = gathered_rewards.mean()
             global_std = gathered_rewards.std() + 1e-4
-            advantages = ((rewards - global_mean) / global_std).clamp(
-                -cfg.grpo_adv_clip_max, cfg.grpo_adv_clip_max
-            )
+            advantages = ((rewards - global_mean) / global_std).clamp(-cfg.grpo_adv_clip_max, cfg.grpo_adv_clip_max)
             dist.send(advantages.contiguous(), dst=self.peer_rank)
         else:
             for _traj, cur_S in all_chunk_trajs:

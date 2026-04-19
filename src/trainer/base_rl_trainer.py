@@ -95,14 +95,19 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
 
         # ---- Optimizer ----
         (
-            self.params, self.optimizers,
-            self.optimizer_te, self.optimizer_1, self.optimizer_2,
-            self.fallback_te, self.fallback_1, self.fallback_2,
+            self.params,
+            self.optimizers,
+            self.optimizer_te,
+            self.optimizer_1,
+            self.optimizer_2,
+            self.fallback_te,
+            self.fallback_1,
+            self.fallback_2,
         ) = self._build_optimizers(cfg)
 
         # ---- Total steps ----
         self.total_steps = self._compute_total_steps()
-        if hasattr(self.dataset, '__len__'):
+        if hasattr(self.dataset, "__len__"):
             logger.info(
                 "Dataset: {} samples, {} batches/epoch, {} total optimizer steps",
                 len(self.dataset),

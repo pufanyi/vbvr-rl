@@ -307,8 +307,7 @@ class COSTrainer(BaseTrainer):
             raw_video_latents = batch["video_latents"]
             if not isinstance(raw_video_latents, list):
                 raise ValueError(
-                    "COS latent training requires all chain latents. "
-                    "Re-run precompute with --encode_all_videos."
+                    "COS latent training requires all chain latents. Re-run precompute with --encode_all_videos."
                 )
             video_latents = [latent.to(self.device) for latent in raw_video_latents]
         else:

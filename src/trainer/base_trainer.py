@@ -100,14 +100,19 @@ class BaseTrainer(CheckpointRuntimeMixin):
 
         # ---- Optimizer ----
         (
-            self.params, self.optimizers,
-            self.optimizer_te, self.optimizer_1, self.optimizer_2,
-            self.fallback_te, self.fallback_1, self.fallback_2,
+            self.params,
+            self.optimizers,
+            self.optimizer_te,
+            self.optimizer_1,
+            self.optimizer_2,
+            self.fallback_te,
+            self.fallback_1,
+            self.fallback_2,
         ) = self._build_optimizers(cfg)
 
         # ---- Total steps ----
         self.total_steps = self._compute_total_steps()
-        if hasattr(self.dataset, '__len__'):
+        if hasattr(self.dataset, "__len__"):
             logger.info(
                 "Dataset: {} samples, {} batches/epoch, {} total optimizer steps",
                 len(self.dataset),
@@ -261,9 +266,7 @@ class BaseTrainer(CheckpointRuntimeMixin):
             # EP + HSDP: per-expert-group 2D mesh (replicate, shard).
             local_size = int(os.environ.get("LOCAL_WORLD_SIZE", torch.cuda.device_count()))
             num_replicas = (
-                self.dp_size // local_size
-                if self.dp_size >= local_size and self.dp_size % local_size == 0
-                else 0
+                self.dp_size // local_size if self.dp_size >= local_size and self.dp_size % local_size == 0 else 0
             )
             if num_replicas <= 1:
                 # Single node per expert group — fall back to EP without HSDP
@@ -292,14 +295,18 @@ class BaseTrainer(CheckpointRuntimeMixin):
                     g1 = torch.arange(half, self.world_size).reshape(num_replicas, local_size)
                     bo = (
                         (rep_backend, None),  # replicate dim
-                        (None, None),         # shard dim (default nccl)
+                        (None, None),  # shard dim (default nccl)
                     )
                     mesh_g0 = DeviceMesh(
-                        "cuda", g0, mesh_dim_names=("replicate", "shard"),
+                        "cuda",
+                        g0,
+                        mesh_dim_names=("replicate", "shard"),
                         backend_override=bo,
                     )
                     mesh_g1 = DeviceMesh(
-                        "cuda", g1, mesh_dim_names=("replicate", "shard"),
+                        "cuda",
+                        g1,
+                        mesh_dim_names=("replicate", "shard"),
                         backend_override=bo,
                     )
                     mesh = mesh_g0 if self.expert_group == 0 else mesh_g1
