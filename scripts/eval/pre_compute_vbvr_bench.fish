@@ -1,0 +1,35 @@
+#!/usr/bin/env fish
+
+# Precompute VBVR-Bench eval dataset as WebDataset tar shards.
+#   fish scripts/eval/pre_compute_vbvr_bench.fish
+
+set GT_BASE        /mnt/umm/users/pufanyi/workspace/Wan-Trainer/data/vbvr/VBVR-Bench
+set MODEL_PATH     storage/models/Wan2.2-I2V-A14B-Diffusers
+set OUTPUT_DIR     data/vbvr/VBVR-Bench-wds
+set NUM_GPUS       8
+set NUM_FRAMES     81
+set MAX_AREA       399360                 # 480 * 832
+set SAMPLES_PER_SHARD 100                 # 500 samples / 100 = 5 shards total
+set SPLIT_POLICY   in_to_open             # or all_open
+
+set -l args \
+    --gt_base $GT_BASE \
+    --model_path $MODEL_PATH \
+    --output_dir $OUTPUT_DIR \
+    --num_frames $NUM_FRAMES \
+    --max_area $MAX_AREA \
+    --samples_per_shard $SAMPLES_PER_SHARD \
+    --split_policy $SPLIT_POLICY \
+    --skip_existing
+
+echo "GT base:      $GT_BASE"
+echo "Output:       $OUTPUT_DIR"
+echo "GPUs:         $NUM_GPUS"
+echo "Frames:       $NUM_FRAMES"
+echo "---"
+
+if test $NUM_GPUS -gt 1
+    uv run torchrun --nproc_per_node=$NUM_GPUS -m src.precompute.vbvr_bench_webdataset $args
+else
+    uv run python -m src.precompute.vbvr_bench_webdataset $args
+end
