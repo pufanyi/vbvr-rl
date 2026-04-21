@@ -16,8 +16,11 @@ set SAMPLES_PER_SHARD 100                 # 500 samples / 100 = 5 shards
 set SPLIT_POLICY   in_to_open             # or all_open
 set SKIP_PRECOMPUTE                       # set to any value to skip encoding (upload only)
 
-# Hub upload — set PUSH_TO_HUB empty to skip
-set PUSH_TO_HUB    yes
+# Hub upload — empty by default; local tars sit under $OUTPUT_DIR.
+# To push later (idempotent — HF dedupes by hash, crashed uploads resume):
+#   uv run python scripts/data/vbvr_to_hf.py --tar_dir $OUTPUT_DIR
+# or set PUSH_TO_HUB=yes below to upload at the end of this script.
+set PUSH_TO_HUB                           # set to any value to push after precompute
 set HF_REPO_ID     pufanyi/VBVR-Bench-wan2.2-latent
 set HF_PRIVATE                            # set to any value to create a private repo
 # ─────────────────────────────────────────────────────────────────────
