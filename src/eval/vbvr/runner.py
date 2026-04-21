@@ -1,15 +1,22 @@
 """Driver that scores all samples and writes VBVR-compatible output JSONs.
 
-Resumable by design: every score is appended to ``scores.jsonl`` as soon as
-it lands, so a killed run picks up from where it left off on the next
-invocation. The progress bar covers the full dataset (not just the unfinished
-slice) via ``tqdm(initial=...)``.
+Resumable and data-parallel:
+
+* Each rank appends its SampleScores to ``scores.rank{N}.jsonl`` as soon as
+  they land. A killed run picks up where it left off — from any rank — on
+  the next invocation.
+* Rank ``R`` handles ``samples[R::world_size]`` (round-robin); resume state
+  is computed across ALL shards so if one rank was slower, its unfinished
+  work is still skipped on restart as long as any other rank hadn't done it.
+* Rank 0 shows a single overall progress bar, polling all shards between
+  its own samples. Other ranks are silent.
+* Only rank 0 writes ``eval_results.json`` + ``summary.json`` (after a
+  ``dist.barrier()`` if multi-rank).
 """
 
 from __future__ import annotations
 
 import json
-import shutil
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +43,26 @@ def _load_existing_scores(path: Path) -> list[SampleScore]:
         except Exception as e:
             logger.warning("skip malformed line in {}: {}", path.name, e)
     return out
+
+
+def _load_all_shards(out_dir: Path) -> list[SampleScore]:
+    """Read every ``scores.rank*.jsonl`` shard; order is stable by rank then line."""
+    scores: list[SampleScore] = []
+    for shard in sorted(out_dir.glob("scores.rank*.jsonl")):
+        scores.extend(_load_existing_scores(shard))
+    return scores
+
+
+def _count_shard_lines(out_dir: Path) -> int:
+    """Cheap approximation of total completed samples across all shards."""
+    n = 0
+    for shard in out_dir.glob("scores.rank*.jsonl"):
+        try:
+            with shard.open("rb") as f:
+                n += sum(1 for _ in f)
+        except FileNotFoundError:
+            pass
+    return n
 
 
 def _filter_remaining(
@@ -82,64 +109,92 @@ def run_eval(
     limit: int | None = None,
     fresh: bool = False,
     retry_errors: bool = False,
-) -> RunSummary:
-    """Score every (task, video) pair; resumable via ``scores.jsonl``.
+    rank: int = 0,
+    world_size: int = 1,
+    barrier_fn=None,
+) -> RunSummary | None:
+    """Score every (task, video) pair; resumable via per-rank JSONL shards.
 
     Output layout:
-      <output_dir>/<model_name>/scores.jsonl     — append-only, one SampleScore per line
-      <output_dir>/<model_name>/eval_results.json — derived from scores.jsonl at the end
-      <output_dir>/<model_name>/summary.json     — headline aggregates
+      <output_dir>/<model_name>/scores.rank{N}.jsonl  — one shard per rank, append-only
+      <output_dir>/<model_name>/eval_results.json     — rank-0-only; full merged run
+      <output_dir>/<model_name>/summary.json          — rank-0-only; headline aggregates
 
     Args:
-        fresh: if True, back up the existing ``scores.jsonl`` to
-            ``scores.jsonl.bak`` and start over.
-        retry_errors: if True, re-score samples whose cached entry has an error.
+        rank, world_size: data-parallel sharding via ``samples[rank::world_size]``.
+        barrier_fn: optional zero-arg callable to synchronize ranks before
+            rank-0 aggregates (e.g. ``torch.distributed.barrier``).
+        fresh: rank 0 moves all existing shards to ``.bak`` and starts over.
+        retry_errors: re-score samples whose cached entry has an error.
+
+    Returns:
+        Full RunSummary on rank 0, ``None`` on other ranks.
     """
     model_name = model_output.name
     out_dir = output_dir / model_name
-    out_dir.mkdir(parents=True, exist_ok=True)
-    scores_path = out_dir / "scores.jsonl"
-
-    if fresh and scores_path.exists():
-        backup = scores_path.with_suffix(".jsonl.bak")
-        shutil.move(str(scores_path), str(backup))
-        logger.info("fresh run — moved existing scores to {}", backup.name)
+    if rank == 0:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if fresh:
+            for shard in out_dir.glob("scores.rank*.jsonl"):
+                shard.rename(shard.with_suffix(".jsonl.bak"))
+                logger.info("fresh run — backed up {}", shard.name)
+    if barrier_fn is not None:
+        barrier_fn()
 
     samples = discover_samples(model_output, gt_base, tasks=tasks)
     if limit is not None:
         samples = samples[:limit]
-        logger.info("Limiting to first {} samples", len(samples))
+        if rank == 0:
+            logger.info("limit applied: {} samples", len(samples))
 
-    existing = _load_existing_scores(scores_path)
-    remaining = _filter_remaining(samples, existing, retry_errors=retry_errors)
-    logger.info(
-        "Resume state: {} already scored, {} to go (retry_errors={})",
-        len(samples) - len(remaining),
-        len(remaining),
-        retry_errors,
-    )
+    my_samples = samples[rank::world_size]
+    all_existing = _load_all_shards(out_dir)  # unified view across shards
+    remaining = _filter_remaining(my_samples, all_existing, retry_errors=retry_errors)
+    global_done = len(samples) - len(_filter_remaining(samples, all_existing, retry_errors))
 
-    desc = f"[{model_name}|{judge.name}]"
-    with scores_path.open("a", encoding="utf-8") as f:
+    if rank == 0:
+        logger.info(
+            "world_size={} | total={} done={} remaining_global={} (my_slice={} remaining={})",
+            world_size,
+            len(samples),
+            global_done,
+            len(samples) - global_done,
+            len(my_samples),
+            len(remaining),
+        )
+
+    shard_path = out_dir / f"scores.rank{rank}.jsonl"
+    pbar = None
+    if rank == 0:
         pbar = tqdm(
             total=len(samples),
-            initial=len(samples) - len(remaining),
-            desc=desc,
+            initial=global_done,
+            desc=f"[{model_name}|{judge.name}]",
             unit="sample",
         )
+
+    with shard_path.open("a", encoding="utf-8") as f:
         try:
             for sample in remaining:
                 score = judge.score(sample)
                 f.write(score.model_dump_json() + "\n")
                 f.flush()
-                pbar.update(1)
+                if pbar is not None:
+                    # Sum lines across all shards so the bar reflects global progress.
+                    pbar.n = min(len(samples), _count_shard_lines(out_dir))
+                    pbar.refresh()
         finally:
-            pbar.close()
+            if pbar is not None:
+                pbar.close()
 
-    # Rebuild aggregates from the authoritative JSONL (covers both pre-existing
-    # and freshly-scored entries; order is append order).
-    final_scores = _load_existing_scores(scores_path)
-    # Restrict to samples we actually care about this run (respects --tasks/--limit).
+    if barrier_fn is not None:
+        barrier_fn()
+
+    if rank != 0:
+        return None
+
+    # Rank 0: authoritative aggregation from all shards, scoped to this run.
+    final_scores = _load_all_shards(out_dir)
     wanted: set[tuple[str, str]] = {(s.task_name, s.video_idx) for s in samples}
     final_scores = [s for s in final_scores if (s.task_name, s.video_idx) in wanted]
 

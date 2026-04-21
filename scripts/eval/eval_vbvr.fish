@@ -87,8 +87,13 @@ for CKPT in $CHECKPOINTS
                 if test (count $TASKS) -gt 0
                     set -a score_args --tasks $TASKS
                 end
-                uv run python -m src.cli.eval_vbvr $score_args
-                or echo "[warn] VLM scoring failed for $CKPT"
+                if test $NUM_GPUS -gt 1
+                    uv run torchrun --nproc_per_node=$NUM_GPUS -m src.cli.eval_vbvr $score_args
+                    or echo "[warn] VLM scoring failed for $CKPT"
+                else
+                    uv run python -m src.cli.eval_vbvr $score_args
+                    or echo "[warn] VLM scoring failed for $CKPT"
+                end
 
             case rule
                 set -l SCORE_DIR $ABS_MODEL_OUT/score
