@@ -105,7 +105,7 @@ ds = load_dataset("webdataset", data_files="hf://datasets/{repo_id}/tars/*.tar",
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--tar_dir", type=Path, required=True, help="Directory with shard-*.tar files")
-    parser.add_argument("--repo_id", type=str, default="pufanyi/VBVR-Bench")
+    parser.add_argument("--repo_id", type=str, default="pufanyi/VBVR-Bench-t5-latent")
     parser.add_argument("--private", action="store_true")
     parser.add_argument("--token", type=str, default=None, help="HF token; else uses HF_TOKEN env / cached login")
     parser.add_argument("--commit_message", type=str, default="Upload VBVR-Bench webdataset")

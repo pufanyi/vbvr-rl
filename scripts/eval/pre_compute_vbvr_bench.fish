@@ -1,18 +1,28 @@
 #!/usr/bin/env fish
 
-# Precompute VBVR-Bench eval dataset as WebDataset tar shards.
+# Precompute VBVR-Bench eval dataset as WebDataset tar shards, then
+# optionally upload to HuggingFace.
+#
 #   fish scripts/eval/pre_compute_vbvr_bench.fish
 
+# ── Configuration ────────────────────────────────────────────────────
 set GT_BASE        /mnt/umm/users/pufanyi/workspace/Wan-Trainer/data/vbvr/VBVR-Bench
 set MODEL_PATH     storage/models/Wan2.2-I2V-A14B-Diffusers
 set OUTPUT_DIR     data/vbvr/VBVR-Bench-wds
 set NUM_GPUS       8
 set NUM_FRAMES     81
 set MAX_AREA       399360                 # 480 * 832
-set SAMPLES_PER_SHARD 100                 # 500 samples / 100 = 5 shards total
+set SAMPLES_PER_SHARD 100                 # 500 samples / 100 = 5 shards
 set SPLIT_POLICY   in_to_open             # or all_open
+set SKIP_PRECOMPUTE                       # set to any value to skip encoding (upload only)
 
-set -l args \
+# Hub upload — set PUSH_TO_HUB empty to skip
+set PUSH_TO_HUB    yes
+set HF_REPO_ID     pufanyi/VBVR-Bench-t5-latent
+set HF_PRIVATE                            # set to any value to create a private repo
+# ─────────────────────────────────────────────────────────────────────
+
+set -l precompute_args \
     --gt_base $GT_BASE \
     --model_path $MODEL_PATH \
     --output_dir $OUTPUT_DIR \
@@ -22,14 +32,34 @@ set -l args \
     --split_policy $SPLIT_POLICY \
     --skip_existing
 
-echo "GT base:      $GT_BASE"
-echo "Output:       $OUTPUT_DIR"
-echo "GPUs:         $NUM_GPUS"
-echo "Frames:       $NUM_FRAMES"
+echo "GT base:    $GT_BASE"
+echo "Output:     $OUTPUT_DIR"
+echo "GPUs:       $NUM_GPUS"
+echo "Frames:     $NUM_FRAMES"
+echo "Push to:    "(test -n "$PUSH_TO_HUB"; and echo $HF_REPO_ID; or echo "(skipped)")
 echo "---"
 
-if test $NUM_GPUS -gt 1
-    uv run torchrun --nproc_per_node=$NUM_GPUS -m src.precompute.vbvr_bench_webdataset $args
+# ── 1. Precompute ────────────────────────────────────────────────────
+if not set -q SKIP_PRECOMPUTE[1]
+    if test $NUM_GPUS -gt 1
+        uv run torchrun --nproc_per_node=$NUM_GPUS -m src.precompute.vbvr_bench_webdataset $precompute_args
+        or exit 1
+    else
+        uv run python -m src.precompute.vbvr_bench_webdataset $precompute_args
+        or exit 1
+    end
 else
-    uv run python -m src.precompute.vbvr_bench_webdataset $args
+    echo "SKIP_PRECOMPUTE set — skipping encoding"
 end
+
+# ── 2. Upload ────────────────────────────────────────────────────────
+if test -n "$PUSH_TO_HUB"
+    set -l upload_args --tar_dir $OUTPUT_DIR --repo_id $HF_REPO_ID
+    if set -q HF_PRIVATE[1]
+        set -a upload_args --private
+    end
+    uv run python scripts/data/vbvr_to_hf.py $upload_args
+    or exit 1
+end
+
+echo "Done."
