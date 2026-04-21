@@ -9,7 +9,7 @@
 
 # ── Configuration ────────────────────────────────────────────────────
 set CHECKPOINTS \
-    storage/checkpoints/dancegrpo_maze_bfs/checkpoint-200
+    storage/checkpoints/dancegrpo_maze_bfs/checkpoint-400
     # storage/checkpoints/sft_maze/checkpoint-2000 \
     # storage/checkpoints/sft_maze_muon/checkpoint-2000 \
     # storage/checkpoints/sft_maze_muon/checkpoint-4000 \

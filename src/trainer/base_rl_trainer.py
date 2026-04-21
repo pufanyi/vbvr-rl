@@ -203,6 +203,22 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
     # Model
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _reward_needs_vae(cfg: RLConfig) -> bool:
+        """Return True if the configured reward declares ``requires_vae = True``.
+
+        Looked up by name in the rewards registry so model-building can force
+        the VAE to load before the reward object is constructed (which happens
+        later in ``_post_init``).
+        """
+        reward_name = getattr(cfg, "grpo_reward_fn", None)
+        if not reward_name:
+            return False
+        from src.trainer.rewards.registry import _REGISTRY
+
+        reward_cls = _REGISTRY.get(reward_name)
+        return reward_cls is not None and getattr(reward_cls, "requires_vae", False)
+
     def _build_model(self, cfg: RLConfig) -> WanI2VForTraining:
         train_experts = self._effective_train_experts
         lora_cfg = (
@@ -213,6 +229,12 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         use_precomputed = cfg.latent_webdataset_dir is not None
         load_vae = not use_precomputed
         load_text_encoder = not use_precomputed or cfg.train_text_encoder
+        # Rewards that need pixel-space evaluation (e.g. maze) force VAE load
+        # even when the dataset ships precomputed latents.
+        if self._reward_needs_vae(cfg):
+            if not load_vae:
+                logger.info("Reward '{}' requires VAE — loading it despite precomputed latents", cfg.grpo_reward_fn)
+            load_vae = True
         logger.info(
             "Loading model from {} (lora_rank={}, experts={}{}, load_vae={}, load_text_encoder={}) ...",
             cfg.model_path,

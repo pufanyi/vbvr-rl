@@ -180,3 +180,16 @@ class RLConfig(TrainConfig):
         if not (0.0 < v <= 1.0):
             raise ValueError(f"dancegrpo_timestep_selection_ratio must be in (0, 1], got {v}")
         return v
+
+    # ------------------------------------------------------------------
+    # Maze reward (grpo_reward_fn: "maze")
+    # ------------------------------------------------------------------
+    # Number of frames to VAE-decode per rollout (cost is B·G·K decodes).
+    maze_reward_num_frames: int = 6
+    # Component weights — raw reward = w_traj·r_traj + w_onpath·r_onpath + w_goal·r_goal
+    # (GRPO z-scores within group, so absolute scale doesn't matter, only ratios).
+    maze_reward_w_traj: float = 1.0
+    maze_reward_w_onpath: float = 0.5
+    maze_reward_w_goal: float = 1.0
+    # r_goal: 1 if end-frame ball is within this many cells of goal, else 0.
+    maze_reward_goal_cells: float = 0.75

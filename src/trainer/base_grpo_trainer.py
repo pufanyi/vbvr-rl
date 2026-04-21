@@ -12,13 +12,23 @@ from pathlib import Path
 
 import torch
 import torch.distributed as dist
-import torch.nn.functional as F
 from loguru import logger
 
 from src.trainer.base_rl_trainer import BaseRLTrainer
 from src.trainer.config import RLConfig
 from src.trainer.flops import MFUMonitor, compute_wan_seq_len, estimate_wan_forward_flops, get_gpu_peak_flops_bf16
+from src.trainer.rewards import build_reward
 from src.trainer.utils import cosine_lr, format_eta, shard_transformer, to_model_pixels
+
+
+def _repeat_meta(meta: dict[str, torch.Tensor], cur_S: int) -> dict[str, torch.Tensor]:
+    """Interleave-replicate every per-sample tensor to match a chunk's group size.
+
+    Mirrors the ``condition.repeat_interleave(cur_S, dim=0)`` pattern used on
+    the training inputs so reward functions see per-sample metadata aligned
+    with the flattened ``(B, cur_S)`` rollout batch.
+    """
+    return {k: v.repeat_interleave(cur_S, dim=0) for k, v in meta.items()}
 
 
 class BaseGRPOTrainer(BaseRLTrainer):
@@ -87,6 +97,8 @@ class BaseGRPOTrainer(BaseRLTrainer):
 
     def _post_init(self, cfg: RLConfig) -> None:
         self.mfu_monitor = self._setup_mfu(cfg)
+        self.reward_fn = build_reward(cfg.grpo_reward_fn, self, cfg)
+        logger.info("Reward function: {}", cfg.grpo_reward_fn)
 
     def _setup_mfu(self, cfg: RLConfig) -> MFUMonitor | None:
         """Pre-compute FLOPs per GRPO step and create MFU monitor.
@@ -170,14 +182,52 @@ class BaseGRPOTrainer(BaseRLTrainer):
     # Batch encoding
     # ------------------------------------------------------------------
 
-    def _encode_batch_inputs(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Encode prompts/images/videos once for a GRPO step."""
-        prompt_embeds = self.model.encode_text(batch["prompt"], self.device)
-        video = to_model_pixels(batch["videos"][-1], self.device)
-        image = to_model_pixels(batch["image"], self.device)
-        gt_video_latents = self.model.encode_video(video)
-        condition = self.model.prepare_condition(image, video.shape[2], video.shape[-2], video.shape[-1])
-        return prompt_embeds, gt_video_latents, condition
+    # Keys consumed by the core RL loop. Anything else the dataset emits is
+    # passed through to the reward as ``meta`` (e.g. ``maze_*`` tensors).
+    _CORE_BATCH_KEYS = frozenset(
+        {
+            "prompt_embeds",
+            "video_latents",
+            "condition",
+            "prompt",
+            "videos",
+            "image",
+            "index",
+        }
+    )
+
+    def _encode_batch_inputs(
+        self, batch: dict
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        """Encode one GRPO batch, supporting both raw and precomputed paths.
+
+        Returns ``(prompt_embeds, gt_video_latents, condition, meta)`` where
+        ``meta`` holds any non-core tensors the dataset passed through — used
+        by rewards that need per-sample side information (e.g. the maze
+        reward reads ``maze_frame_positions_pix`` from here).
+        """
+        if "prompt_embeds" in batch:
+            prompt_embeds = batch["prompt_embeds"].to(self.device)
+            video_latents = batch["video_latents"]
+            if isinstance(video_latents, list):
+                gt_video_latents = video_latents[-1].to(self.device)
+            else:
+                gt_video_latents = video_latents.to(self.device)
+            condition = batch["condition"].to(self.device)
+        else:
+            prompt_embeds = self.model.encode_text(batch["prompt"], self.device)
+            video = to_model_pixels(batch["videos"][-1], self.device)
+            image = to_model_pixels(batch["image"], self.device)
+            gt_video_latents = self.model.encode_video(video)
+            condition = self.model.prepare_condition(image, video.shape[2], video.shape[-2], video.shape[-1])
+
+        meta: dict[str, torch.Tensor] = {}
+        for key, value in batch.items():
+            if key in self._CORE_BATCH_KEYS:
+                continue
+            if isinstance(value, torch.Tensor):
+                meta[key] = value.to(self.device)
+        return prompt_embeds, gt_video_latents, condition, meta
 
     # ------------------------------------------------------------------
     # Sampling schedule
@@ -335,103 +385,6 @@ class BaseGRPOTrainer(BaseRLTrainer):
             "timesteps": local_timesteps,
             "sigmas": sigmas[step_start : step_end + 1].clone(),
         }
-
-    # ------------------------------------------------------------------
-    # Reward
-    # ------------------------------------------------------------------
-
-    @torch.no_grad()
-    def _compute_reward_neg_loss(
-        self,
-        generated_latents: torch.Tensor,
-        gt_video_latents: torch.Tensor,
-        condition: torch.Tensor,
-        prompt_embeds: torch.Tensor,
-        *,
-        indices: torch.Tensor | None = None,
-        expert_filter: str | None = None,
-    ) -> torch.Tensor:
-        """Reward = -flow_matching_loss against ground truth video."""
-        B = gt_video_latents.shape[0]
-        device = gt_video_latents.device
-        shifted_sigmas, shifted_timesteps, _bsmntw = self.model._get_training_buffers(device)
-
-        if indices is None:
-            if expert_filter == "high":
-                indices = torch.randint(0, self.model.boundary_idx, (B,), device=device)
-            elif expert_filter == "low":
-                indices = torch.randint(self.model.boundary_idx, self.model.num_train_timesteps, (B,), device=device)
-            else:
-                indices = torch.randint(0, self.model.num_train_timesteps, (B,), device=device)
-
-        sigmas = shifted_sigmas.index_select(0, indices).view(B, 1, 1, 1, 1)
-        timesteps = shifted_timesteps.index_select(0, indices)
-
-        noise = torch.randn_like(gt_video_latents)
-        noisy = sigmas * noise + (1.0 - sigmas) * gt_video_latents
-        target = noise - gt_video_latents
-        model_input = torch.cat([noisy, condition], dim=1)
-
-        rewards = torch.zeros(B, device=device, dtype=torch.float32)
-        # FSDP requires all ranks to participate in forward (all_gather).
-        # When selected is empty, run a dummy forward so ranks stay in sync.
-        # Without FSDP, we can skip the forward entirely when no samples match.
-        need_dummy_forward = self.cfg.fsdp
-        if self.model.transformer is not None and expert_filter in (None, "high"):
-            selected = (timesteps >= self.model.boundary_timestep).nonzero(as_tuple=False).flatten()
-            if selected.numel() > 0:
-                sel_input = model_input.index_select(0, selected)
-                sel_ts = timesteps.index_select(0, selected)
-                sel_pe = prompt_embeds.index_select(0, selected)
-            elif need_dummy_forward:
-                sel_input = model_input[:1]
-                sel_ts = timesteps[:1]
-                sel_pe = prompt_embeds[:1]
-            else:
-                sel_input = None
-            if sel_input is not None:
-                pred = self.model.transformer(
-                    hidden_states=sel_input,
-                    timestep=sel_ts.to(torch.bfloat16),
-                    encoder_hidden_states=sel_pe,
-                    return_dict=False,
-                )[0]
-                if selected.numel() > 0:
-                    per_sample_loss = F.mse_loss(
-                        pred.float(),
-                        target.index_select(0, selected).float(),
-                        reduction="none",
-                    )
-                    per_sample_loss = per_sample_loss.mean(dim=list(range(1, per_sample_loss.ndim)))
-                    rewards.index_copy_(0, selected, -per_sample_loss)
-        if self.model.transformer_2 is not None and expert_filter in (None, "low"):
-            selected = (timesteps < self.model.boundary_timestep).nonzero(as_tuple=False).flatten()
-            if selected.numel() > 0:
-                sel_input = model_input.index_select(0, selected)
-                sel_ts = timesteps.index_select(0, selected)
-                sel_pe = prompt_embeds.index_select(0, selected)
-            elif need_dummy_forward:
-                sel_input = model_input[:1]
-                sel_ts = timesteps[:1]
-                sel_pe = prompt_embeds[:1]
-            else:
-                sel_input = None
-            if sel_input is not None:
-                pred = self.model.transformer_2(
-                    hidden_states=sel_input,
-                    timestep=sel_ts.to(torch.bfloat16),
-                    encoder_hidden_states=sel_pe,
-                    return_dict=False,
-                )[0]
-                if selected.numel() > 0:
-                    per_sample_loss = F.mse_loss(
-                        pred.float(),
-                        target.index_select(0, selected).float(),
-                        reduction="none",
-                    )
-                    per_sample_loss = per_sample_loss.mean(dim=list(range(1, per_sample_loss.ndim)))
-                    rewards.index_copy_(0, selected, -per_sample_loss)
-        return rewards
 
     # ------------------------------------------------------------------
     # Advantage

@@ -1,7 +1,7 @@
 model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
-latent_webdataset_dir: data/vbvr/latents/splits/sft
-dataset_size: 1000000
-output_dir: storage/checkpoints/correction_vbvr
+latent_webdataset_dir: data/maze_cos/latents
+dataset_size: 300000
+output_dir: storage/checkpoints/correction_maze
 
 batch_size: 16
 gradient_accumulation_steps: 1

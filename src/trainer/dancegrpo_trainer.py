@@ -16,7 +16,7 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
-from src.trainer.base_grpo_trainer import BaseGRPOTrainer, _compute_ref_mean
+from src.trainer.base_grpo_trainer import BaseGRPOTrainer, _compute_ref_mean, _repeat_meta
 
 
 class DanceGRPOTrainer(BaseGRPOTrainer):
@@ -70,7 +70,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         T = cfg.grpo_num_sampling_steps
         device = self.device
 
-        prompt_embeds, gt_video_latents, condition = self._encode_batch_inputs(batch)
+        prompt_embeds, gt_video_latents, condition, meta = self._encode_batch_inputs(batch)
         B = gt_video_latents.shape[0]
         selected_t_idxs = self._select_training_timesteps(T)
         if self.rank == 0:
@@ -93,6 +93,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             cond_s = condition.repeat_interleave(cur_s, dim=0)
             pe_s = prompt_embeds.repeat_interleave(cur_s, dim=0)
             gt_s = gt_video_latents.repeat_interleave(cur_s, dim=0)
+            meta_s = _repeat_meta(meta, cur_s)
             initial_latent = self._sample_group_initial_latents(condition, cur_s)
 
             traj = self.model.sde_generate(
@@ -106,11 +107,12 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 initial_latent=initial_latent,
             )
 
-            reward_flat = self._compute_reward_neg_loss(
+            reward_flat = self.reward_fn(
                 traj["latents"][-1],
                 gt_s,
                 cond_s,
                 pe_s,
+                meta=meta_s,
             )
             reward_chunks.append(reward_flat.view(B, cur_s))
 

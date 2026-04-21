@@ -22,8 +22,17 @@ logger = logging.getLogger(__name__)
 _LATENTS_KEY_RE = re.compile(r"latents_(\d+)$")
 
 
+_RESERVED_TENSOR_KEYS = frozenset({"prompt_embeds", "condition", "latents"})
+
+
 def _decode_sample(sample: dict, max_text_len: int = 512) -> dict:
-    """Decode a single webdataset sample into training tensors."""
+    """Decode a single webdataset sample into training tensors.
+
+    Any non-reserved tensor in the safetensors blob (e.g. ``maze_*`` fields
+    emitted by ``src.precompute.maze_webdataset``) is passed through verbatim
+    so downstream rewards can consume it.  Callers that don't care simply
+    ignore the extra keys.
+    """
     tensors = st_load(sample["safetensors"])
     prompt_embeds = tensors["prompt_embeds"]
 
@@ -37,21 +46,25 @@ def _decode_sample(sample: dict, max_text_len: int = 512) -> dict:
         "prompt_embeds": prompt_embeds,
         "condition": tensors["condition"],
     }
+
     if "latents" in tensors:
         decoded["video_latents"] = tensors["latents"]
-        return decoded
+    else:
+        latent_keys = []
+        for key in tensors:
+            match = _LATENTS_KEY_RE.fullmatch(key)
+            if match is not None:
+                latent_keys.append((int(match.group(1)), key))
+        if not latent_keys:
+            raise KeyError("Expected either 'latents' or 'latents_<n>' tensors in latent sample")
+        latent_keys.sort()
+        decoded["video_latents"] = [tensors[key] for _, key in latent_keys]
 
-    latent_keys = []
-    for key in tensors:
-        match = _LATENTS_KEY_RE.fullmatch(key)
-        if match is not None:
-            latent_keys.append((int(match.group(1)), key))
-
-    if not latent_keys:
-        raise KeyError("Expected either 'latents' or 'latents_<n>' tensors in latent sample")
-
-    latent_keys.sort()
-    decoded["video_latents"] = [tensors[key] for _, key in latent_keys]
+    # Pass through anything else (e.g. maze_* reward metadata).
+    for key, value in tensors.items():
+        if key in _RESERVED_TENSOR_KEYS or _LATENTS_KEY_RE.fullmatch(key):
+            continue
+        decoded[key] = value
     return decoded
 
 

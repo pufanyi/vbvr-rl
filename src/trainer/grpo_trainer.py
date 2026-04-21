@@ -13,7 +13,7 @@ import math
 import torch
 import torch.distributed as dist
 
-from src.trainer.base_grpo_trainer import BaseGRPOTrainer, _compute_ref_mean
+from src.trainer.base_grpo_trainer import BaseGRPOTrainer, _compute_ref_mean, _repeat_meta
 
 
 class GRPOTrainer(BaseGRPOTrainer):
@@ -36,7 +36,7 @@ class GRPOTrainer(BaseGRPOTrainer):
         T = cfg.grpo_num_sampling_steps
         device = self.device
 
-        prompt_embeds, gt_video_latents, condition = self._encode_batch_inputs(batch)
+        prompt_embeds, gt_video_latents, condition, meta = self._encode_batch_inputs(batch)
         B = gt_video_latents.shape[0]
 
         for m in [self.model.transformer, self.model.transformer_2]:
@@ -51,6 +51,7 @@ class GRPOTrainer(BaseGRPOTrainer):
             cond_s = condition.repeat_interleave(cur_S, dim=0)
             pe_s = prompt_embeds.repeat_interleave(cur_S, dim=0)
             gt_s = gt_video_latents.repeat_interleave(cur_S, dim=0)
+            meta_s = _repeat_meta(meta, cur_S)
 
             traj = self.model.sde_generate(
                 condition=cond_s,
@@ -62,11 +63,12 @@ class GRPOTrainer(BaseGRPOTrainer):
                 cfg_scale=cfg.grpo_cfg_scale,
             )
 
-            reward_flat = self._compute_reward_neg_loss(
+            reward_flat = self.reward_fn(
                 traj["latents"][-1],
                 gt_s,
                 cond_s,
                 pe_s,
+                meta=meta_s,
             )
             reward_chunks.append(reward_flat.view(B, cur_S))
 
@@ -192,7 +194,7 @@ class GRPOTrainer(BaseGRPOTrainer):
         T = cfg.grpo_num_sampling_steps
         device = self.device
 
-        prompt_embeds, gt_video_latents, condition = self._encode_batch_inputs(batch)
+        prompt_embeds, gt_video_latents, condition, meta = self._encode_batch_inputs(batch)
         B = gt_video_latents.shape[0]
         sigmas, timestep_vals, high_step_count = self._build_sampling_schedule(T, device=device)
         low_step_count = T - high_step_count
@@ -255,16 +257,18 @@ class GRPOTrainer(BaseGRPOTrainer):
                 cond_s = condition.repeat_interleave(cur_S, dim=0)
                 pe_s = prompt_embeds.repeat_interleave(cur_S, dim=0)
                 gt_s = gt_video_latents.repeat_interleave(cur_S, dim=0)
+                meta_s = _repeat_meta(meta, cur_S)
 
                 final_latent = traj["latents"][-1].to(device)
                 reward_indices = torch.randint(0, self.model.num_train_timesteps, (BS,), device=device)
-                reward_low = self._compute_reward_neg_loss(
+                reward_low = self.reward_fn(
                     final_latent,
                     gt_s,
                     cond_s,
                     pe_s,
                     indices=reward_indices,
                     expert_filter="low",
+                    meta=meta_s,
                 )
                 dist.send(final_latent.contiguous(), dst=self.peer_rank)
                 dist.send(reward_indices.contiguous(), dst=self.peer_rank)
@@ -286,18 +290,20 @@ class GRPOTrainer(BaseGRPOTrainer):
                 cond_s = condition.repeat_interleave(cur_S, dim=0)
                 pe_s = prompt_embeds.repeat_interleave(cur_S, dim=0)
                 gt_s = gt_video_latents.repeat_interleave(cur_S, dim=0)
+                meta_s = _repeat_meta(meta, cur_S)
 
                 final_latent = torch.empty_like(gt_s)
                 reward_indices = torch.empty(BS, device=device, dtype=torch.long)
                 dist.recv(final_latent, src=self.peer_rank)
                 dist.recv(reward_indices, src=self.peer_rank)
-                reward_high = self._compute_reward_neg_loss(
+                reward_high = self.reward_fn(
                     final_latent,
                     gt_s,
                     cond_s,
                     pe_s,
                     indices=reward_indices,
                     expert_filter="high",
+                    meta=meta_s,
                 )
                 dist.send(reward_high.contiguous(), dst=self.peer_rank)
 
