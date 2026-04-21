@@ -18,7 +18,7 @@ set SKIP_PRECOMPUTE                       # set to any value to skip encoding (u
 
 # Hub upload — set PUSH_TO_HUB empty to skip
 set PUSH_TO_HUB    yes
-set HF_REPO_ID     pufanyi/VBVR-Bench-t5-latent
+set HF_REPO_ID     pufanyi/VBVR-Bench-wan2.2-latent
 set HF_PRIVATE                            # set to any value to create a private repo
 # ─────────────────────────────────────────────────────────────────────
 
