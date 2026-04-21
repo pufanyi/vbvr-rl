@@ -61,6 +61,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--tasks", type=str, nargs="+", default=None, help="Only score these task names")
     parser.add_argument("--limit", type=int, default=None, help="Score at most N samples (for quick smoke tests)")
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Ignore and back up any existing scores.jsonl; score everything again",
+    )
+    parser.add_argument(
+        "--retry_errors",
+        action="store_true",
+        help="Re-score cached samples whose prior attempt errored",
+    )
     return parser.parse_args()
 
 
@@ -89,6 +99,8 @@ def main() -> None:
         output_dir=args.output_dir,
         tasks=args.tasks,
         limit=args.limit,
+        fresh=args.fresh,
+        retry_errors=args.retry_errors,
     )
 
 
