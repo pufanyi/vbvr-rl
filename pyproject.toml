@@ -27,6 +27,7 @@ dependencies = [
     "safetensors>=0.7.0",
     "webdataset>=1.0.2",
     "datasets>=4.8.4",
+    "vllm",
 ]
 
 [dependency-groups]
