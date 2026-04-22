@@ -5,7 +5,7 @@
 # For each checkpoint:
 #   1. Build eval JSON from the VBVR-Bench GT directory (once, cached).
 #   2. Generate videos with src.cli.eval_i2v (multi-GPU).
-#   3. Score with VBVR-EvalKit's run_evaluation_video_icml.py.
+#   3. Score with the vendored VBVR-EvalKit (third_party/VBVR-EvalKit/run_evaluation.py).
 #
 #   fish scripts/eval/eval_vbvr.fish
 
@@ -18,7 +18,7 @@ set CHECKPOINTS \
 
 set NUM_GPUS 8
 set GT_BASE /mnt/umm/users/pufanyi/workspace/Wan-Trainer/data/vbvr/VBVR-Bench
-set EVALKIT_DIR /mnt/aigc/xujunxiang/Code/VBVR-Bench/VBVR-EvalKit
+set EVALKIT_DIR third_party/VBVR-EvalKit
 set EVAL_JSON storage/eval_out/vbvr/vbvr_eval.json
 set SPLIT Open_60                          # directory label only; scoring is split-agnostic
 set TASKS                                   # leave empty to evaluate all tasks
@@ -100,13 +100,10 @@ for CKPT in $CHECKPOINTS
                 set -l SCORE_DIR $ABS_MODEL_OUT/score
                 set -l score_args --model_path $ABS_MODEL_OUT --gt_base $GT_BASE --output_dir $SCORE_DIR
                 if test (count $TASKS) -gt 0
-                    set -a score_args --tasks $TASKS
+                    echo "[warn] run_evaluation.py has no --tasks flag; scoring all videos found under $ABS_MODEL_OUT"
                 end
-                pushd $EVALKIT_DIR
-                uv run python run_evaluation_video_icml.py $score_args
-                set -l rc $status
-                popd
-                test $rc -eq 0; or echo "[warn] rule scoring failed for $CKPT (rc=$rc)"
+                uv run python $EVALKIT_DIR/run_evaluation.py $score_args
+                or echo "[warn] rule scoring failed for $CKPT"
 
             case '*'
                 echo "[error] unknown JUDGE=$JUDGE (expected 'vlm' or 'rule')"
