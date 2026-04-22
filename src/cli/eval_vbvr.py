@@ -80,12 +80,17 @@ def parse_args() -> argparse.Namespace:
 
 
 def _init_distributed() -> tuple[int, int, int]:
-    """Return (rank, world_size, local_rank). Init gloo group if torchrun-launched."""
+    """Return (rank, world_size, local_rank). Init NCCL group if torchrun-launched."""
     if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
-        dist.init_process_group(backend="gloo")
+        local_rank = int(os.environ.get("LOCAL_RANK", os.environ["RANK"]))
+        if torch.cuda.is_available():
+            torch.cuda.set_device(local_rank)
+            backend = "nccl"
+        else:
+            backend = "gloo"
+        dist.init_process_group(backend=backend)
         rank = dist.get_rank()
         world_size = dist.get_world_size()
-        local_rank = int(os.environ.get("LOCAL_RANK", rank))
     else:
         rank, world_size, local_rank = 0, 1, 0
     return rank, world_size, local_rank
@@ -116,7 +121,14 @@ def main() -> None:
         device_map=args.device_map,
     )
 
-    barrier_fn = dist.barrier if world_size > 1 else None
+    if world_size > 1:
+        backend = dist.get_backend()
+        if backend == "nccl":
+            barrier_fn = lambda: dist.barrier(device_ids=[local_rank])  # noqa: E731
+        else:
+            barrier_fn = dist.barrier
+    else:
+        barrier_fn = None
     run_eval(
         model_output=args.model_output,
         gt_base=args.gt_base,
