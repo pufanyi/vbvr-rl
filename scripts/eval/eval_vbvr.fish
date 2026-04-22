@@ -11,7 +11,8 @@
 
 # ── Configuration ────────────────────────────────────────────────────
 set CHECKPOINTS \
-    storage/checkpoints/correction_vbvr/checkpoint-3000
+    storage/checkpoints/sft_vbvr/checkpoint-12000
+    # storage/checkpoints/correction_vbvr/checkpoint-3000 \
     # storage/checkpoints/sft_maze/checkpoint-2000
     # storage/checkpoints/cos_maze/checkpoint-4000
 
