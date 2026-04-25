@@ -11,7 +11,12 @@
 
 # ── Configuration ────────────────────────────────────────────────────
 set CHECKPOINTS \
-    storage/checkpoints/sft_vbvr/checkpoint-12000
+    storage/checkpoints/sft_vbvr_5e-6/checkpoint-10000
+    # storage/checkpoints/sft_vbvr/checkpoint-12000
+    # storage/models/Wan2.2-I2V-A14B-Diffusers
+    # storage/checkpoints/sft_vbvr/checkpoint-4000
+    # storage/checkpoints/sft_vbvr/checkpoint-8000
+    # storage/checkpoints/sft_vbvr/checkpoint-12000
     # storage/checkpoints/correction_vbvr/checkpoint-3000 \
     # storage/checkpoints/sft_maze/checkpoint-2000
     # storage/checkpoints/cos_maze/checkpoint-4000
@@ -50,26 +55,41 @@ for CKPT in $CHECKPOINTS
     set -l CKPT_NAME (string replace -a / _ (string trim -r -c / $CKPT | string replace -r '.*storage/checkpoints/' ''))
     set -l MODEL_OUT_DIR storage/eval_out/vbvr/$CKPT_NAME
 
+    # A DCP training checkpoint has .metadata at root (flat layout) or under
+    # high/ and/or low/ (expert-parallel layout). Anything else is assumed to
+    # be a plain diffusers directory we should load as --model_path directly.
+    set -l IS_DCP 0
+    if test -f $CKPT/.metadata; or test -f $CKPT/high/.metadata; or test -f $CKPT/low/.metadata
+        set IS_DCP 1
+    end
+
+    set -l infer_args --eval_json $EVAL_JSON --output_dir $MODEL_OUT_DIR
+    if test $IS_DCP -eq 1
+        set -a infer_args --checkpoint $CKPT --use_ema
+    else
+        set -a infer_args --model_path $CKPT
+    end
+    if test (count $EXTRA_INFER_ARGS) -gt 0
+        set -a infer_args $EXTRA_INFER_ARGS
+    end
+
     echo ""
     echo "==============================================================="
     echo "Checkpoint:  $CKPT"
+    if test $IS_DCP -eq 1
+        echo "Mode:        DCP checkpoint (use_ema=on)"
+    else
+        echo "Mode:        plain diffusers model"
+    end
     echo "Output dir:  $MODEL_OUT_DIR"
     echo "==============================================================="
 
     if not set -q SKIP_GENERATION[1]
         if test $NUM_GPUS -gt 1
-            uv run torchrun --nproc_per_node=$NUM_GPUS -m src.cli.eval_i2v \
-                --eval_json $EVAL_JSON \
-                --output_dir $MODEL_OUT_DIR \
-                --checkpoint $CKPT \
-                --use_ema $EXTRA_INFER_ARGS
+            uv run torchrun --nproc_per_node=$NUM_GPUS -m src.cli.eval_i2v $infer_args
             or continue
         else
-            uv run python -m src.cli.eval_i2v \
-                --eval_json $EVAL_JSON \
-                --output_dir $MODEL_OUT_DIR \
-                --checkpoint $CKPT \
-                --use_ema $EXTRA_INFER_ARGS
+            uv run python -m src.cli.eval_i2v $infer_args
             or continue
         end
     end
