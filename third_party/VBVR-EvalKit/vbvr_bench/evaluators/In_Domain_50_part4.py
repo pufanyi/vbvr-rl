@@ -543,7 +543,10 @@ class LEGOConstructionEvaluator(BaseEvaluator):
         gt_struct = self._analyze_structure(gt_final)
 
         if gt_struct['edge_count'] > 0:
-            edge_ratio = min(gen_struct['edge_count'], gt_struct['edge_count']) / max(gen_struct['edge_count'], gt_struct['edge_count'])
+            edge_ratio = min(gen_struct['edge_count'], gt_struct['edge_count']) / max(
+                gen_struct['edge_count'],
+                gt_struct['edge_count'],
+            )
             scores['stud_alignment'] = edge_ratio
         else:
             scores['stud_alignment'] = 0.2  # Detection failed
@@ -557,7 +560,10 @@ class LEGOConstructionEvaluator(BaseEvaluator):
 
         # 4. Connection: Check structure completeness
         if gt_struct['contour_count'] > 0:
-            contour_ratio = min(gen_struct['contour_count'], gt_struct['contour_count']) / max(gen_struct['contour_count'], gt_struct['contour_count'])
+            contour_ratio = min(gen_struct['contour_count'], gt_struct['contour_count']) / max(
+                gen_struct['contour_count'],
+                gt_struct['contour_count'],
+            )
             scores['connection'] = contour_ratio
         else:
             scores['connection'] = 0.2  # Detection failed
@@ -900,7 +906,10 @@ class BookshelfEvaluator(BaseEvaluator):
         # 1. Cluster identification (30%): Compare book counts
         # Rule: Correctly identify height-based clusters using eps threshold
         if gt_arr['book_count'] > 0:
-            count_ratio = min(gen_arr['book_count'], gt_arr['book_count']) / max(gen_arr['book_count'], gt_arr['book_count'])
+            count_ratio = min(gen_arr['book_count'], gt_arr['book_count']) / max(
+                gen_arr['book_count'],
+                gt_arr['book_count'],
+            )
             # Perfect match gets full score
             if count_ratio == 1.0:
                 scores['cluster_identification'] = 1.0
@@ -1500,7 +1509,7 @@ class DotToDotEvaluator(BaseEvaluator):
         if lines is None:
             return []
 
-        return [(l[0][0], l[0][1], l[0][2], l[0][3]) for l in lines]
+        return [(line[0][0], line[0][1], line[0][2], line[0][3]) for line in lines]
 
     def _evaluate_task_specific(
         self,

@@ -96,13 +96,12 @@ class BaseEvaluator(ABC):
             # CRITICAL: Normalize video frames to match GT frame size
             # This handles different video resolutions (e.g., 720x1280 vs 1024x1024)
             target_frame = gt_first_frame if gt_first_frame is not None else gt_final_frame
-            if target_frame is not None and len(video_frames) > 0:
-                if video_frames[0].shape != target_frame.shape:
-                    result['details']['frame_normalization'] = f'{video_frames[0].shape} -> {target_frame.shape}'
-                    video_frames = [normalize_frame_size(f, target_frame) for f in video_frames]
-                    # Also normalize GT frames if loaded
-                    if gt_frames and len(gt_frames) > 0:
-                        gt_frames = [normalize_frame_size(f, target_frame) for f in gt_frames]
+            if target_frame is not None and len(video_frames) > 0 and video_frames[0].shape != target_frame.shape:
+                result['details']['frame_normalization'] = f'{video_frames[0].shape} -> {target_frame.shape}'
+                video_frames = [normalize_frame_size(f, target_frame) for f in video_frames]
+                # Also normalize GT frames if loaded
+                if gt_frames and len(gt_frames) > 0:
+                    gt_frames = [normalize_frame_size(f, target_frame) for f in gt_frames]
 
             # Compute dimension scores using STANDARD dimension names
             # These names MUST match DEFAULT_WEIGHTS keys

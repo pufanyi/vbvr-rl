@@ -1,21 +1,25 @@
-"""
-VBVR-Bench
-A rule-based evaluation toolkit for assessing video generation models on 100 visual reasoning tasks. Each task is evaluated by a dedicated rule-based evaluator.
-"""
+"""VBVR-Bench rule-based evaluation toolkit for video visual reasoning tasks."""
 
-import importlib
-import json
 import os
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
-from .evaluators import OUT_OF_DOMAIN_PREFIXES, get_split, is_out_of_domain
+from .evaluators import OUT_OF_DOMAIN_PREFIXES as OUT_OF_DOMAIN_PREFIXES
+from .evaluators import get_split as get_split
+from .evaluators import is_out_of_domain
 from .utils import (
-    extract_task_info_from_path,
-    get_frame_count,
-    get_video_frames,
-    load_gt_metadata,
+    extract_task_info_from_path as extract_task_info_from_path,
+)
+from .utils import (
+    get_frame_count as get_frame_count,
+)
+from .utils import (
+    get_video_frames as get_video_frames,
+)
+from .utils import (
+    load_gt_metadata as load_gt_metadata,
+)
+from .utils import (
     load_json,
     save_json,
 )
@@ -335,7 +339,7 @@ class VBVRBench:
             results['by_category'][category]['num_tasks'] += 1
 
         # Calculate averages for each category
-        for category, cat_data in results['by_category'].items():
+        for _category, cat_data in results['by_category'].items():
             if cat_data['scores']:
                 cat_data['mean_score'] = sum(cat_data['scores']) / len(cat_data['scores'])
                 cat_data['num_videos'] = len(cat_data['scores'])
@@ -360,9 +364,15 @@ class VBVRBench:
         print("┌" + "─" * 68 + "┐")
         print("│" + " " * 20 + "MAIN RESULTS" + " " * 36 + "│")
         print("├" + "─" * 34 + "┬" + "─" * 33 + "┤")
-        in_domain_str = f"│  In-Domain (50 tasks):         │  {results['In_Domain']['mean_score']:.4f}  ({results['In_Domain']['num_videos']} videos)"
+        in_domain_str = (
+            f"│  In-Domain (50 tasks):         │  {results['In_Domain']['mean_score']:.4f}  "
+            f"({results['In_Domain']['num_videos']} videos)"
+        )
         print(in_domain_str + " " * (69 - len(in_domain_str)) + "│")
-        ood_str = f"│  Out-of-Domain (50 tasks):     │  {results['Out_of_Domain']['mean_score']:.4f}  ({results['Out_of_Domain']['num_videos']} videos)"
+        ood_str = (
+            f"│  Out-of-Domain (50 tasks):     │  {results['Out_of_Domain']['mean_score']:.4f}  "
+            f"({results['Out_of_Domain']['num_videos']} videos)"
+        )
         print(ood_str + " " * (69 - len(ood_str)) + "│")
         print("├" + "─" * 34 + "┼" + "─" * 33 + "┤")
         overall_str = f"│  Overall Average:              │  {results['overall']['mean_score']:.4f}"

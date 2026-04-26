@@ -10,6 +10,11 @@ from ..utils import compute_optical_flow, normalize_frame_size
 from .base_evaluator import BaseEvaluator
 
 
+def _safe_distance(point_a: tuple[float, float], point_b: tuple[float, float]) -> float:
+    """Return Euclidean distance between two 2D points."""
+    return float(np.linalg.norm(np.array(point_a) - np.array(point_b)))
+
+
 class SeparateObjectsNoSpinEvaluator(BaseEvaluator):
     """
     G-24: Separate objects (no spin) evaluator.
@@ -90,7 +95,7 @@ class SeparateObjectsNoSpinEvaluator(BaseEvaluator):
             for fs in final_shapes:
                 min_dist = float('inf')
                 for gts in gt_final_shapes:
-                    dist = safe_distance(fs['center'], gts['center'])
+                    dist = _safe_distance(fs['center'], gts['center'])
                     min_dist = min(min_dist, dist)
                 if min_dist < float('inf'):
                     total_dist += min_dist
@@ -666,7 +671,7 @@ class ConnectingColorEvaluator(BaseEvaluator):
             # Find matching object in last frame (same color, similar position)
             for last_obj in last_objects:
                 if first_obj['color'] == last_obj['color']:
-                    dist = safe_distance(first_obj['center'], last_obj['center'])
+                    dist = _safe_distance(first_obj['center'], last_obj['center'])
                     if dist < 50:  # Object within 50 pixels of original position
                         matched += 1
                         break

@@ -497,8 +497,14 @@ class ShapeOutlineFillEvaluator(BaseEvaluator):
 
         # Check if top row shapes are preserved (area should be similar)
         if first_top_left['exists'] and first_top_right['exists']:
-            tl_change = abs(final_top_left.get('area', 0) - first_top_left.get('area', 0)) / max(first_top_left.get('area', 1), 1)
-            tr_change = abs(final_top_right.get('area', 0) - first_top_right.get('area', 0)) / max(first_top_right.get('area', 1), 1)
+            tl_change = abs(final_top_left.get('area', 0) - first_top_left.get('area', 0)) / max(
+                first_top_left.get('area', 1),
+                1,
+            )
+            tr_change = abs(final_top_right.get('area', 0) - first_top_right.get('area', 0)) / max(
+                first_top_right.get('area', 1),
+                1,
+            )
 
             if tl_change > 0.5 or tr_change > 0.5:
                 # First row changed significantly
@@ -1281,7 +1287,7 @@ class GlassRefractionEvaluator(BaseEvaluator):
                                 minLineLength=30, maxLineGap=10)
 
         if lines is not None and len(lines) > 0:
-            longest = max(lines, key=lambda l: np.sqrt((l[0][2]-l[0][0])**2 + (l[0][3]-l[0][1])**2))
+            longest = max(lines, key=lambda line: np.sqrt((line[0][2]-line[0][0])**2 + (line[0][3]-line[0][1])**2))
             x1, y1, x2, y2 = longest[0]
             angle = np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi
             length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
@@ -1427,7 +1433,7 @@ class MirrorReflectionEvaluator(BaseEvaluator):
                                 minLineLength=30, maxLineGap=10)
 
         if lines is not None and len(lines) > 0:
-            longest = max(lines, key=lambda l: np.sqrt((l[0][2]-l[0][0])**2 + (l[0][3]-l[0][1])**2))
+            longest = max(lines, key=lambda line: np.sqrt((line[0][2]-line[0][0])**2 + (line[0][3]-line[0][1])**2))
             x1, y1, x2, y2 = longest[0]
             angle = np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi
             length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
@@ -1483,7 +1489,7 @@ class MirrorReflectionEvaluator(BaseEvaluator):
         # 2. Symmetry: Check if angles are symmetric about normal
         if gen_lines and len(gen_lines) >= 2:
             # Find incident and reflected rays
-            angles = [l['angle'] for l in gen_lines if l['length'] > 50]
+            angles = [line['angle'] for line in gen_lines if line['length'] > 50]
             if len(angles) >= 2:
                 # Check for angle symmetry
                 angles_sorted = sorted(angles)
@@ -1499,7 +1505,11 @@ class MirrorReflectionEvaluator(BaseEvaluator):
 
         # 3. Ray extension: Check line length
         if gen_reflected is not None and gt_reflected is not None:
-            length_ratio = min(gen_reflected['length'], gt_reflected['length']) / max(gen_reflected['length'], gt_reflected['length'], 1)
+            length_ratio = min(gen_reflected['length'], gt_reflected['length']) / max(
+                gen_reflected['length'],
+                gt_reflected['length'],
+                1,
+            )
             scores['ray_extension'] = length_ratio
         elif gen_reflected is not None:
             scores['ray_extension'] = min(1.0, gen_reflected['length'] / 100.0)

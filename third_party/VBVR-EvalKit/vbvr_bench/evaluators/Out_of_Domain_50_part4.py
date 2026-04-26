@@ -143,7 +143,12 @@ class SymbolDeletionEvaluator(BaseEvaluator):
                     return (cx, cy)
         return None
 
-    def _evaluate_deletion(self, first_symbols: list[dict], final_symbols: list[dict], first_frame: np.ndarray) -> float:
+    def _evaluate_deletion(
+        self,
+        first_symbols: list[dict],
+        final_symbols: list[dict],
+        first_frame: np.ndarray,
+    ) -> float:
         """Check if exactly one symbol is deleted (the one with red border)."""
         first_count = len(first_symbols)
         final_count = len(final_symbols)
@@ -194,7 +199,12 @@ class SymbolDeletionEvaluator(BaseEvaluator):
         else:
             return 0.3  # Wrong symbol deleted
 
-    def _evaluate_symbol_preservation(self, first_symbols: list[dict], final_symbols: list[dict], first_frame: np.ndarray) -> float:
+    def _evaluate_symbol_preservation(
+        self,
+        first_symbols: list[dict],
+        final_symbols: list[dict],
+        first_frame: np.ndarray,
+    ) -> float:
         """CRITICAL: Check if all OTHER symbols' colors remain unchanged."""
         if len(final_symbols) == 0:
             return 0.0
@@ -2199,7 +2209,7 @@ class SymmetryCompletionEvaluator(BaseEvaluator):
         symmetric_rows = 0
         total_rows = len(rows)
 
-        for row_key, row_blocks in rows.items():
+        for _row_key, row_blocks in rows.items():
             # Get x positions relative to center
             x_positions = [b['center'][0] - center_x for b in row_blocks]
 
@@ -2287,8 +2297,6 @@ class SymmetryCompletionEvaluator(BaseEvaluator):
                     break
 
         return consistent / len(final_hues) if final_hues else 0.5
-
-        return max(0.0, correlation)
 
     def _evaluate_preservation(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if left side is preserved."""

@@ -5,8 +5,6 @@ This module provides task-specific evaluators for all 100 VBVR-Bench tasks.
 Each evaluator implements rule-based evaluation following documented criteria.
 """
 
-from typing import Any, Dict, Optional
-
 from .base_evaluator import BaseEvaluator
 from .In_Domain_50_part1 import (
     GridAvoidObstaclesEvaluator as InDomainGridAvoidObstaclesEvaluator,
@@ -333,7 +331,9 @@ TASK_EVALUATOR_MAP = {
     'G-45_key_door_matching_data-generator': InDomainKeyDoorMatchingEvaluator,
     'G-51_predict_next_color_data-generator': InDomainPredictNextColorEvaluator,
     'G-131_select_next_figure_increasing_size_sequence_data-generator': InDomainSelectNextFigureIncreasingEvaluator,
-    'G-134_select_next_figure_large_small_alternating_sequence_data-generator': InDomainSelectNextFigureLargeSmallEvaluator,
+    'G-134_select_next_figure_large_small_alternating_sequence_data-generator': (
+        InDomainSelectNextFigureLargeSmallEvaluator
+    ),
     'G-138_spot_unique_non_repeated_color_data-generator': InDomainSpotUniqueColorEvaluator,
     'G-158_identify_all_hollow_points_data-generator': InDomainIdentifyAllHollowPointsEvaluator,
     'G-194_construct_concentric_ring_data-generator': InDomainConstructConcentricRingEvaluator,
