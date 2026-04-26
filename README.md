@@ -1,133 +1,141 @@
 # Wan-Trainer
 
-Wan2.2 Image-to-Video fine-tuning with FSDP2 + Distributed Checkpoint.
+Wan-Trainer is a research training stack for **Wan2.2 Image-to-Video** models. The current codebase supports supervised flow-matching fine-tuning, Chain-of-Step (COS) path training, on-policy correction, Flow-GRPO, DanceGRPO-style replay, latent WebDataset training, DCP checkpointing, LoRA extraction/loading, and VBVR-style evaluation.
+
+The detailed English documentation lives in [`docs/`](docs/README.md). Start there if you need the full architecture and code-path analysis.
 
 ## Setup
 
 ```bash
-# Python >= 3.12 required
+# Python >= 3.12
 uv sync
 ```
 
-## Scripts
+Expected local layout:
 
-Operational launchers are grouped by purpose under `scripts/`; see
-`scripts/README.md` for the current layout and common entrypoints.
-
-## Data Format
-
-JSON (or YAML) array, one entry per video:
-
-```json
-[
-    {
-        "video": "1_step/00000.mp4",
-        "image": ["1_step_frames/00000.jpg"],
-        "prompt": "A robotic arm manipulates a Rubik cube."
-    }
-]
+```text
+storage/models/Wan2.2-I2V-A14B-Diffusers/
+data/
+storage/checkpoints/
+storage/eval_out/
 ```
 
-- `video` — path to video file
-- `image` — reference image (string or single-element list); omit to use the first video frame
-- `prompt` — text description
+Most launchers source `scripts/lib/env.fish`, activate `.venv`, set `PYTHONPATH`, and run from the repository root.
 
-Paths can be absolute or relative to the JSON file's directory.
+## Main Workflows
 
-## Training
-
-```bash
-# Full fine-tuning, 8 GPUs
-.venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_i2v.yaml
-
-# LoRA fine-tuning
-.venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_i2v_lora.yaml
-
-# CLI overrides (any config field)
-.venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v \
-    --config configs/train_i2v.yaml \
-    --learning_rate 2e-5 \
-    --num_epochs 3
-```
-
-Or via the fish wrapper:
+Supervised I2V / COS:
 
 ```fish
-fish scripts/train/i2v.fish --config configs/train_i2v.yaml
-fish scripts/train/i2v.fish --nproc 4 -- --config configs/train_i2v.yaml
+fish scripts/train/i2v.fish --nproc 8 -- --config configs/train_sft_vbvr.yaml
+fish scripts/train/i2v.fish --nproc 8 -- --config configs/train_cos_maze_cos_path_all_bfs_w_color_latent.yaml
+fish scripts/train/i2v.fish --nproc 8 -- --config configs/train_sft_maze_lr_5e-6.yaml
 ```
 
-### Resume from Checkpoint
+Flow-GRPO / DanceGRPO:
 
-```yaml
-resume_from: storage/checkpoints/checkpoint-500
+```fish
+fish scripts/train/grpo.fish --nproc 8 --config configs/train_grpo_maze.yaml
+fish scripts/train/grpo.fish --nproc 8 --config configs/train_dancegrpo_maze.yaml
 ```
 
-Resumes model weights, optimizer state, and exact data position (epoch + batch index).
+On-policy correction:
 
-## Configuration
+```fish
+fish scripts/train/i2v_correction.fish --nproc 8 -- --config configs/train_correction_vbvr.yaml
+```
 
-All fields with defaults — override in YAML or via CLI flags.
+Latent precompute:
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `model_path` | `storage/models/Wan2.2-I2V-A14B-Diffusers` | Pretrained model directory |
-| `dataset_json` | `data/train.json` | Dataset JSON path |
-| `num_frames` | 81 | Frames per video |
-| `height` | 480 | Video height |
-| `width` | 832 | Video width |
-| `fps` | 16 | Target sampling FPS |
-| `num_workers` | 4 | Dataloader workers |
-| `persistent_workers` | true | Keep dataloader workers alive across epochs |
-| `prefetch_factor` | 2 | Worker-side prefetch depth |
-| `output_dir` | `storage/checkpoints` | Checkpoint output dir |
-| `batch_size` | 1 | Per-GPU batch size |
-| `gradient_accumulation_steps` | 4 | Micro-batches per optimizer step |
-| `num_epochs` | 1 | Training epochs |
-| `learning_rate` | 1e-5 | Peak learning rate |
-| `weight_decay` | 0.01 | AdamW weight decay |
-| `max_grad_norm` | 1.0 | Gradient clipping |
-| `warmup_steps` | 100 | Linear warmup steps |
-| `save_steps` | 500 | Save every N steps (0 = epoch-end only) |
-| `log_steps` | 10 | Log every N steps |
-| `seed` | 42 | Random seed |
-| `train_experts` | `both` | Which MoE experts: `both`, `high`, `low` |
-| `train_text_encoder` | false | Unfreeze and train UMT5 text encoder |
-| `param_dtype` | `bfloat16` | FSDP parameter dtype |
-| `reduce_dtype` | `float32` | FSDP gradient reduction dtype |
-| `lora_rank` | 0 | LoRA rank (0 = full fine-tuning) |
-| `lora_alpha` | 16 | LoRA alpha |
-| `lora_dropout` | 0.0 | LoRA dropout |
-| `resume_from` | null | Checkpoint path to resume |
+```fish
+fish scripts/precompute/maze_webdataset.fish --num_samples 20000
 
-## Inference
+.venv/bin/torchrun --nproc_per_node=8 -m src.precompute.i2v_latent_webdataset \
+  --config configs/train_sft_maze.yaml \
+  --output_dir data/maze/latents/webdataset \
+  --batch_size 4 \
+  --samples_per_shard 1000
+```
+
+Inference and evaluation:
 
 ```bash
 .venv/bin/python -m src.cli.infer_i2v \
-    --image path/to/image.jpg \
-    --prompt "A robotic arm manipulates a Rubik cube." \
-    --output output.mp4
+  --image path/to/image.jpg \
+  --prompt "A concise I2V prompt." \
+  --output storage/outputs/sample.mp4
+
+fish scripts/eval/vbvr_generate_score.fish
 ```
 
-## Architecture
+## Data Inputs
 
+Raw training uses a JSON config that points to one or more Parquet files:
+
+```json
+[
+  {
+    "data_path": "/path/to/train.parquet",
+    "root": "/path/to/media/root",
+    "num_frames": 81,
+    "height": 256,
+    "width": 256,
+    "fps": 16
+  }
+]
 ```
-src/
-├── cli/
-│   ├── train_i2v.py          # Training entry point
-│   └── infer_i2v.py          # Inference entry point
-├── data/
-│   └── i2v_dataset.py        # Dataset (video + image + prompt)
-├── models/
-│   └── wan_i2v.py            # Model wrapper (frozen VAE/T5 + trainable transformers)
-└── trainer/
-    ├── config.py              # TrainConfig (pydantic)
-    ├── checkpoint.py          # DCP state management
-    └── i2v_trainer.py         # FSDP2 trainer + training loop
+
+Each Parquet row should contain:
+
+- `videos`: ordered `list<string>` for COS or multi-step chains, where the last item is the final target.
+- `video`: single target video path, used when `videos` is absent.
+- `prompt`: text prompt.
+- `image`: optional reference image. If omitted, the first frame of the final video is used.
+
+Latent training uses `latent_webdataset_dir` pointing at `shard-*.tar` files. Each sample stores `prompt_embeds`, `condition`, and either `latents` or `latents_0`, `latents_1`, ... for COS chains. Set `dataset_size` in latent configs so schedules and epoch lengths are well-defined.
+
+## Repository Map
+
+```text
+src/cli/          entry points for training, inference, evaluation, conversion
+src/models/       Wan2.2 training wrapper and COS path implementations
+src/data/         raw Parquet and latent WebDataset loaders
+src/trainer/      SFT, COS, correction, GRPO, checkpointing, EMA, optimizers
+src/precompute/   VAE/T5 latent precompute and synthetic maze generation
+src/eval/         VBVR generation/result tooling and VLM judge
+configs/          runnable training configs
+scripts/          fish launchers and operator utilities
+tests/            focused unit/consistency checks
+docs/             architecture, training, data, evaluation, and improvement docs
 ```
 
-Wan2.2 uses a Mixture-of-Experts architecture with two transformer denoising experts:
-- **transformer** — high-noise expert (timestep >= 900)
-- **transformer_2** — low-noise expert (timestep < 900)
+## Checkpoints
 
-Both are FSDP2-sharded for multi-GPU training. The VAE and text encoder are frozen by default (text encoder can be unfrozen via `train_text_encoder: true`).
+Training checkpoints use PyTorch Distributed Checkpoint (DCP). New checkpoints are written with a unified expert layout:
+
+```text
+checkpoint-N/
+  high/
+    .metadata
+    *.distcp
+    optimizer_transformer_rank*.pt
+    dataloader_rank*.pt
+    lora/transformer/
+  low/
+    .metadata
+    *.distcp
+    optimizer_transformer_2_rank*.pt
+    dataloader_rank*.pt
+    lora/transformer_2/
+```
+
+Use `--checkpoint <checkpoint-dir> --use_ema` with `src.cli.eval_i2v` to generate from a DCP checkpoint. Conversion helpers live under `src/cli/convert_dcp_to_diffusers.py` and `src/cli/convert_dcp_to_lora.py`.
+
+## Documentation
+
+- [`docs/architecture.md`](docs/architecture.md): system architecture and code-path analysis.
+- [`docs/training.md`](docs/training.md): SFT, COS, correction, Flow-GRPO, and DanceGRPO behavior.
+- [`docs/data.md`](docs/data.md): raw and latent dataset contracts.
+- [`docs/evaluation.md`](docs/evaluation.md): generation, VBVR, VLM/rule scoring.
+- [`docs/checkpoints.md`](docs/checkpoints.md): DCP, resume/init, LoRA, EMA.
+- [`docs/improvements/`](docs/improvements/README.md): algorithm-to-engineering improvement plan.
