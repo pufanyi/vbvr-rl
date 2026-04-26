@@ -2,7 +2,6 @@
 Specific evaluators for In-Domain_50 tasks (Part 4).
 """
 
-
 import cv2
 import numpy as np
 
@@ -24,12 +23,7 @@ class ConstructionBlueprintEvaluator(BaseEvaluator):
     4. Structure integrity (10%) - Complete, connected result
     """
 
-    TASK_WEIGHTS = {
-        'piece_selection': 0.40,
-        'shape_matching': 0.30,
-        'placement': 0.20,
-        'integrity': 0.10
-    }
+    TASK_WEIGHTS = {"piece_selection": 0.40, "shape_matching": 0.30, "placement": 0.20, "integrity": 0.10}
 
     def _detect_gap_region(self, frame: np.ndarray) -> tuple[int, int, int, int] | None:
         """Detect red-outlined gap region."""
@@ -80,7 +74,7 @@ class ConstructionBlueprintEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate blueprint piece selection and placement."""
 
@@ -102,37 +96,37 @@ class ConstructionBlueprintEvaluator(BaseEvaluator):
             gtx, gty, gtw, gth = gt_green
 
             # Calculate position difference
-            pos_diff = np.sqrt((genx - gtx)**2 + (geny - gty)**2)
+            pos_diff = np.sqrt((genx - gtx) ** 2 + (geny - gty) ** 2)
             size_ratio = min(genw * genh, gtw * gth) / max(genw * genh, gtw * gth, 1)
 
             if pos_diff < 50 and size_ratio > 0.5:
-                scores['piece_selection'] = 1.0
+                scores["piece_selection"] = 1.0
             elif pos_diff < 100 or size_ratio > 0.3:
-                scores['piece_selection'] = 0.3
+                scores["piece_selection"] = 0.3
             else:
-                scores['piece_selection'] = 0.0
+                scores["piece_selection"] = 0.0
         elif gen_green is None and gt_green is None:
-            scores['piece_selection'] = 1.0  # Both have no green
+            scores["piece_selection"] = 1.0  # Both have no green
         else:
-            scores['piece_selection'] = 0.0  # Mismatch
+            scores["piece_selection"] = 0.0  # Mismatch
 
         # 2. Shape matching: Compare with GT final (STRICT)
         if gen_final.shape == gt_final.shape:
             diff = np.abs(gen_final.astype(float) - gt_final.astype(float)).mean()
             if diff < 20:
-                scores['shape_matching'] = 1.0
+                scores["shape_matching"] = 1.0
             elif diff < 40:
-                scores['shape_matching'] = 0.3
+                scores["shape_matching"] = 0.3
             else:
-                scores['shape_matching'] = 0.0
+                scores["shape_matching"] = 0.0
         else:
-            scores['shape_matching'] = 0.0
+            scores["shape_matching"] = 0.0
 
         # 3. Placement: Check if gap is filled (no red outline remaining)
-        scores['placement'] = self._check_gap_filled(gen_final)
+        scores["placement"] = self._check_gap_filled(gen_final)
 
         # 4. Integrity: Overall frame similarity
-        scores['integrity'] = scores['shape_matching']
+        scores["integrity"] = scores["shape_matching"]
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -158,6 +152,7 @@ class ConstructionBlueprintEvaluator(BaseEvaluator):
 
         return None
 
+
 class DominoChainBranchEvaluator(BaseEvaluator):
     """
     O-23: Domino Chain Branch Path Prediction
@@ -172,12 +167,7 @@ class DominoChainBranchEvaluator(BaseEvaluator):
     4. Fall direction accuracy (10%) - Correct tilt directions
     """
 
-    TASK_WEIGHTS = {
-        'fallen_domino': 0.40,
-        'gap_rule': 0.30,
-        'chain_sequence': 0.20,
-        'fall_direction': 0.10
-    }
+    TASK_WEIGHTS = {"fallen_domino": 0.40, "gap_rule": 0.30, "chain_sequence": 0.20, "fall_direction": 0.10}
 
     def _count_standing_dominoes(self, frame: np.ndarray) -> int:
         """Count number of vertical (standing) domino shapes."""
@@ -185,7 +175,7 @@ class DominoChainBranchEvaluator(BaseEvaluator):
 
         # Detect vertical lines
         edges = cv2.Canny(gray, 50, 150)
-        lines = cv2.HoughLinesP(edges, 1, np.pi/180, 30, minLineLength=30, maxLineGap=5)
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 30, minLineLength=30, maxLineGap=5)
 
         standing_count = 0
         if lines is not None:
@@ -203,7 +193,7 @@ class DominoChainBranchEvaluator(BaseEvaluator):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 
         edges = cv2.Canny(gray, 50, 150)
-        lines = cv2.HoughLinesP(edges, 1, np.pi/180, 30, minLineLength=20, maxLineGap=5)
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 30, minLineLength=20, maxLineGap=5)
 
         fallen_count = 0
         if lines is not None:
@@ -220,7 +210,7 @@ class DominoChainBranchEvaluator(BaseEvaluator):
     def _detect_dominoes_by_color(self, frame: np.ndarray) -> dict[str, int]:
         """Detect dominoes by their colors (red=fallen, blue=standing typically)."""
         if len(frame.shape) != 3:
-            return {'red': 0, 'blue': 0}
+            return {"red": 0, "blue": 0}
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
@@ -240,8 +230,8 @@ class DominoChainBranchEvaluator(BaseEvaluator):
         blue_contours, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         return {
-            'red': len([c for c in red_contours if cv2.contourArea(c) > 100]),
-            'blue': len([c for c in blue_contours if cv2.contourArea(c) > 100])
+            "red": len([c for c in red_contours if cv2.contourArea(c) > 100]),
+            "blue": len([c for c in blue_contours if cv2.contourArea(c) > 100]),
         }
 
     def _evaluate_task_specific(
@@ -250,7 +240,7 @@ class DominoChainBranchEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate domino chain branch prediction."""
 
@@ -271,42 +261,42 @@ class DominoChainBranchEvaluator(BaseEvaluator):
         if gt_standing + gt_fallen > 0:
             standing_match = max(0, 1.0 - abs(gen_standing - gt_standing) / max(gt_standing + gt_fallen, 1))
             fallen_match = max(0, 1.0 - abs(gen_fallen - gt_fallen) / max(gt_standing + gt_fallen, 1))
-            scores['fallen_domino'] = 0.5 * standing_match + 0.5 * fallen_match
+            scores["fallen_domino"] = 0.5 * standing_match + 0.5 * fallen_match
         else:
-            scores['fallen_domino'] = 0.2  # Detection failed
+            scores["fallen_domino"] = 0.2  # Detection failed
 
         # 2. Gap rule: Compare color distribution (red=fallen, blue=standing)
         gen_colors = self._detect_dominoes_by_color(gen_final)
         gt_colors = self._detect_dominoes_by_color(gt_final)
 
-        gen_ratio = gen_colors['red'] / max(gen_colors['red'] + gen_colors['blue'], 1)
-        gt_ratio = gt_colors['red'] / max(gt_colors['red'] + gt_colors['blue'], 1)
+        gen_ratio = gen_colors["red"] / max(gen_colors["red"] + gen_colors["blue"], 1)
+        gt_ratio = gt_colors["red"] / max(gt_colors["red"] + gt_colors["blue"], 1)
 
         ratio_diff = abs(gen_ratio - gt_ratio)
-        scores['gap_rule'] = max(0, 1.0 - ratio_diff * 2)
+        scores["gap_rule"] = max(0, 1.0 - ratio_diff * 2)
 
         # 3. Chain sequence: Analyze progression through video
         if len(video_frames) >= 3:
             # Check if fallen count increases over time
-            early_fallen = self._count_fallen_dominoes(video_frames[len(video_frames)//4])
-            mid_fallen = self._count_fallen_dominoes(video_frames[len(video_frames)//2])
+            early_fallen = self._count_fallen_dominoes(video_frames[len(video_frames) // 4])
+            mid_fallen = self._count_fallen_dominoes(video_frames[len(video_frames) // 2])
             late_fallen = self._count_fallen_dominoes(video_frames[-1])
 
             if early_fallen <= mid_fallen <= late_fallen:
-                scores['chain_sequence'] = 1.0
+                scores["chain_sequence"] = 1.0
             elif early_fallen <= late_fallen:
-                scores['chain_sequence'] = 0.7
+                scores["chain_sequence"] = 0.7
             else:
-                scores['chain_sequence'] = 0.3
+                scores["chain_sequence"] = 0.3
         else:
-            scores['chain_sequence'] = 0.2  # Detection failed
+            scores["chain_sequence"] = 0.2  # Detection failed
 
         # 4. Fall direction: Compare overall structure
         if gen_final.shape == gt_final.shape:
             diff = np.abs(gen_final.astype(float) - gt_final.astype(float)).mean()
-            scores['fall_direction'] = max(0, 1.0 - diff / 100.0)
+            scores["fall_direction"] = max(0, 1.0 - diff / 100.0)
         else:
-            scores['fall_direction'] = 0.2  # Detection failed
+            scores["fall_direction"] = 0.2  # Detection failed
 
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
@@ -325,17 +315,12 @@ class DominoChainGapEvaluator(BaseEvaluator):
     4. Chain animation quality (10%) - Sequential falling
     """
 
-    TASK_WEIGHTS = {
-        'gap_identification': 0.40,
-        'last_fallen': 0.35,
-        'domino_state': 0.15,
-        'animation_quality': 0.10
-    }
+    TASK_WEIGHTS = {"gap_identification": 0.40, "last_fallen": 0.35, "domino_state": 0.15, "animation_quality": 0.10}
 
     def _analyze_domino_colors(self, frame: np.ndarray) -> dict[str, int]:
         """Analyze domino color states."""
         if len(frame.shape) != 3:
-            return {'red': 0, 'blue': 0}
+            return {"red": 0, "blue": 0}
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
@@ -351,10 +336,7 @@ class DominoChainGapEvaluator(BaseEvaluator):
         upper_blue = np.array([130, 255, 255])
         blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
 
-        return {
-            'red': int(np.sum(red_mask > 0)),
-            'blue': int(np.sum(blue_mask > 0))
-        }
+        return {"red": int(np.sum(red_mask > 0)), "blue": int(np.sum(blue_mask > 0))}
 
     def _find_gap_position(self, frame: np.ndarray) -> int | None:
         """Find x-position of gap in domino chain."""
@@ -375,8 +357,8 @@ class DominoChainGapEvaluator(BaseEvaluator):
             gaps = []
             start = gap_positions[0]
             for i in range(1, len(gap_positions)):
-                if gap_positions[i] - gap_positions[i-1] > 5:
-                    gaps.append((start, gap_positions[i-1]))
+                if gap_positions[i] - gap_positions[i - 1] > 5:
+                    gaps.append((start, gap_positions[i - 1]))
                     start = gap_positions[i]
             gaps.append((start, gap_positions[-1]))
 
@@ -392,7 +374,7 @@ class DominoChainGapEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate domino chain gap analysis."""
 
@@ -410,43 +392,43 @@ class DominoChainGapEvaluator(BaseEvaluator):
 
         if gen_gap is not None and gt_gap is not None:
             gap_diff = abs(gen_gap - gt_gap)
-            scores['gap_identification'] = max(0, 1.0 - gap_diff / 100.0)
+            scores["gap_identification"] = max(0, 1.0 - gap_diff / 100.0)
         else:
-            scores['gap_identification'] = 0.5 if gen_gap == gt_gap else 0.3
+            scores["gap_identification"] = 0.5 if gen_gap == gt_gap else 0.3
 
         # 2. Last fallen: Compare color distribution
         gen_colors = self._analyze_domino_colors(gen_final)
         gt_colors = self._analyze_domino_colors(gt_final)
 
-        gen_ratio = gen_colors['red'] / max(gen_colors['red'] + gen_colors['blue'], 1)
-        gt_ratio = gt_colors['red'] / max(gt_colors['red'] + gt_colors['blue'], 1)
+        gen_ratio = gen_colors["red"] / max(gen_colors["red"] + gen_colors["blue"], 1)
+        gt_ratio = gt_colors["red"] / max(gt_colors["red"] + gt_colors["blue"], 1)
 
         ratio_diff = abs(gen_ratio - gt_ratio)
-        scores['last_fallen'] = max(0, 1.0 - ratio_diff * 2)
+        scores["last_fallen"] = max(0, 1.0 - ratio_diff * 2)
 
         # 3. Domino state accuracy
-        if gen_colors['red'] + gen_colors['blue'] > 0 and gt_colors['red'] + gt_colors['blue'] > 0:
-            red_match = min(gen_colors['red'], gt_colors['red']) / max(gen_colors['red'], gt_colors['red'], 1)
-            blue_match = min(gen_colors['blue'], gt_colors['blue']) / max(gen_colors['blue'], gt_colors['blue'], 1)
-            scores['domino_state'] = 0.5 * red_match + 0.5 * blue_match
+        if gen_colors["red"] + gen_colors["blue"] > 0 and gt_colors["red"] + gt_colors["blue"] > 0:
+            red_match = min(gen_colors["red"], gt_colors["red"]) / max(gen_colors["red"], gt_colors["red"], 1)
+            blue_match = min(gen_colors["blue"], gt_colors["blue"]) / max(gen_colors["blue"], gt_colors["blue"], 1)
+            scores["domino_state"] = 0.5 * red_match + 0.5 * blue_match
         else:
-            scores['domino_state'] = 0.2  # Detection failed
+            scores["domino_state"] = 0.2  # Detection failed
 
         # 4. Animation quality: Compare frame-by-frame
         if len(video_frames) >= 2 and len(gt_frames) >= 2:
             motion_scores = []
             for i in range(1, min(len(video_frames), 5)):
-                diff = cv2.absdiff(video_frames[i], video_frames[i-1])
+                diff = cv2.absdiff(video_frames[i], video_frames[i - 1])
                 motion = np.mean(diff)
                 motion_scores.append(motion)
 
             if motion_scores:
                 variance = np.var(motion_scores)
-                scores['animation_quality'] = max(0, 1.0 - variance / 500.0)
+                scores["animation_quality"] = max(0, 1.0 - variance / 500.0)
             else:
-                scores['animation_quality'] = 0.2  # Detection failed
+                scores["animation_quality"] = 0.2  # Detection failed
         else:
-            scores['animation_quality'] = 0.2  # Detection failed
+            scores["animation_quality"] = 0.2  # Detection failed
 
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
@@ -465,12 +447,7 @@ class LEGOConstructionEvaluator(BaseEvaluator):
     4. Connection stability (15%) - Brick properly connected
     """
 
-    TASK_WEIGHTS = {
-        'position': 0.35,
-        'stud_alignment': 0.30,
-        'rotation': 0.20,
-        'connection': 0.15
-    }
+    TASK_WEIGHTS = {"position": 0.35, "stud_alignment": 0.30, "rotation": 0.20, "connection": 0.15}
 
     def _detect_highlighted_brick(self, frame: np.ndarray) -> tuple[int, int] | None:
         """Detect highlighted (usually yellow/bright) brick position."""
@@ -488,9 +465,9 @@ class LEGOConstructionEvaluator(BaseEvaluator):
         if contours:
             largest = max(contours, key=cv2.contourArea)
             M = cv2.moments(largest)
-            if M['m00'] > 0:
-                cx = int(M['m10'] / M['m00'])
-                cy = int(M['m01'] / M['m00'])
+            if M["m00"] > 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
                 return (cx, cy)
 
         return None
@@ -505,9 +482,9 @@ class LEGOConstructionEvaluator(BaseEvaluator):
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         return {
-            'edge_count': np.sum(edges > 0),
-            'contour_count': len(contours),
-            'total_area': sum(cv2.contourArea(c) for c in contours)
+            "edge_count": np.sum(edges > 0),
+            "contour_count": len(contours),
+            "total_area": sum(cv2.contourArea(c) for c in contours),
         }
 
     def _evaluate_task_specific(
@@ -516,7 +493,7 @@ class LEGOConstructionEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate LEGO brick placement accuracy."""
 
@@ -533,42 +510,43 @@ class LEGOConstructionEvaluator(BaseEvaluator):
         gt_brick = self._detect_highlighted_brick(gt_final)
 
         if gen_brick is not None and gt_brick is not None:
-            dist = np.sqrt((gen_brick[0] - gt_brick[0])**2 + (gen_brick[1] - gt_brick[1])**2)
-            scores['position'] = max(0, 1.0 - dist / 50.0)
+            dist = np.sqrt((gen_brick[0] - gt_brick[0]) ** 2 + (gen_brick[1] - gt_brick[1]) ** 2)
+            scores["position"] = max(0, 1.0 - dist / 50.0)
         else:
-            scores['position'] = 0.2  # Detection failed
+            scores["position"] = 0.2  # Detection failed
 
         # 2. Stud alignment: Compare edge structures
         gen_struct = self._analyze_structure(gen_final)
         gt_struct = self._analyze_structure(gt_final)
 
-        if gt_struct['edge_count'] > 0:
-            edge_ratio = min(gen_struct['edge_count'], gt_struct['edge_count']) / max(
-                gen_struct['edge_count'],
-                gt_struct['edge_count'],
+        if gt_struct["edge_count"] > 0:
+            edge_ratio = min(gen_struct["edge_count"], gt_struct["edge_count"]) / max(
+                gen_struct["edge_count"],
+                gt_struct["edge_count"],
             )
-            scores['stud_alignment'] = edge_ratio
+            scores["stud_alignment"] = edge_ratio
         else:
-            scores['stud_alignment'] = 0.2  # Detection failed
+            scores["stud_alignment"] = 0.2  # Detection failed
 
         # 3. Rotation: Compare overall frame similarity
         if gen_final.shape == gt_final.shape:
             diff = np.abs(gen_final.astype(float) - gt_final.astype(float)).mean()
-            scores['rotation'] = max(0, 1.0 - diff / 100.0)
+            scores["rotation"] = max(0, 1.0 - diff / 100.0)
         else:
-            scores['rotation'] = 0.2  # Detection failed
+            scores["rotation"] = 0.2  # Detection failed
 
         # 4. Connection: Check structure completeness
-        if gt_struct['contour_count'] > 0:
-            contour_ratio = min(gen_struct['contour_count'], gt_struct['contour_count']) / max(
-                gen_struct['contour_count'],
-                gt_struct['contour_count'],
+        if gt_struct["contour_count"] > 0:
+            contour_ratio = min(gen_struct["contour_count"], gt_struct["contour_count"]) / max(
+                gen_struct["contour_count"],
+                gt_struct["contour_count"],
             )
-            scores['connection'] = contour_ratio
+            scores["connection"] = contour_ratio
         else:
-            scores['connection'] = 0.2  # Detection failed
+            scores["connection"] = 0.2  # Detection failed
 
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
+
 
 class BallColorEvaluator(BaseEvaluator):
     """
@@ -584,17 +562,12 @@ class BallColorEvaluator(BaseEvaluator):
     4. Iteration completeness (10%) - Continue until only A remains
     """
 
-    TASK_WEIGHTS = {
-        'red_dominance': 0.30,
-        'merge_rule': 0.35,
-        'conservation': 0.25,
-        'completeness': 0.10
-    }
+    TASK_WEIGHTS = {"red_dominance": 0.30, "merge_rule": 0.35, "conservation": 0.25, "completeness": 0.10}
 
     def _count_color_clusters(self, frame: np.ndarray) -> dict[str, int]:
         """Count clusters by color."""
         if len(frame.shape) != 3:
-            return {'red': 0, 'blue': 0, 'green': 0}
+            return {"red": 0, "blue": 0, "green": 0}
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
@@ -606,19 +579,19 @@ class BallColorEvaluator(BaseEvaluator):
         lower_red2 = np.array([160, 100, 100])
         upper_red2 = np.array([180, 255, 255])
         red_mask = cv2.inRange(hsv, lower_red1, upper_red1) | cv2.inRange(hsv, lower_red2, upper_red2)
-        colors['red'] = int(np.sum(red_mask > 0))
+        colors["red"] = int(np.sum(red_mask > 0))
 
         # Blue
         lower_blue = np.array([100, 100, 100])
         upper_blue = np.array([130, 255, 255])
         blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
-        colors['blue'] = int(np.sum(blue_mask > 0))
+        colors["blue"] = int(np.sum(blue_mask > 0))
 
         # Green
         lower_green = np.array([35, 100, 100])
         upper_green = np.array([85, 255, 255])
         green_mask = cv2.inRange(hsv, lower_green, upper_green)
-        colors['green'] = int(np.sum(green_mask > 0))
+        colors["green"] = int(np.sum(green_mask > 0))
 
         return colors
 
@@ -626,8 +599,7 @@ class BallColorEvaluator(BaseEvaluator):
         """Count circular objects (balls)."""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 
-        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, 1, 10,
-                                   param1=50, param2=30, minRadius=3, maxRadius=30)
+        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, 1, 10, param1=50, param2=30, minRadius=3, maxRadius=30)
 
         if circles is not None:
             return len(circles[0])
@@ -639,7 +611,7 @@ class BallColorEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate ball cluster merging behavior."""
 
@@ -655,18 +627,18 @@ class BallColorEvaluator(BaseEvaluator):
         gen_colors = self._count_color_clusters(gen_final)
         gt_colors = self._count_color_clusters(gt_final)
 
-        gen_red_ratio = gen_colors['red'] / max(sum(gen_colors.values()), 1)
-        gt_red_ratio = gt_colors['red'] / max(sum(gt_colors.values()), 1)
+        gen_red_ratio = gen_colors["red"] / max(sum(gen_colors.values()), 1)
+        gt_red_ratio = gt_colors["red"] / max(sum(gt_colors.values()), 1)
 
         ratio_diff = abs(gen_red_ratio - gt_red_ratio)
-        scores['red_dominance'] = max(0, 1.0 - ratio_diff * 2)
+        scores["red_dominance"] = max(0, 1.0 - ratio_diff * 2)
 
         # 2. Merge rule: Compare final state with GT
         if gen_final.shape == gt_final.shape:
             diff = np.abs(gen_final.astype(float) - gt_final.astype(float)).mean()
-            scores['merge_rule'] = max(0, 1.0 - diff / 100.0)
+            scores["merge_rule"] = max(0, 1.0 - diff / 100.0)
         else:
-            scores['merge_rule'] = 0.2  # Detection failed
+            scores["merge_rule"] = 0.2  # Detection failed
 
         # 3. Conservation: Compare ball counts
         if len(video_frames) >= 2:
@@ -675,20 +647,20 @@ class BallColorEvaluator(BaseEvaluator):
 
             if first_count > 0:
                 ratio = min(first_count, last_count) / max(first_count, last_count)
-                scores['conservation'] = ratio
+                scores["conservation"] = ratio
             else:
-                scores['conservation'] = 0.2  # Detection failed
+                scores["conservation"] = 0.2  # Detection failed
         else:
-            scores['conservation'] = 0.2  # Detection failed
+            scores["conservation"] = 0.2  # Detection failed
 
         # 4. Completeness: Check if process completed
         # Final should have mostly one color (red)
         total_colored = sum(gen_colors.values())
         if total_colored > 0:
             dominant_ratio = max(gen_colors.values()) / total_colored
-            scores['completeness'] = dominant_ratio
+            scores["completeness"] = dominant_ratio
         else:
-            scores['completeness'] = 0.2  # Detection failed
+            scores["completeness"] = 0.2  # Detection failed
 
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
@@ -708,10 +680,10 @@ class BookshelfEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'cluster_identification': 0.30,
-        'height_calculation': 0.25,
-        'matching_insertion': 0.30,
-        'sorting': 0.15
+        "cluster_identification": 0.30,
+        "height_calculation": 0.25,
+        "matching_insertion": 0.30,
+        "sorting": 0.15,
     }
 
     def _detect_book_heights(self, frame: np.ndarray) -> list[int]:
@@ -789,7 +761,7 @@ class BookshelfEvaluator(BaseEvaluator):
                 area = cv2.contourArea(cnt)
                 # Filter: vertical shape (height > width), minimum height, minimum area
                 if h > w * 0.8 and h > 20 and area > 500:
-                    books.append({'x': x, 'height': h, 'y': y, 'width': w})
+                    books.append({"x": x, "height": h, "y": y, "width": w})
 
         # Method 2: Grayscale threshold fallback (try multiple thresholds)
         if len(books) < 2:
@@ -802,19 +774,15 @@ class BookshelfEvaluator(BaseEvaluator):
                     x, y, w, h = cv2.boundingRect(cnt)
                     area = cv2.contourArea(cnt)
                     if h > w and h > 20 and area > 500:
-                        temp_books.append({'x': x, 'height': h, 'y': y, 'width': w})
+                        temp_books.append({"x": x, "height": h, "y": y, "width": w})
 
                 if len(temp_books) > len(books):
                     books = temp_books
 
         # Sort by x-position
-        books.sort(key=lambda b: b['x'])
+        books.sort(key=lambda b: b["x"])
 
-        return {
-            'book_count': len(books),
-            'heights': [b['height'] for b in books],
-            'positions': [b['x'] for b in books]
-        }
+        return {"book_count": len(books), "heights": [b["height"] for b in books], "positions": [b["x"] for b in books]}
 
     def _evaluate_task_specific(
         self,
@@ -822,7 +790,7 @@ class BookshelfEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate bookshelf insertion accuracy - STRICT GT comparison."""
 
@@ -844,35 +812,35 @@ class BookshelfEvaluator(BaseEvaluator):
 
         # 1. Cluster identification (30%): STRICT comparison with GT
         if final_diff < 10:
-            scores['cluster_identification'] = 1.0
+            scores["cluster_identification"] = 1.0
         elif final_diff < 25:
-            scores['cluster_identification'] = 0.3
+            scores["cluster_identification"] = 0.3
         else:
-            scores['cluster_identification'] = 0.0
+            scores["cluster_identification"] = 0.0
 
         # 2. Height calculation (25%): STRICT comparison with GT
         if final_diff < 10:
-            scores['height_calculation'] = 1.0
+            scores["height_calculation"] = 1.0
         elif final_diff < 25:
-            scores['height_calculation'] = 0.3
+            scores["height_calculation"] = 0.3
         else:
-            scores['height_calculation'] = 0.0
+            scores["height_calculation"] = 0.0
 
         # 3. Matching insertion (30%): STRICT comparison with GT
         if final_diff < 10:
-            scores['matching_insertion'] = 1.0
+            scores["matching_insertion"] = 1.0
         elif final_diff < 25:
-            scores['matching_insertion'] = 0.3
+            scores["matching_insertion"] = 0.3
         else:
-            scores['matching_insertion'] = 0.0
+            scores["matching_insertion"] = 0.0
 
         # 4. Sorting (15%): STRICT comparison with GT
         if final_diff < 10:
-            scores['sorting'] = 1.0
+            scores["sorting"] = 1.0
         elif final_diff < 25:
-            scores['sorting'] = 0.3
+            scores["sorting"] = 0.3
         else:
-            scores['sorting'] = 0.0
+            scores["sorting"] = 0.0
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -883,7 +851,7 @@ class BookshelfEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """OLD: Evaluate bookshelf insertion accuracy using detection."""
 
@@ -905,68 +873,68 @@ class BookshelfEvaluator(BaseEvaluator):
 
         # 1. Cluster identification (30%): Compare book counts
         # Rule: Correctly identify height-based clusters using eps threshold
-        if gt_arr['book_count'] > 0:
-            count_ratio = min(gen_arr['book_count'], gt_arr['book_count']) / max(
-                gen_arr['book_count'],
-                gt_arr['book_count'],
+        if gt_arr["book_count"] > 0:
+            count_ratio = min(gen_arr["book_count"], gt_arr["book_count"]) / max(
+                gen_arr["book_count"],
+                gt_arr["book_count"],
             )
             # Perfect match gets full score
             if count_ratio == 1.0:
-                scores['cluster_identification'] = 1.0
+                scores["cluster_identification"] = 1.0
             elif count_ratio >= 0.9:
-                scores['cluster_identification'] = 0.9
+                scores["cluster_identification"] = 0.9
             else:
-                scores['cluster_identification'] = max(0.3, count_ratio)
+                scores["cluster_identification"] = max(0.3, count_ratio)
         else:
             # No GT books - check if generated also has no books
-            scores['cluster_identification'] = 1.0 if gen_arr['book_count'] == 0 else 0.3
+            scores["cluster_identification"] = 1.0 if gen_arr["book_count"] == 0 else 0.3
 
         # 2. Height calculation (25%): Compare height distributions
         # Rule: Representative height = average of cluster heights
-        if gen_arr['heights'] and gt_arr['heights']:
-            gen_mean_h = np.mean(gen_arr['heights'])
-            gt_mean_h = np.mean(gt_arr['heights'])
+        if gen_arr["heights"] and gt_arr["heights"]:
+            gen_mean_h = np.mean(gen_arr["heights"])
+            gt_mean_h = np.mean(gt_arr["heights"])
 
             if gt_mean_h > 0:
                 height_ratio = min(gen_mean_h, gt_mean_h) / max(gen_mean_h, gt_mean_h)
                 # Rule: calculation precision should be within 5% for full score
                 if height_ratio >= 0.95:
-                    scores['height_calculation'] = 1.0
+                    scores["height_calculation"] = 1.0
                 elif height_ratio >= 0.90:
-                    scores['height_calculation'] = 0.8
+                    scores["height_calculation"] = 0.8
                 else:
-                    scores['height_calculation'] = max(0.3, height_ratio)
+                    scores["height_calculation"] = max(0.3, height_ratio)
             else:
-                scores['height_calculation'] = 0.2  # Detection failed
+                scores["height_calculation"] = 0.2  # Detection failed
         else:
             # No heights detected
-            scores['height_calculation'] = 0.5 if not gt_arr['heights'] else 0.0
+            scores["height_calculation"] = 0.5 if not gt_arr["heights"] else 0.0
 
         # 3. Matching insertion (30%): Compare book positions
         # Rule: Each new book should be at the end of its matched cluster
-        if gen_arr['positions'] and gt_arr['positions']:
+        if gen_arr["positions"] and gt_arr["positions"]:
             # Compare position sequences
             matched_positions = 0
-            for gen_pos in gen_arr['positions']:
-                for gt_pos in gt_arr['positions']:
+            for gen_pos in gen_arr["positions"]:
+                for gt_pos in gt_arr["positions"]:
                     if abs(gen_pos - gt_pos) < 30:  # Within 30 pixels
                         matched_positions += 1
                         break
-            position_match = matched_positions / max(len(gt_arr['positions']), 1)
-            scores['matching_insertion'] = position_match
+            position_match = matched_positions / max(len(gt_arr["positions"]), 1)
+            scores["matching_insertion"] = position_match
         else:
-            scores['matching_insertion'] = 0.5 if not gt_arr['positions'] else 0.0
+            scores["matching_insertion"] = 0.5 if not gt_arr["positions"] else 0.0
 
         # 4. Sorting (15%): Check if heights are sorted within clusters
-        if len(gen_arr['heights']) >= 2:
+        if len(gen_arr["heights"]) >= 2:
             # Check for local sorting (within clusters)
             sorted_count = 0
-            for i in range(1, len(gen_arr['heights'])):
-                if gen_arr['heights'][i] >= gen_arr['heights'][i-1] * 0.8:
+            for i in range(1, len(gen_arr["heights"])):
+                if gen_arr["heights"][i] >= gen_arr["heights"][i - 1] * 0.8:
                     sorted_count += 1
-            scores['sorting'] = sorted_count / (len(gen_arr['heights']) - 1)
+            scores["sorting"] = sorted_count / (len(gen_arr["heights"]) - 1)
         else:
-            scores['sorting'] = 0.8  # Single book is trivially sorted
+            scores["sorting"] = 0.8  # Single book is trivially sorted
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -983,9 +951,9 @@ class BallEatingEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'all_eaten': 0.50,         # All red balls eaten
-        'growth': 0.30,            # Black ball grows significantly
-        'animation': 0.20          # Smooth movement
+        "all_eaten": 0.50,  # All red balls eaten
+        "growth": 0.30,  # Black ball grows significantly
+        "animation": 0.20,  # Smooth movement
     }
 
     def _count_red_balls(self, frame: np.ndarray) -> int:
@@ -1042,7 +1010,7 @@ class BallEatingEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate ball eating behavior.
 
@@ -1065,12 +1033,12 @@ class BallEatingEvaluator(BaseEvaluator):
 
         if first_red_count > 0:
             if final_red_count == 0:
-                scores['all_eaten'] = 1.0
+                scores["all_eaten"] = 1.0
             else:
                 eaten_ratio = max(0, 1 - (final_red_count / first_red_count))
-                scores['all_eaten'] = eaten_ratio * 0.5  # Partial credit, max 0.5
+                scores["all_eaten"] = eaten_ratio * 0.5  # Partial credit, max 0.5
         else:
-            scores['all_eaten'] = 0.0
+            scores["all_eaten"] = 0.0
 
         # 2. Black ball must grow significantly
         first_size = self._get_black_ball_size(first_frame)
@@ -1080,37 +1048,37 @@ class BallEatingEvaluator(BaseEvaluator):
             growth_ratio = last_size / first_size
             # Should grow at least 1.4x per ball eaten
             # If 3 balls, expected growth = 1.4^3 = 2.74
-            expected_growth = 1.4 ** first_red_count if first_red_count > 0 else 2.0
+            expected_growth = 1.4**first_red_count if first_red_count > 0 else 2.0
 
             if growth_ratio >= expected_growth * 0.8:
-                scores['growth'] = 1.0
+                scores["growth"] = 1.0
             elif growth_ratio >= 1.5:
-                scores['growth'] = 0.5
+                scores["growth"] = 0.5
             elif growth_ratio >= 1.2:
-                scores['growth'] = 0.3
+                scores["growth"] = 0.3
             else:
-                scores['growth'] = 0.1
+                scores["growth"] = 0.1
         else:
-            scores['growth'] = 0.0
+            scores["growth"] = 0.0
 
         # 3. Animation: Check for smooth movement
         if len(video_frames) >= 3:
             motion_scores = []
             for i in range(1, min(len(video_frames), 10)):
-                diff = cv2.absdiff(video_frames[i], video_frames[i-1])
+                diff = cv2.absdiff(video_frames[i], video_frames[i - 1])
                 motion = np.mean(diff)
                 motion_scores.append(motion)
 
             if motion_scores:
                 avg_motion = np.mean(motion_scores)
                 if avg_motion > 1:  # Some movement detected
-                    scores['animation'] = min(1.0, avg_motion / 10.0)
+                    scores["animation"] = min(1.0, avg_motion / 10.0)
                 else:
-                    scores['animation'] = 0.0
+                    scores["animation"] = 0.0
             else:
-                scores['animation'] = 0.0
+                scores["animation"] = 0.0
         else:
-            scores['animation'] = 0.0
+            scores["animation"] = 0.0
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -1130,12 +1098,7 @@ class RollingBallEvaluator(BaseEvaluator):
     4. Final state accuracy (15%) - Ball at last platform center
     """
 
-    TASK_WEIGHTS = {
-        'trajectory': 0.50,
-        'smoothness': 0.15,
-        'physics': 0.20,
-        'final_state': 0.15
-    }
+    TASK_WEIGHTS = {"trajectory": 0.50, "smoothness": 0.15, "physics": 0.20, "final_state": 0.15}
 
     def _find_ball_center(self, frame: np.ndarray) -> tuple[float, float] | None:
         """Find center of ball."""
@@ -1159,8 +1122,9 @@ class RollingBallEvaluator(BaseEvaluator):
             gray = frame
 
         gray = cv2.medianBlur(gray, 5)
-        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=20,
-                                    param1=100, param2=20, minRadius=5, maxRadius=80)
+        circles = cv2.HoughCircles(
+            gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=20, param1=100, param2=20, minRadius=5, maxRadius=80
+        )
 
         if circles is not None and len(circles[0]) > 0:
             x, y, _ = circles[0][0]
@@ -1184,8 +1148,8 @@ class RollingBallEvaluator(BaseEvaluator):
         # Calculate velocity changes
         velocities = []
         for i in range(1, len(positions)):
-            dx = positions[i][0] - positions[i-1][0]
-            dy = positions[i][1] - positions[i-1][1]
+            dx = positions[i][0] - positions[i - 1][0]
+            dy = positions[i][1] - positions[i - 1][1]
             v = np.sqrt(dx**2 + dy**2)
             velocities.append(v)
 
@@ -1208,7 +1172,7 @@ class RollingBallEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate rolling ball trajectory animation."""
 
@@ -1230,21 +1194,21 @@ class RollingBallEvaluator(BaseEvaluator):
         gt_pos = self._find_ball_center(gt_final)
 
         if gen_pos is not None and gt_pos is not None:
-            dist = np.sqrt((gen_pos[0] - gt_pos[0])**2 + (gen_pos[1] - gt_pos[1])**2)
+            dist = np.sqrt((gen_pos[0] - gt_pos[0]) ** 2 + (gen_pos[1] - gt_pos[1]) ** 2)
             # Rule: error <= 10% of ball radius for perfect score
             if dist < 10:
-                scores['trajectory'] = 1.0
+                scores["trajectory"] = 1.0
             elif dist < 30:
-                scores['trajectory'] = 0.9
+                scores["trajectory"] = 0.9
             else:
                 # More lenient threshold
-                scores['trajectory'] = max(0, 1.0 - dist / 100.0)
+                scores["trajectory"] = max(0, 1.0 - dist / 100.0)
         else:
             # Rule-based: check if ball exists in frame
-            scores['trajectory'] = 0.3 if gen_pos is not None else 0.0
+            scores["trajectory"] = 0.3 if gen_pos is not None else 0.0
 
         # 2. Smoothness (15%): Animation should be smooth, continuous
-        scores['smoothness'] = self._analyze_trajectory_smoothness(video_frames)
+        scores["smoothness"] = self._analyze_trajectory_smoothness(video_frames)
 
         # 3. Physics (20%): Check for deceleration near end (ease-out effect)
         # Rule: ball should slow down approaching the final platform
@@ -1252,50 +1216,54 @@ class RollingBallEvaluator(BaseEvaluator):
             early_positions = []
             late_positions = []
 
-            for frame in video_frames[:len(video_frames)//2]:
+            for frame in video_frames[: len(video_frames) // 2]:
                 pos = self._find_ball_center(frame)
                 if pos is not None:
                     early_positions.append(pos)
 
-            for frame in video_frames[len(video_frames)//2:]:
+            for frame in video_frames[len(video_frames) // 2 :]:
                 pos = self._find_ball_center(frame)
                 if pos is not None:
                     late_positions.append(pos)
 
             if len(early_positions) >= 2 and len(late_positions) >= 2:
-                early_speed = np.sqrt((early_positions[-1][0] - early_positions[0][0])**2 +
-                                     (early_positions[-1][1] - early_positions[0][1])**2)
-                late_speed = np.sqrt((late_positions[-1][0] - late_positions[0][0])**2 +
-                                    (late_positions[-1][1] - late_positions[0][1])**2)
+                early_speed = np.sqrt(
+                    (early_positions[-1][0] - early_positions[0][0]) ** 2
+                    + (early_positions[-1][1] - early_positions[0][1]) ** 2
+                )
+                late_speed = np.sqrt(
+                    (late_positions[-1][0] - late_positions[0][0]) ** 2
+                    + (late_positions[-1][1] - late_positions[0][1]) ** 2
+                )
 
                 # If ball is nearly stationary at end, that's good physics
                 if early_speed < 5 and late_speed < 5:
-                    scores['physics'] = 1.0
+                    scores["physics"] = 1.0
                 # Physics: ball should slow down (ease-out / cubic deceleration)
                 elif late_speed < early_speed:
                     decel_ratio = (early_speed - late_speed) / max(early_speed, 1)
-                    scores['physics'] = min(1.0, 0.5 + decel_ratio * 0.5)
+                    scores["physics"] = min(1.0, 0.5 + decel_ratio * 0.5)
                 else:
                     # Ball didn't slow down - partial credit
-                    scores['physics'] = 0.2  # Detection failed
+                    scores["physics"] = 0.2  # Detection failed
             else:
-                scores['physics'] = 0.6
+                scores["physics"] = 0.6
         else:
-            scores['physics'] = 0.6
+            scores["physics"] = 0.6
 
         # 4. Final state (15%): Ball must be at last platform's geometric center
         # Rule: ball position error <= 10% of ball radius for perfect score
         if gen_pos is not None and gt_pos is not None:
-            dist = np.sqrt((gen_pos[0] - gt_pos[0])**2 + (gen_pos[1] - gt_pos[1])**2)
+            dist = np.sqrt((gen_pos[0] - gt_pos[0]) ** 2 + (gen_pos[1] - gt_pos[1]) ** 2)
             if dist < 10:
-                scores['final_state'] = 1.0
+                scores["final_state"] = 1.0
             elif dist < 30:
-                scores['final_state'] = 0.8
+                scores["final_state"] = 0.8
             else:
-                scores['final_state'] = max(0, 1.0 - dist / 100.0)
+                scores["final_state"] = max(0, 1.0 - dist / 100.0)
         else:
             # Rule-based: ball must be visible in final frame
-            scores['final_state'] = 0.2 if gen_pos is not None else 0.0
+            scores["final_state"] = 0.2 if gen_pos is not None else 0.0
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -1315,12 +1283,7 @@ class CountingObjectEvaluator(BaseEvaluator):
     4. Systematic approach (10%) - Orderly counting
     """
 
-    TASK_WEIGHTS = {
-        'count_accuracy': 0.50,
-        'completeness': 0.25,
-        'uniqueness': 0.15,
-        'systematic': 0.10
-    }
+    TASK_WEIGHTS = {"count_accuracy": 0.50, "completeness": 0.25, "uniqueness": 0.15, "systematic": 0.10}
 
     def _count_objects(self, frame: np.ndarray) -> int:
         """Count distinct objects in frame."""
@@ -1355,7 +1318,7 @@ class CountingObjectEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate object counting accuracy."""
 
@@ -1375,13 +1338,13 @@ class CountingObjectEvaluator(BaseEvaluator):
             # VERY STRICT comparison - the displayed number must match GT exactly
             diff = np.abs(gen_final.astype(float) - gt_final.astype(float)).mean()
             if diff < 10:  # Very close match - correct number displayed
-                scores['count_accuracy'] = 1.0
+                scores["count_accuracy"] = 1.0
             elif diff < 20:
-                scores['count_accuracy'] = 0.3
+                scores["count_accuracy"] = 0.3
             else:
-                scores['count_accuracy'] = 0.0  # Wrong number displayed
+                scores["count_accuracy"] = 0.0  # Wrong number displayed
         else:
-            scores['count_accuracy'] = 0.0
+            scores["count_accuracy"] = 0.0
 
         # 2. Completeness: Check if final frame shows the counting result
         # Compare structure - GT final should show number, gen should too
@@ -1392,33 +1355,33 @@ class CountingObjectEvaluator(BaseEvaluator):
 
             # Check difference in the number display area (typically center or bottom)
             h, w = gen_gray.shape[:2]
-            gen_center = gen_gray[h//4:3*h//4, w//4:3*w//4]
-            gt_center = gt_gray[h//4:3*h//4, w//4:3*w//4]
+            gen_center = gen_gray[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4]
+            gt_center = gt_gray[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4]
 
             center_diff = np.abs(gen_center.astype(float) - gt_center.astype(float)).mean()
             if center_diff < 10:  # Very strict
-                scores['completeness'] = 1.0
+                scores["completeness"] = 1.0
             elif center_diff < 25:
-                scores['completeness'] = 0.3
+                scores["completeness"] = 0.3
             else:
-                scores['completeness'] = 0.0
+                scores["completeness"] = 0.0
         else:
-            scores['completeness'] = 0.0
+            scores["completeness"] = 0.0
 
         # 3. Uniqueness: Same as count_accuracy for this task
-        scores['uniqueness'] = scores['count_accuracy']
+        scores["uniqueness"] = scores["count_accuracy"]
 
         # 4. Systematic: Check overall frame similarity - very strict
         if gen_final.shape == gt_final.shape:
             diff = np.abs(gen_final.astype(float) - gt_final.astype(float)).mean()
             if diff < 10:
-                scores['systematic'] = 1.0
+                scores["systematic"] = 1.0
             elif diff < 20:
-                scores['systematic'] = 0.3
+                scores["systematic"] = 0.3
             else:
-                scores['systematic'] = 0.0
+                scores["systematic"] = 0.0
         else:
-            scores['systematic'] = 0.0
+            scores["systematic"] = 0.0
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -1438,12 +1401,7 @@ class DotToDotEvaluator(BaseEvaluator):
     4. Visual fidelity (10%) - Red color, dots preserved
     """
 
-    TASK_WEIGHTS = {
-        'connection_order': 0.40,
-        'completeness': 0.30,
-        'line_quality': 0.20,
-        'visual_fidelity': 0.10
-    }
+    TASK_WEIGHTS = {"connection_order": 0.40, "completeness": 0.30, "line_quality": 0.20, "visual_fidelity": 0.10}
 
     def _count_red_line_pixels(self, frame: np.ndarray) -> int:
         """Count red line pixels."""
@@ -1482,9 +1440,9 @@ class DotToDotEvaluator(BaseEvaluator):
                 continue
 
             M = cv2.moments(cnt)
-            if M['m00'] > 0:
-                cx = int(M['m10'] / M['m00'])
-                cy = int(M['m01'] / M['m00'])
+            if M["m00"] > 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
                 dots.append((cx, cy))
 
         return dots
@@ -1503,8 +1461,7 @@ class DotToDotEvaluator(BaseEvaluator):
 
         red_mask = cv2.inRange(hsv, lower_red1, upper_red1) | cv2.inRange(hsv, lower_red2, upper_red2)
 
-        lines = cv2.HoughLinesP(red_mask, 1, np.pi/180, threshold=30,
-                                minLineLength=20, maxLineGap=10)
+        lines = cv2.HoughLinesP(red_mask, 1, np.pi / 180, threshold=30, minLineLength=20, maxLineGap=10)
 
         if lines is None:
             return []
@@ -1517,7 +1474,7 @@ class DotToDotEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate dot-to-dot connection accuracy."""
 
@@ -1532,9 +1489,9 @@ class DotToDotEvaluator(BaseEvaluator):
         # 1. Connection order: Compare overall structure
         if gen_final.shape == gt_final.shape:
             diff = np.abs(gen_final.astype(float) - gt_final.astype(float)).mean()
-            scores['connection_order'] = max(0, 1.0 - diff / 100.0)
+            scores["connection_order"] = max(0, 1.0 - diff / 100.0)
         else:
-            scores['connection_order'] = 0.2  # Detection failed
+            scores["connection_order"] = 0.2  # Detection failed
 
         # 2. Completeness: Compare red line amounts
         gen_red = self._count_red_line_pixels(gen_final)
@@ -1542,9 +1499,9 @@ class DotToDotEvaluator(BaseEvaluator):
 
         if gt_red > 0:
             ratio = min(gen_red, gt_red) / max(gen_red, gt_red)
-            scores['completeness'] = ratio
+            scores["completeness"] = ratio
         else:
-            scores['completeness'] = 0.5 if gen_red == 0 else 0.3
+            scores["completeness"] = 0.5 if gen_red == 0 else 0.3
 
         # 3. Line quality: Compare line counts
         gen_lines = self._detect_red_lines(gen_final)
@@ -1552,9 +1509,9 @@ class DotToDotEvaluator(BaseEvaluator):
 
         if gt_lines:
             line_ratio = min(len(gen_lines), len(gt_lines)) / max(len(gen_lines), len(gt_lines), 1)
-            scores['line_quality'] = line_ratio
+            scores["line_quality"] = line_ratio
         else:
-            scores['line_quality'] = 0.2  # Detection failed
+            scores["line_quality"] = 0.2  # Detection failed
 
         # 4. Visual fidelity: Check dots preserved
         gen_dots = self._detect_blue_dots(gen_final)
@@ -1562,23 +1519,23 @@ class DotToDotEvaluator(BaseEvaluator):
 
         if gt_dots:
             dot_ratio = min(len(gen_dots), len(gt_dots)) / max(len(gen_dots), len(gt_dots), 1)
-            scores['visual_fidelity'] = dot_ratio
+            scores["visual_fidelity"] = dot_ratio
         else:
-            scores['visual_fidelity'] = 0.2  # Detection failed
+            scores["visual_fidelity"] = 0.2  # Detection failed
 
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
 
 # Export mapping for this batch
 IN_DOMAIN_50_EVALUATORS_PART4 = {
-    'O-21_construction_blueprint_data-generator': ConstructionBlueprintEvaluator,
-    'O-23_domino_chain_branch_path_prediction_data-generator': DominoChainBranchEvaluator,
-    'O-24_domino_chain_gap_analysis_data-generator': DominoChainGapEvaluator,
-    'O-25_LEGO_construction_assembly_data-generator': LEGOConstructionEvaluator,
-    'O-29_ballcolor_data-generator': BallColorEvaluator,
-    'O-30_bookshelf_data-generator': BookshelfEvaluator,
-    'O-31_ball_eating_data-generator': BallEatingEvaluator,
-    'O-32_rolling_ball_data-generator': RollingBallEvaluator,
-    'O-33_counting_object_data-generator': CountingObjectEvaluator,
-    'O-34_dot_to_dot_task_data-generator': DotToDotEvaluator,
+    "O-21_construction_blueprint_data-generator": ConstructionBlueprintEvaluator,
+    "O-23_domino_chain_branch_path_prediction_data-generator": DominoChainBranchEvaluator,
+    "O-24_domino_chain_gap_analysis_data-generator": DominoChainGapEvaluator,
+    "O-25_LEGO_construction_assembly_data-generator": LEGOConstructionEvaluator,
+    "O-29_ballcolor_data-generator": BallColorEvaluator,
+    "O-30_bookshelf_data-generator": BookshelfEvaluator,
+    "O-31_ball_eating_data-generator": BallEatingEvaluator,
+    "O-32_rolling_ball_data-generator": RollingBallEvaluator,
+    "O-33_counting_object_data-generator": CountingObjectEvaluator,
+    "O-34_dot_to_dot_task_data-generator": DotToDotEvaluator,
 }

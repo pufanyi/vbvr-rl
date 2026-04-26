@@ -137,9 +137,9 @@ def _checkpoint_fully_overwrites_transformers(checkpoint: Path) -> bool:
 
 
 def _requires_clean_base(checkpoint: Path, merge_lora: bool) -> bool:
-    return (
-        merge_lora and _checkpoint_has_lora(checkpoint)
-    ) or not _checkpoint_fully_overwrites_transformers(checkpoint)
+    return (merge_lora and _checkpoint_has_lora(checkpoint)) or not _checkpoint_fully_overwrites_transformers(
+        checkpoint
+    )
 
 
 def _merge_lora_into_plain_weights(pipe: WanImageToVideoPipeline, safe_fusing: bool) -> int:

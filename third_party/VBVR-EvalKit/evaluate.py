@@ -27,73 +27,54 @@ from vbvr_bench import VBVRBench
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description='VBVR-Bench(100 Tasks)',
-        formatter_class=argparse.RawTextHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description="VBVR-Bench(100 Tasks)", formatter_class=argparse.RawTextHelpFormatter)
 
     parser.add_argument(
-        '--videos_path',
+        "--videos_path",
         type=str,
         required=True,
-        help='Path to the videos to evaluate.\n'
-             'Structure: {videos_path}/{split}/{task_name}/{idx}.mp4'
+        help="Path to the videos to evaluate.\nStructure: {videos_path}/{split}/{task_name}/{idx}.mp4",
     )
 
     parser.add_argument(
-        '--gt_path',
+        "--gt_path",
         type=str,
         required=True,
-        help='Path to ground truth data.\n'
-             'Structure: {gt_path}/{split}/{task_name}/{idx}/ground_truth.mp4'
+        help="Path to ground truth data.\nStructure: {gt_path}/{split}/{task_name}/{idx}/ground_truth.mp4",
     )
 
     parser.add_argument(
-        '--output_path',
+        "--output_path",
         type=str,
-        default='./evaluation_results/',
-        help='Directory to save evaluation results (default: ./evaluation_results/)'
+        default="./evaluation_results/",
+        help="Directory to save evaluation results (default: ./evaluation_results/)",
     )
 
     parser.add_argument(
-        '--name',
+        "--name", type=str, default=None, help="Name for this evaluation run (default: model name + timestamp)"
+    )
+
+    parser.add_argument(
+        "--split",
         type=str,
-        default=None,
-        help='Name for this evaluation run (default: model name + timestamp)'
+        choices=["In-Domain_50", "Out-of-Domain_50", "all"],
+        default="all",
+        help="Which split to evaluate:\n"
+        "  - In-Domain_50: In-domain test set (50 tasks)\n"
+        "  - Out-of-Domain_50: Out-of-domain test set (50 tasks)\n"
+        "  - all: Both splits (default)",
     )
 
     parser.add_argument(
-        '--split',
-        type=str,
-        choices=['In-Domain_50', 'Out-of-Domain_50', 'all'],
-        default='all',
-        help='Which split to evaluate:\n'
-             '  - In-Domain_50: In-domain test set (50 tasks)\n'
-             '  - Out-of-Domain_50: Out-of-domain test set (50 tasks)\n'
-             '  - all: Both splits (default)'
+        "--tasks", type=str, nargs="+", default=None, help="Specific task names to evaluate (default: all tasks)"
     )
 
     parser.add_argument(
-        '--tasks',
-        type=str,
-        nargs='+',
-        default=None,
-        help='Specific task names to evaluate (default: all tasks)'
+        "--device", type=str, default="cuda", choices=["cuda", "cpu"], help="Device for computation (default: cuda)"
     )
 
     parser.add_argument(
-        '--device',
-        type=str,
-        default='cuda',
-        choices=['cuda', 'cpu'],
-        help='Device for computation (default: cuda)'
-    )
-
-    parser.add_argument(
-        '--save_detailed',
-        action='store_true',
-        default=True,
-        help='Save detailed per-video results (default: True)'
+        "--save_detailed", action="store_true", default=True, help="Save detailed per-video results (default: True)"
     )
 
     return parser.parse_args()
@@ -104,9 +85,9 @@ def main():
 
     # Set evaluation name
     if args.name is None:
-        model_name = os.path.basename(args.videos_path.rstrip('/'))
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        args.name = f'{model_name}_{timestamp}'
+        model_name = os.path.basename(args.videos_path.rstrip("/"))
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        args.name = f"{model_name}_{timestamp}"
 
     print("=" * 70)
     print("VBVR-Bench")
@@ -121,14 +102,10 @@ def main():
     print("=" * 70)
 
     # Initialize benchmark
-    bench = VBVRBench(
-        gt_base_path=args.gt_path,
-        output_path=args.output_path,
-        device=args.device
-    )
+    bench = VBVRBench(gt_base_path=args.gt_path, output_path=args.output_path, device=args.device)
 
     # Determine split
-    split = None if args.split == 'all' else args.split
+    split = None if args.split == "all" else args.split
 
     # Run evaluation
     results = bench.evaluate(
@@ -136,7 +113,7 @@ def main():
         name=args.name,
         task_list=args.tasks,
         split=split,
-        save_detailed=args.save_detailed
+        save_detailed=args.save_detailed,
     )
 
     # Print final summary
@@ -146,9 +123,9 @@ def main():
     print(f"Results saved to: {args.output_path}/{args.name}_eval_results.json")
     print()
     print("Final Scores:")
-    if 'In_Domain' in results and results['In_Domain'].get('num_videos', 0) > 0:
+    if "In_Domain" in results and results["In_Domain"].get("num_videos", 0) > 0:
         print(f"  In-Domain (50 tasks):      {results['In_Domain']['mean_score']:.4f}")
-    if 'Out_of_Domain' in results and results['Out_of_Domain'].get('num_videos', 0) > 0:
+    if "Out_of_Domain" in results and results["Out_of_Domain"].get("num_videos", 0) > 0:
         print(f"  Out-of-Domain (50 tasks):  {results['Out_of_Domain']['mean_score']:.4f}")
     print(f"  Overall Average:           {results['overall']['mean_score']:.4f}")
     print("=" * 70)
@@ -156,5 +133,5 @@ def main():
     return results
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

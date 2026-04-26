@@ -25,11 +25,12 @@ def safe_distance(p1: tuple, p2: tuple) -> float:
     """
     x1, y1 = float(p1[0]), float(p1[1])
     x2, y2 = float(p2[0]), float(p2[1])
-    return np.sqrt((x1 - x2)**2 + (y1 - y2)**2)
+    return np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
 
 
-def normalize_frame_size(frame: np.ndarray, target_frame: np.ndarray,
-                         background_color: tuple[int, int, int] = None) -> np.ndarray:
+def normalize_frame_size(
+    frame: np.ndarray, target_frame: np.ndarray, background_color: tuple[int, int, int] = None
+) -> np.ndarray:
     """
     Normalize frame size to match target_frame dimensions.
 
@@ -67,7 +68,7 @@ def normalize_frame_size(frame: np.ndarray, target_frame: np.ndarray,
         background_colors_to_try = [
             (128, 128, 128),  # Gray
             (255, 255, 255),  # White
-            (0, 0, 0),        # Black
+            (0, 0, 0),  # Black
         ]
 
         best_cropped = frame
@@ -155,6 +156,7 @@ def load_json(path: str) -> dict:
 
 class NumpyEncoder(json.JSONEncoder):
     """Custom JSON encoder that handles NumPy types."""
+
     def default(self, obj):
         if isinstance(obj, np.integer):
             return int(obj)
@@ -169,14 +171,12 @@ class NumpyEncoder(json.JSONEncoder):
 
 def save_json(data: Any, path: str):
     """Save data to JSON file."""
-    with open(path, 'w') as f:
+    with open(path, "w") as f:
         json.dump(data, f, indent=2, cls=NumpyEncoder)
 
 
 def get_video_frames(
-    video_path: str,
-    max_frames: int | None = None,
-    frame_indices: list[int] | None = None
+    video_path: str, max_frames: int | None = None, frame_indices: list[int] | None = None
 ) -> list[np.ndarray]:
     """
     Extract frames from a video file.
@@ -230,10 +230,10 @@ def get_video_info(video_path: str) -> dict:
         raise ValueError(f"Cannot open video: {video_path}")
 
     info = {
-        'fps': cap.get(cv2.CAP_PROP_FPS),
-        'width': int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-        'height': int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-        'frame_count': int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        "fps": cap.get(cv2.CAP_PROP_FPS),
+        "width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+        "height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+        "frame_count": int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
     }
     cap.release()
     return info
@@ -258,19 +258,19 @@ def load_gt_metadata(gt_path: str) -> dict:
         Dictionary with GT metadata
     """
     metadata = {
-        'path': gt_path,
-        'has_video': os.path.exists(os.path.join(gt_path, 'ground_truth.mp4')),
-        'has_first_frame': os.path.exists(os.path.join(gt_path, 'first_frame.png')),
-        'has_final_frame': os.path.exists(os.path.join(gt_path, 'final_frame.png')),
-        'has_prompt': os.path.exists(os.path.join(gt_path, 'prompt.txt')),
+        "path": gt_path,
+        "has_video": os.path.exists(os.path.join(gt_path, "ground_truth.mp4")),
+        "has_first_frame": os.path.exists(os.path.join(gt_path, "first_frame.png")),
+        "has_final_frame": os.path.exists(os.path.join(gt_path, "final_frame.png")),
+        "has_prompt": os.path.exists(os.path.join(gt_path, "prompt.txt")),
     }
 
-    if metadata['has_video']:
-        metadata['video_info'] = get_video_info(os.path.join(gt_path, 'ground_truth.mp4'))
+    if metadata["has_video"]:
+        metadata["video_info"] = get_video_info(os.path.join(gt_path, "ground_truth.mp4"))
 
-    if metadata['has_prompt']:
-        with open(os.path.join(gt_path, 'prompt.txt')) as f:
-            metadata['prompt'] = f.read().strip()
+    if metadata["has_prompt"]:
+        with open(os.path.join(gt_path, "prompt.txt")) as f:
+            metadata["prompt"] = f.read().strip()
 
     return metadata
 
@@ -280,16 +280,16 @@ def extract_task_info_from_path(path: str) -> dict:
     parts = Path(path).parts
 
     info = {
-        'full_path': path,
-        'filename': parts[-1] if parts else '',
+        "full_path": path,
+        "filename": parts[-1] if parts else "",
     }
 
     # Try to extract split and task name
     for i, part in enumerate(parts):
-        if part in ['In-Domain_50', 'Out-of-Domain_50']:
-            info['split'] = part
+        if part in ["In-Domain_50", "Out-of-Domain_50"]:
+            info["split"] = part
             if i + 1 < len(parts):
-                info['task_name'] = parts[i + 1]
+                info["task_name"] = parts[i + 1]
             break
 
     return info
@@ -298,6 +298,7 @@ def extract_task_info_from_path(path: str) -> dict:
 # ============================================================================
 # Image/Frame Comparison Utilities
 # ============================================================================
+
 
 def compute_ssim(img1: np.ndarray, img2: np.ndarray) -> float:
     """
@@ -323,16 +324,15 @@ def compute_ssim(img1: np.ndarray, img2: np.ndarray) -> float:
     mu1 = cv2.GaussianBlur(img1, (11, 11), 1.5)
     mu2 = cv2.GaussianBlur(img2, (11, 11), 1.5)
 
-    mu1_sq = mu1 ** 2
-    mu2_sq = mu2 ** 2
+    mu1_sq = mu1**2
+    mu2_sq = mu2**2
     mu1_mu2 = mu1 * mu2
 
-    sigma1_sq = cv2.GaussianBlur(img1 ** 2, (11, 11), 1.5) - mu1_sq
-    sigma2_sq = cv2.GaussianBlur(img2 ** 2, (11, 11), 1.5) - mu2_sq
+    sigma1_sq = cv2.GaussianBlur(img1**2, (11, 11), 1.5) - mu1_sq
+    sigma2_sq = cv2.GaussianBlur(img2**2, (11, 11), 1.5) - mu2_sq
     sigma12 = cv2.GaussianBlur(img1 * img2, (11, 11), 1.5) - mu1_mu2
 
-    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / \
-               ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
+    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
 
     return float(ssim_map.mean())
 
@@ -349,11 +349,11 @@ def compute_psnr(img1: np.ndarray, img2: np.ndarray) -> float:
     """Compute Peak Signal-to-Noise Ratio (PSNR)."""
     mse = compute_mse(img1, img2)
     if mse == 0:
-        return float('inf')
-    return float(10 * np.log10(255 ** 2 / mse))
+        return float("inf")
+    return float(10 * np.log10(255**2 / mse))
 
 
-def compute_histogram_similarity(img1: np.ndarray, img2: np.ndarray, method: str = 'correlation') -> float:
+def compute_histogram_similarity(img1: np.ndarray, img2: np.ndarray, method: str = "correlation") -> float:
     """
     Compute histogram similarity between two images.
 
@@ -383,10 +383,10 @@ def compute_histogram_similarity(img1: np.ndarray, img2: np.ndarray, method: str
     cv2.normalize(hist2, hist2, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
 
     methods = {
-        'correlation': cv2.HISTCMP_CORREL,
-        'chi-square': cv2.HISTCMP_CHISQR,
-        'intersection': cv2.HISTCMP_INTERSECT,
-        'bhattacharyya': cv2.HISTCMP_BHATTACHARYYA
+        "correlation": cv2.HISTCMP_CORREL,
+        "chi-square": cv2.HISTCMP_CHISQR,
+        "intersection": cv2.HISTCMP_INTERSECT,
+        "bhattacharyya": cv2.HISTCMP_BHATTACHARYYA,
     }
 
     return float(cv2.compareHist(hist1, hist2, methods.get(method, cv2.HISTCMP_CORREL)))
@@ -395,6 +395,7 @@ def compute_histogram_similarity(img1: np.ndarray, img2: np.ndarray, method: str
 # ============================================================================
 # Color Analysis Utilities
 # ============================================================================
+
 
 def get_dominant_colors(img: np.ndarray, n_colors: int = 5) -> list[tuple[int, int, int]]:
     """
@@ -422,7 +423,7 @@ def get_dominant_colors(img: np.ndarray, n_colors: int = 5) -> list[tuple[int, i
     return colors
 
 
-def color_distance(c1: tuple, c2: tuple, method: str = 'euclidean') -> float:
+def color_distance(c1: tuple, c2: tuple, method: str = "euclidean") -> float:
     """
     Compute distance between two colors.
 
@@ -433,7 +434,7 @@ def color_distance(c1: tuple, c2: tuple, method: str = 'euclidean') -> float:
     Returns:
         Distance value (lower = more similar)
     """
-    if method == 'euclidean':
+    if method == "euclidean":
         return np.sqrt(sum((a - b) ** 2 for a, b in zip(c1, c2, strict=False)))
     else:
         # Simple euclidean as fallback
@@ -462,26 +463,26 @@ def color_name_match(color_bgr: tuple[int, int, int], expected_name: str) -> flo
 
     # Define color ranges (H: 0-360, S: 0-100, V: 0-100)
     color_ranges = {
-        'red': [(0, 15), (345, 360)],  # Red wraps around
-        'orange': [(15, 45)],
-        'yellow': [(45, 70)],
-        'green': [(70, 170)],
-        'cyan': [(170, 200)],
-        'blue': [(200, 260)],
-        'purple': [(260, 290)],
-        'magenta': [(290, 345)],
-        'white': None,  # High V, low S
-        'black': None,  # Low V
-        'gray': None,   # Low S
+        "red": [(0, 15), (345, 360)],  # Red wraps around
+        "orange": [(15, 45)],
+        "yellow": [(45, 70)],
+        "green": [(70, 170)],
+        "cyan": [(170, 200)],
+        "blue": [(200, 260)],
+        "purple": [(260, 290)],
+        "magenta": [(290, 345)],
+        "white": None,  # High V, low S
+        "black": None,  # Low V
+        "gray": None,  # Low S
     }
 
     expected_name = expected_name.lower()
 
-    if expected_name == 'white':
+    if expected_name == "white":
         return 1.0 if v > 80 and s < 20 else max(0, (v - 50) / 50 * (1 - s / 100))
-    elif expected_name == 'black':
+    elif expected_name == "black":
         return 1.0 if v < 20 else max(0, (50 - v) / 50)
-    elif expected_name == 'gray':
+    elif expected_name == "gray":
         return 1.0 if s < 20 and 20 < v < 80 else max(0, 1 - s / 50)
     elif expected_name in color_ranges:
         ranges = color_ranges[expected_name]
@@ -497,6 +498,7 @@ def color_name_match(color_bgr: tuple[int, int, int], expected_name: str) -> flo
 # ============================================================================
 # Shape Detection Utilities
 # ============================================================================
+
 
 def detect_shapes(img: np.ndarray, min_area: int = 100) -> list[dict]:
     """
@@ -525,23 +527,25 @@ def detect_shapes(img: np.ndarray, min_area: int = 100) -> list[dict]:
 
         # Get center and bounding box
         M = cv2.moments(contour)
-        if M['m00'] != 0:
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
+        if M["m00"] != 0:
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
         else:
             cx, cy = 0, 0
 
         x, y, w, h = cv2.boundingRect(contour)
 
-        shapes.append({
-            'type': shape_type,
-            'contour': contour,
-            'vertices': vertices,
-            'center': (cx, cy),
-            'area': area,
-            'bbox': (x, y, w, h),
-            'approx': approx
-        })
+        shapes.append(
+            {
+                "type": shape_type,
+                "contour": contour,
+                "vertices": vertices,
+                "center": (cx, cy),
+                "area": area,
+                "bbox": (x, y, w, h),
+                "approx": approx,
+            }
+        )
 
     return shapes
 
@@ -549,28 +553,28 @@ def detect_shapes(img: np.ndarray, min_area: int = 100) -> list[dict]:
 def classify_shape(vertices: int, contour: np.ndarray) -> str:
     """Classify a shape based on number of vertices and contour properties."""
     if vertices == 3:
-        return 'triangle'
+        return "triangle"
     elif vertices == 4:
         x, y, w, h = cv2.boundingRect(contour)
         aspect_ratio = w / float(h)
         if 0.9 <= aspect_ratio <= 1.1:
-            return 'square'
+            return "square"
         else:
-            return 'rectangle'
+            return "rectangle"
     elif vertices == 5:
-        return 'pentagon'
+        return "pentagon"
     elif vertices == 6:
-        return 'hexagon'
+        return "hexagon"
     elif vertices > 6:
         # Check circularity
         area = cv2.contourArea(contour)
         perimeter = cv2.arcLength(contour, True)
         if perimeter > 0:
-            circularity = 4 * np.pi * area / (perimeter ** 2)
+            circularity = 4 * np.pi * area / (perimeter**2)
             if circularity > 0.7:
-                return 'circle'
+                return "circle"
 
-    return 'polygon'
+    return "polygon"
 
 
 def count_objects_by_color(img: np.ndarray, target_color_bgr: tuple[int, int, int], tolerance: int = 30) -> int:
@@ -603,6 +607,7 @@ def count_objects_by_color(img: np.ndarray, target_color_bgr: tuple[int, int, in
 # ============================================================================
 # Motion and Flow Utilities
 # ============================================================================
+
 
 def compute_optical_flow(frame1: np.ndarray, frame2: np.ndarray) -> tuple[np.ndarray, float]:
     """
@@ -664,6 +669,7 @@ def detect_motion_regions(
 # ============================================================================
 # Score Calculation Utilities
 # ============================================================================
+
 
 def linear_score(value: float, min_val: float, max_val: float, invert: bool = False) -> float:
     """

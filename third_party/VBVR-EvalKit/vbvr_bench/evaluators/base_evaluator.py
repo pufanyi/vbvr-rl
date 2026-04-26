@@ -34,14 +34,14 @@ class BaseEvaluator(ABC):
     # Default weights for evaluation dimensions
     # These MUST match the dimension names used in evaluate()
     DEFAULT_WEIGHTS = {
-        'first_frame_consistency': 0.15,
-        'final_frame_accuracy': 0.35,
-        'temporal_smoothness': 0.15,
-        'visual_quality': 0.10,
-        'task_specific': 0.25,
+        "first_frame_consistency": 0.15,
+        "final_frame_accuracy": 0.35,
+        "temporal_smoothness": 0.15,
+        "visual_quality": 0.10,
+        "task_specific": 0.25,
     }
 
-    def __init__(self, device: str = 'cuda', task_name: str = ''):
+    def __init__(self, device: str = "cuda", task_name: str = ""):
         """
         Initialize base evaluator.
 
@@ -72,32 +72,28 @@ class BaseEvaluator(ABC):
                 - dimensions: Dict of dimension -> score
                 - details: Additional evaluation details
         """
-        result = {
-            'score': 0.0,
-            'dimensions': {},
-            'details': {}
-        }
+        result = {"score": 0.0, "dimensions": {}, "details": {}}
 
         try:
             # Load videos and frames
-            video_frames = self._load_video_frames(eval_info['video_path'])
+            video_frames = self._load_video_frames(eval_info["video_path"])
             gt_first_frame = self._load_gt_first_frame(eval_info)
             gt_final_frame = self._load_gt_final_frame(eval_info)
             gt_frames = self._load_gt_video_frames(eval_info)
 
             # Get GT video info for reference
-            gt_video_path = eval_info.get('gt_video_path')
+            gt_video_path = eval_info.get("gt_video_path")
             if gt_video_path and os.path.exists(gt_video_path):
                 gt_info = get_video_info(gt_video_path)
-                result['details']['gt_frame_count'] = gt_info['frame_count']
+                result["details"]["gt_frame_count"] = gt_info["frame_count"]
 
-            result['details']['video_frame_count'] = len(video_frames)
+            result["details"]["video_frame_count"] = len(video_frames)
 
             # CRITICAL: Normalize video frames to match GT frame size
             # This handles different video resolutions (e.g., 720x1280 vs 1024x1024)
             target_frame = gt_first_frame if gt_first_frame is not None else gt_final_frame
             if target_frame is not None and len(video_frames) > 0 and video_frames[0].shape != target_frame.shape:
-                result['details']['frame_normalization'] = f'{video_frames[0].shape} -> {target_frame.shape}'
+                result["details"]["frame_normalization"] = f"{video_frames[0].shape} -> {target_frame.shape}"
                 video_frames = [normalize_frame_size(f, target_frame) for f in video_frames]
                 # Also normalize GT frames if loaded
                 if gt_frames and len(gt_frames) > 0:
@@ -109,35 +105,27 @@ class BaseEvaluator(ABC):
 
             # 1. First frame consistency (weight: 0.15)
             if gt_first_frame is not None and len(video_frames) > 0:
-                dimensions['first_frame_consistency'] = self._evaluate_first_frame(
-                    video_frames[0], gt_first_frame
-                )
+                dimensions["first_frame_consistency"] = self._evaluate_first_frame(video_frames[0], gt_first_frame)
             else:
-                dimensions['first_frame_consistency'] = 0.5  # Default if no GT
+                dimensions["first_frame_consistency"] = 0.5  # Default if no GT
 
             # 2. Final frame accuracy (weight: 0.35)
             if gt_final_frame is not None and len(video_frames) > 0:
-                dimensions['final_frame_accuracy'] = self._evaluate_final_frame(
-                    video_frames[-1], gt_final_frame
-                )
+                dimensions["final_frame_accuracy"] = self._evaluate_final_frame(video_frames[-1], gt_final_frame)
             else:
-                dimensions['final_frame_accuracy'] = 0.0  # No GT means we can't evaluate
+                dimensions["final_frame_accuracy"] = 0.0  # No GT means we can't evaluate
 
             # 3. Temporal smoothness (weight: 0.15)
             if len(video_frames) > 1:
-                dimensions['temporal_smoothness'] = self._evaluate_temporal_smoothness(
-                    video_frames
-                )
+                dimensions["temporal_smoothness"] = self._evaluate_temporal_smoothness(video_frames)
             else:
-                dimensions['temporal_smoothness'] = 0.5  # Default for single frame
+                dimensions["temporal_smoothness"] = 0.5  # Default for single frame
 
             # 4. Visual quality (weight: 0.10)
             if len(video_frames) > 0:
-                dimensions['visual_quality'] = self._evaluate_visual_quality(
-                    video_frames
-                )
+                dimensions["visual_quality"] = self._evaluate_visual_quality(video_frames)
             else:
-                dimensions['visual_quality'] = 0.0
+                dimensions["visual_quality"] = 0.0
 
             # 5. Task-specific evaluation (weight: 0.25)
             task_score = self._evaluate_task_specific(
@@ -145,24 +133,24 @@ class BaseEvaluator(ABC):
             )
             # SAFETY: Clamp task score to [0, 1] range
             task_score = max(0.0, min(1.0, task_score))
-            dimensions['task_specific'] = task_score
+            dimensions["task_specific"] = task_score
 
-            if hasattr(self, '_last_task_details'):
-                result['details']['task_specific_details'] = self._last_task_details
+            if hasattr(self, "_last_task_details"):
+                result["details"]["task_specific_details"] = self._last_task_details
 
             # Optionally focus on task-specific score only
-            if kwargs.get('task_specific_only'):
-                result['dimensions'] = {'task_specific': task_score}
-                result['score'] = task_score
-                result['details']['task_specific_only'] = True
+            if kwargs.get("task_specific_only"):
+                result["dimensions"] = {"task_specific": task_score}
+                result["score"] = task_score
+                result["details"]["task_specific_only"] = True
             else:
                 # Calculate weighted overall score using standard weights
-                result['dimensions'] = dimensions
-                result['score'] = self._calculate_overall_score(dimensions)
+                result["dimensions"] = dimensions
+                result["score"] = self._calculate_overall_score(dimensions)
 
         except Exception as e:
-            result['error'] = str(e)
-            result['score'] = 0.0
+            result["error"] = str(e)
+            result["score"] = 0.0
 
         return result
 
@@ -174,21 +162,21 @@ class BaseEvaluator(ABC):
 
     def _load_gt_first_frame(self, eval_info: dict) -> np.ndarray | None:
         """Load ground truth first frame."""
-        path = eval_info.get('gt_first_frame')
+        path = eval_info.get("gt_first_frame")
         if path and os.path.exists(path):
             return load_image(path)
         return None
 
     def _load_gt_final_frame(self, eval_info: dict) -> np.ndarray | None:
         """Load ground truth final frame."""
-        path = eval_info.get('gt_final_frame')
+        path = eval_info.get("gt_final_frame")
         if path and os.path.exists(path):
             return load_image(path)
         return None
 
     def _load_gt_video_frames(self, eval_info: dict, max_frames: int = 100) -> list[np.ndarray]:
         """Load ground truth video frames."""
-        path = eval_info.get('gt_video_path')
+        path = eval_info.get("gt_video_path")
         if path and os.path.exists(path):
             return get_video_frames(path, max_frames=max_frames)
         return []
@@ -212,11 +200,7 @@ class BaseEvaluator(ABC):
         frame2_normalized = normalize_frame_size(frame2, frame1)
         return frame1, frame2_normalized
 
-    def _evaluate_first_frame(
-        self,
-        first_frame: np.ndarray,
-        gt_first_frame: np.ndarray
-    ) -> float:
+    def _evaluate_first_frame(self, first_frame: np.ndarray, gt_first_frame: np.ndarray) -> float:
         """
         Evaluate first frame consistency with GT.
 
@@ -248,11 +232,7 @@ class BaseEvaluator(ABC):
         else:
             return ssim / 0.70 * 0.5
 
-    def _evaluate_final_frame(
-        self,
-        final_frame: np.ndarray,
-        gt_final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_final_frame(self, final_frame: np.ndarray, gt_final_frame: np.ndarray) -> float:
         """
         Evaluate final frame accuracy with GT.
 
@@ -331,7 +311,7 @@ class BaseEvaluator(ABC):
 
         quality_scores = []
 
-        for frame in frames[::max(1, len(frames) // 10)]:  # Sample frames
+        for frame in frames[:: max(1, len(frames) // 10)]:  # Sample frames
             # Measure sharpness using Laplacian variance
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
@@ -356,7 +336,7 @@ class BaseEvaluator(ABC):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """
         Task-specific evaluation logic.
@@ -389,11 +369,11 @@ class BaseEvaluator(ABC):
         """
         # Always use BaseEvaluator's standard weights
         standard_weights = {
-            'first_frame_consistency': 0.15,
-            'final_frame_accuracy': 0.35,
-            'temporal_smoothness': 0.15,
-            'visual_quality': 0.10,
-            'task_specific': 0.25,
+            "first_frame_consistency": 0.15,
+            "final_frame_accuracy": 0.35,
+            "temporal_smoothness": 0.15,
+            "visual_quality": 0.10,
+            "task_specific": 0.25,
         }
         # Clamp all dimension scores to [0, 1] before calculating weighted average
         clamped_dimensions = {k: max(0.0, min(1.0, v)) for k, v in dimensions.items()}
@@ -403,11 +383,7 @@ class BaseEvaluator(ABC):
     # Utility methods for subclasses
     # =========================================================================
 
-    def get_key_frames(
-        self,
-        frames: list[np.ndarray],
-        gt_frame_count: int
-    ) -> list[np.ndarray]:
+    def get_key_frames(self, frames: list[np.ndarray], gt_frame_count: int) -> list[np.ndarray]:
         """
         Extract key frames aligned with ground truth frame count.
 
@@ -429,10 +405,7 @@ class BaseEvaluator(ABC):
         return [frames[i] for i in indices]
 
     def find_best_matching_frame(
-        self,
-        target_frame: np.ndarray,
-        candidate_frames: list[np.ndarray],
-        start_idx: int = 0
+        self, target_frame: np.ndarray, candidate_frames: list[np.ndarray], start_idx: int = 0
     ) -> tuple[int, float]:
         """
         Find the frame in candidates that best matches target.
@@ -461,10 +434,7 @@ class BaseEvaluator(ABC):
         return best_idx, best_score
 
     def compute_trajectory_similarity(
-        self,
-        video_frames: list[np.ndarray],
-        gt_frames: list[np.ndarray],
-        num_samples: int = 10
+        self, video_frames: list[np.ndarray], gt_frames: list[np.ndarray], num_samples: int = 10
     ) -> float:
         """
         Compare video trajectory to GT trajectory using sampled frames.

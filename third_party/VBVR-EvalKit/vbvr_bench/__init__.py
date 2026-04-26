@@ -38,9 +38,9 @@ class VBVRBench:
     def __init__(
         self,
         gt_base_path: str,
-        output_path: str = './evaluation_results/',
-        device: str = 'cuda',
-        rules_path: str = None
+        output_path: str = "./evaluation_results/",
+        device: str = "cuda",
+        rules_path: str = None,
     ):
         """
         Initialize VBVRBench.
@@ -63,7 +63,7 @@ class VBVRBench:
 
     def _load_tasks_info(self) -> dict:
         """Load task information from tasks.json if available."""
-        tasks_json_path = os.path.join(self.gt_base_path, 'tasks.json')
+        tasks_json_path = os.path.join(self.gt_base_path, "tasks.json")
         if os.path.exists(tasks_json_path):
             return load_json(tasks_json_path)
         return {"In_Domain": [], "Out_of_Domain": []}
@@ -71,7 +71,7 @@ class VBVRBench:
     def get_all_tasks(self) -> list[str]:
         """Get list of all task names."""
         all_tasks = []
-        for split in ['In_Domain', 'Out_of_Domain']:
+        for split in ["In_Domain", "Out_of_Domain"]:
             if split in self.tasks_info:
                 all_tasks.extend(self.tasks_info[split])
         return list(set(all_tasks))
@@ -81,10 +81,7 @@ class VBVRBench:
         return self.tasks_info.get(split, [])
 
     def build_evaluation_info(
-        self,
-        videos_path: str,
-        task_list: list[str] | None = None,
-        split: str | None = None
+        self, videos_path: str, task_list: list[str] | None = None, split: str | None = None
     ) -> list[dict]:
         """
         Build evaluation information for all videos to be evaluated.
@@ -100,7 +97,7 @@ class VBVRBench:
         """
         eval_info_list = []
 
-        splits = [split] if split else ['In-Domain_50', 'Out-of-Domain_50']
+        splits = [split] if split else ["In-Domain_50", "Out-of-Domain_50"]
 
         for current_split in splits:
             split_path = os.path.join(videos_path, current_split)
@@ -115,39 +112,34 @@ class VBVRBench:
                     continue
 
                 # Get all video files for this task
-                video_files = sorted([
-                    f for f in os.listdir(task_path)
-                    if f.endswith('.mp4')
-                ])
+                video_files = sorted([f for f in os.listdir(task_path) if f.endswith(".mp4")])
 
                 for video_file in video_files:
-                    video_idx = video_file.replace('.mp4', '')
+                    video_idx = video_file.replace(".mp4", "")
 
                     # Build ground truth paths
-                    gt_task_path = os.path.join(
-                        self.gt_base_path, current_split, task_name, video_idx
-                    )
+                    gt_task_path = os.path.join(self.gt_base_path, current_split, task_name, video_idx)
 
                     # Determine logical split (In_Domain vs Out_of_Domain)
-                    logical_split = 'Out_of_Domain' if is_out_of_domain(task_name) else 'In_Domain'
+                    logical_split = "Out_of_Domain" if is_out_of_domain(task_name) else "In_Domain"
 
                     eval_info = {
-                        'split': logical_split,
-                        'file_split': current_split,  # Original folder name
-                        'task_name': task_name,
-                        'video_idx': video_idx,
-                        'video_path': os.path.join(task_path, video_file),
-                        'gt_path': gt_task_path,
-                        'gt_video_path': os.path.join(gt_task_path, 'ground_truth.mp4'),
-                        'gt_first_frame': os.path.join(gt_task_path, 'first_frame.png'),
-                        'gt_final_frame': os.path.join(gt_task_path, 'final_frame.png'),
-                        'prompt_path': os.path.join(gt_task_path, 'prompt.txt'),
+                        "split": logical_split,
+                        "file_split": current_split,  # Original folder name
+                        "task_name": task_name,
+                        "video_idx": video_idx,
+                        "video_path": os.path.join(task_path, video_file),
+                        "gt_path": gt_task_path,
+                        "gt_video_path": os.path.join(gt_task_path, "ground_truth.mp4"),
+                        "gt_first_frame": os.path.join(gt_task_path, "first_frame.png"),
+                        "gt_final_frame": os.path.join(gt_task_path, "final_frame.png"),
+                        "prompt_path": os.path.join(gt_task_path, "prompt.txt"),
                     }
 
                     # Load prompt if available
-                    if os.path.exists(eval_info['prompt_path']):
-                        with open(eval_info['prompt_path']) as f:
-                            eval_info['prompt'] = f.read().strip()
+                    if os.path.exists(eval_info["prompt_path"]):
+                        with open(eval_info["prompt_path"]) as f:
+                            eval_info["prompt"] = f.read().strip()
 
                     eval_info_list.append(eval_info)
 
@@ -160,7 +152,7 @@ class VBVRBench:
         task_list: list[str] | None = None,
         split: str | None = None,
         save_detailed: bool = True,
-        **kwargs
+        **kwargs,
     ) -> dict[str, Any]:
         """
         Run evaluation on videos.
@@ -182,7 +174,7 @@ class VBVRBench:
             - detailed: Per-video results
         """
         if name is None:
-            name = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
+            name = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
 
         # Build evaluation info
         eval_info_list = self.build_evaluation_info(videos_path, task_list, split)
@@ -194,17 +186,17 @@ class VBVRBench:
 
         # Initialize results structure
         results = {
-            'overall': {},
-            'In_Domain': {'scores': [], 'by_task': {}},
-            'Out_of_Domain': {'scores': [], 'by_task': {}},
-            'by_task': {},
-            'detailed': []
+            "overall": {},
+            "In_Domain": {"scores": [], "by_task": {}},
+            "Out_of_Domain": {"scores": [], "by_task": {}},
+            "by_task": {},
+            "detailed": [],
         }
 
         # Process each video
         for i, eval_info in enumerate(eval_info_list):
-            task_name = eval_info['task_name']
-            split_name = eval_info['split']  # Now uses In_Domain/Out_of_Domain
+            task_name = eval_info["task_name"]
+            split_name = eval_info["split"]  # Now uses In_Domain/Out_of_Domain
 
             if (i + 1) % 50 == 0:
                 print(f"  Processing {i + 1}/{len(eval_info_list)}...")
@@ -217,47 +209,36 @@ class VBVRBench:
                 video_result = evaluator.evaluate(eval_info, **kwargs)
             except Exception as e:
                 print(f"Error evaluating {eval_info['video_path']}: {e}")
-                video_result = {
-                    'score': 0.0,
-                    'error': str(e),
-                    'dimensions': {}
-                }
+                video_result = {"score": 0.0, "error": str(e), "dimensions": {}}
 
             # Add metadata
-            video_result['video_path'] = eval_info['video_path']
-            video_result['task_name'] = task_name
-            video_result['split'] = split_name
-            video_result['video_idx'] = eval_info['video_idx']
+            video_result["video_path"] = eval_info["video_path"]
+            video_result["task_name"] = task_name
+            video_result["split"] = split_name
+            video_result["video_idx"] = eval_info["video_idx"]
 
-            results['detailed'].append(video_result)
+            results["detailed"].append(video_result)
 
             # Aggregate by split
             if split_name not in results:
-                results[split_name] = {'scores': [], 'by_task': {}}
-            results[split_name]['scores'].append(video_result['score'])
+                results[split_name] = {"scores": [], "by_task": {}}
+            results[split_name]["scores"].append(video_result["score"])
 
             # Aggregate by task within split
-            if task_name not in results[split_name]['by_task']:
-                results[split_name]['by_task'][task_name] = {
-                    'scores': [],
-                    'dimensions': {}
-                }
-            results[split_name]['by_task'][task_name]['scores'].append(video_result['score'])
+            if task_name not in results[split_name]["by_task"]:
+                results[split_name]["by_task"][task_name] = {"scores": [], "dimensions": {}}
+            results[split_name]["by_task"][task_name]["scores"].append(video_result["score"])
 
             # Aggregate dimensions
-            for dim_name, dim_score in video_result.get('dimensions', {}).items():
-                if dim_name not in results[split_name]['by_task'][task_name]['dimensions']:
-                    results[split_name]['by_task'][task_name]['dimensions'][dim_name] = []
-                results[split_name]['by_task'][task_name]['dimensions'][dim_name].append(dim_score)
+            for dim_name, dim_score in video_result.get("dimensions", {}).items():
+                if dim_name not in results[split_name]["by_task"][task_name]["dimensions"]:
+                    results[split_name]["by_task"][task_name]["dimensions"][dim_name] = []
+                results[split_name]["by_task"][task_name]["dimensions"][dim_name].append(dim_score)
 
             # Also maintain overall by_task for compatibility
-            if task_name not in results['by_task']:
-                results['by_task'][task_name] = {
-                    'scores': [],
-                    'split': split_name,
-                    'dimensions': {}
-                }
-            results['by_task'][task_name]['scores'].append(video_result['score'])
+            if task_name not in results["by_task"]:
+                results["by_task"][task_name] = {"scores": [], "split": split_name, "dimensions": {}}
+            results["by_task"][task_name]["scores"].append(video_result["score"])
 
         # Calculate averages
         self._calculate_averages(results)
@@ -266,7 +247,7 @@ class VBVRBench:
         self._calculate_category_scores(results)
 
         # Save results
-        output_name = os.path.join(self.output_path, f'{name}_eval_results.json')
+        output_name = os.path.join(self.output_path, f"{name}_eval_results.json")
         save_json(results, output_name)
         print(f"Results saved to {output_name}")
 
@@ -278,79 +259,73 @@ class VBVRBench:
     def _calculate_averages(self, results: dict):
         """Calculate average scores at all levels."""
         # Average for each split
-        for split in ['In_Domain', 'Out_of_Domain']:
-            if split in results and results[split]['scores']:
-                results[split]['mean_score'] = sum(results[split]['scores']) / len(results[split]['scores'])
-                results[split]['num_videos'] = len(results[split]['scores'])
+        for split in ["In_Domain", "Out_of_Domain"]:
+            if split in results and results[split]["scores"]:
+                results[split]["mean_score"] = sum(results[split]["scores"]) / len(results[split]["scores"])
+                results[split]["num_videos"] = len(results[split]["scores"])
 
                 # Average per task within split
-                for _task_name, task_data in results[split]['by_task'].items():
-                    task_data['mean_score'] = sum(task_data['scores']) / len(task_data['scores'])
+                for _task_name, task_data in results[split]["by_task"].items():
+                    task_data["mean_score"] = sum(task_data["scores"]) / len(task_data["scores"])
 
                     # Average dimensions
-                    for dim_name, dim_scores in task_data['dimensions'].items():
-                        task_data['dimensions'][dim_name] = sum(dim_scores) / len(dim_scores)
+                    for dim_name, dim_scores in task_data["dimensions"].items():
+                        task_data["dimensions"][dim_name] = sum(dim_scores) / len(dim_scores)
             else:
                 if split not in results:
-                    results[split] = {'scores': [], 'by_task': {}}
-                results[split]['mean_score'] = 0.0
-                results[split]['num_videos'] = 0
+                    results[split] = {"scores": [], "by_task": {}}
+                results[split]["mean_score"] = 0.0
+                results[split]["num_videos"] = 0
 
         # Average for overall by_task
-        for _task_name, task_data in results['by_task'].items():
-            task_data['mean_score'] = sum(task_data['scores']) / len(task_data['scores']) if task_data['scores'] else 0
+        for _task_name, task_data in results["by_task"].items():
+            task_data["mean_score"] = sum(task_data["scores"]) / len(task_data["scores"]) if task_data["scores"] else 0
 
         # Overall average (weighted by number of videos)
-        total_videos = results['In_Domain']['num_videos'] + results['Out_of_Domain']['num_videos']
+        total_videos = results["In_Domain"]["num_videos"] + results["Out_of_Domain"]["num_videos"]
         if total_videos > 0:
-            results['overall']['mean_score'] = (
-                results['In_Domain']['mean_score'] * results['In_Domain']['num_videos'] +
-                results['Out_of_Domain']['mean_score'] * results['Out_of_Domain']['num_videos']
+            results["overall"]["mean_score"] = (
+                results["In_Domain"]["mean_score"] * results["In_Domain"]["num_videos"]
+                + results["Out_of_Domain"]["mean_score"] * results["Out_of_Domain"]["num_videos"]
             ) / total_videos
-            results['overall']['num_videos'] = total_videos
+            results["overall"]["num_videos"] = total_videos
         else:
-            results['overall']['mean_score'] = 0.0
-            results['overall']['num_videos'] = 0
+            results["overall"]["mean_score"] = 0.0
+            results["overall"]["num_videos"] = 0
 
         # Store individual split scores for easy access
-        results['overall']['In_Domain_score'] = results['In_Domain']['mean_score']
-        results['overall']['Out_of_Domain_score'] = results['Out_of_Domain']['mean_score']
+        results["overall"]["In_Domain_score"] = results["In_Domain"]["mean_score"]
+        results["overall"]["Out_of_Domain_score"] = results["Out_of_Domain"]["mean_score"]
 
     def _calculate_category_scores(self, results: dict):
         """Calculate scores by task category."""
         from .evaluators import get_task_category
 
         # Initialize category results
-        results['by_category'] = {}
+        results["by_category"] = {}
 
         # Aggregate scores by category
-        for task_name, task_data in results['by_task'].items():
+        for task_name, task_data in results["by_task"].items():
             category = get_task_category(task_name)
 
-            if category not in results['by_category']:
-                results['by_category'][category] = {
-                    'scores': [],
-                    'tasks': [],
-                    'num_tasks': 0
-                }
+            if category not in results["by_category"]:
+                results["by_category"][category] = {"scores": [], "tasks": [], "num_tasks": 0}
 
-            results['by_category'][category]['scores'].extend(task_data['scores'])
-            results['by_category'][category]['tasks'].append(task_name)
-            results['by_category'][category]['num_tasks'] += 1
+            results["by_category"][category]["scores"].extend(task_data["scores"])
+            results["by_category"][category]["tasks"].append(task_name)
+            results["by_category"][category]["num_tasks"] += 1
 
         # Calculate averages for each category
-        for _category, cat_data in results['by_category'].items():
-            if cat_data['scores']:
-                cat_data['mean_score'] = sum(cat_data['scores']) / len(cat_data['scores'])
-                cat_data['num_videos'] = len(cat_data['scores'])
+        for _category, cat_data in results["by_category"].items():
+            if cat_data["scores"]:
+                cat_data["mean_score"] = sum(cat_data["scores"]) / len(cat_data["scores"])
+                cat_data["num_videos"] = len(cat_data["scores"])
             else:
-                cat_data['mean_score'] = 0.0
-                cat_data['num_videos'] = 0
+                cat_data["mean_score"] = 0.0
+                cat_data["num_videos"] = 0
 
         # Store in overall
-        results['overall']['by_category'] = {
-            cat: data['mean_score'] for cat, data in results['by_category'].items()
-        }
+        results["overall"]["by_category"] = {cat: data["mean_score"] for cat, data in results["by_category"].items()}
 
     def _print_summary(self, results: dict):
         """Print evaluation summary."""
@@ -381,14 +356,13 @@ class VBVRBench:
         print()
 
         # Print category scores
-        if 'by_category' in results and results['by_category']:
+        if "by_category" in results and results["by_category"]:
             print("┌" + "─" * 68 + "┐")
             print("│" + " " * 18 + "SCORES BY CATEGORY" + " " * 32 + "│")
             print("├" + "─" * 34 + "┬" + "─" * 33 + "┤")
 
             # Sort categories by score
-            cat_scores = [(cat, data['mean_score'], data['num_tasks'])
-                         for cat, data in results['by_category'].items()]
+            cat_scores = [(cat, data["mean_score"], data["num_tasks"]) for cat, data in results["by_category"].items()]
             cat_scores.sort(key=lambda x: x[1], reverse=True)
 
             for cat, score, num_tasks in cat_scores:
@@ -399,9 +373,9 @@ class VBVRBench:
             print()
 
         # Best and worst performing tasks for each split
-        for split in ['In_Domain', 'Out_of_Domain']:
-            if results[split]['by_task']:
-                task_scores = [(name, data['mean_score']) for name, data in results[split]['by_task'].items()]
+        for split in ["In_Domain", "Out_of_Domain"]:
+            if results[split]["by_task"]:
+                task_scores = [(name, data["mean_score"]) for name, data in results[split]["by_task"].items()]
                 task_scores.sort(key=lambda x: x[1], reverse=True)
 
                 print(f"{split} - Top 5 Tasks:")
@@ -420,10 +394,7 @@ class VBVRBench:
 
 # Convenience function for quick evaluation
 def evaluate(
-    videos_path: str,
-    gt_base_path: str,
-    output_path: str = './evaluation_results/',
-    **kwargs
+    videos_path: str, gt_base_path: str, output_path: str = "./evaluation_results/", **kwargs
 ) -> dict[str, Any]:
     """
     Convenience function to run VBVR-Bench evaluation.

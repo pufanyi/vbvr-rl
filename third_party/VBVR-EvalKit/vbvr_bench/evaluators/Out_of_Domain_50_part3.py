@@ -2,7 +2,6 @@
 Specific evaluators for Out-of-Domain_50 tasks (Part 3).
 """
 
-
 import cv2
 import numpy as np
 
@@ -22,10 +21,10 @@ class SelectLeftmostShapeEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'position_identification': 0.45,
-        'marking_precision': 0.30,
-        'marking_quality': 0.15,
-        'scene_preservation': 0.10
+        "position_identification": 0.45,
+        "marking_precision": 0.30,
+        "marking_quality": 0.15,
+        "scene_preservation": 0.10,
     }
 
     def _evaluate_task_specific(
@@ -34,7 +33,7 @@ class SelectLeftmostShapeEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         if len(video_frames) < 2:
             return 0.0
@@ -44,31 +43,21 @@ class SelectLeftmostShapeEvaluator(BaseEvaluator):
         final_frame = video_frames[-1]
 
         # 1. Position identification (45%)
-        scores['position_identification'] = self._evaluate_position_id(
-            first_frame, final_frame
-        )
+        scores["position_identification"] = self._evaluate_position_id(first_frame, final_frame)
 
         # 2. Marking precision (30%)
-        scores['marking_precision'] = self._evaluate_marking_precision(
-            first_frame, final_frame
-        )
+        scores["marking_precision"] = self._evaluate_marking_precision(first_frame, final_frame)
 
         # 3. Marking quality (15%)
-        scores['marking_quality'] = self._evaluate_marking_quality(final_frame)
+        scores["marking_quality"] = self._evaluate_marking_quality(final_frame)
 
         # 4. Scene preservation (10%)
-        scores['scene_preservation'] = self._evaluate_scene_preservation(
-            first_frame, final_frame
-        )
+        scores["scene_preservation"] = self._evaluate_scene_preservation(first_frame, final_frame)
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
-    def _evaluate_position_id(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_position_id(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if leftmost shape (smallest x) is identified."""
         # Find leftmost shape
         leftmost = self._find_leftmost_shape(first_frame)
@@ -82,7 +71,7 @@ class SelectLeftmostShapeEvaluator(BaseEvaluator):
         if leftmost is None:
             return 0.5
 
-        dist = np.sqrt((circle[0] - leftmost[0])**2 + (circle[1] - leftmost[1])**2)
+        dist = np.sqrt((circle[0] - leftmost[0]) ** 2 + (circle[1] - leftmost[1]) ** 2)
 
         if dist < 40:
             return 1.0
@@ -93,11 +82,7 @@ class SelectLeftmostShapeEvaluator(BaseEvaluator):
         else:
             return 0.0
 
-    def _evaluate_marking_precision(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_marking_precision(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Evaluate marking precision."""
         circle = self._detect_red_circle(final_frame)
         leftmost = self._find_leftmost_shape(first_frame)
@@ -107,7 +92,7 @@ class SelectLeftmostShapeEvaluator(BaseEvaluator):
         if leftmost is None:
             return 0.0
 
-        dist = np.sqrt((circle[0] - leftmost[0])**2 + (circle[1] - leftmost[1])**2)
+        dist = np.sqrt((circle[0] - leftmost[0]) ** 2 + (circle[1] - leftmost[1]) ** 2)
         return max(0.0, 1.0 - dist / 60)
 
     def _evaluate_marking_quality(self, final_frame: np.ndarray) -> float:
@@ -124,11 +109,7 @@ class SelectLeftmostShapeEvaluator(BaseEvaluator):
         else:
             return 0.5
 
-    def _evaluate_scene_preservation(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_scene_preservation(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if shapes are preserved."""
         first_count = self._count_shapes(first_frame)
 
@@ -219,10 +200,10 @@ class OutlineInnermostSquareEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'concentric_structure': 0.40,
-        'color_preservation': 0.35,
-        'outline_addition': 0.20,
-        'element_preservation': 0.05
+        "concentric_structure": 0.40,
+        "color_preservation": 0.35,
+        "outline_addition": 0.20,
+        "element_preservation": 0.05,
     }
 
     def _evaluate_task_specific(
@@ -231,7 +212,7 @@ class OutlineInnermostSquareEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         if len(video_frames) < 2:
             return 0.0
@@ -247,35 +228,29 @@ class OutlineInnermostSquareEvaluator(BaseEvaluator):
         self._detect_concentric_squares(first_frame)
 
         # 1. Check concentric structure preservation (40%)
-        scores['concentric_structure'] = self._evaluate_concentric_structure(
+        scores["concentric_structure"] = self._evaluate_concentric_structure(
             first_frame, final_frame, center_x, center_y
         )
 
         # If structure is completely broken, return early with low score
-        if scores['concentric_structure'] < 0.3:
+        if scores["concentric_structure"] < 0.3:
             self._last_task_details = {
-                'concentric_structure': scores['concentric_structure'],
-                'color_preservation': 0.0,
-                'outline_addition': 0.0,
-                'element_preservation': 0.0,
-                'structure_broken': True
+                "concentric_structure": scores["concentric_structure"],
+                "color_preservation": 0.0,
+                "outline_addition": 0.0,
+                "element_preservation": 0.0,
+                "structure_broken": True,
             }
             return 0.0
 
         # 2. Check color preservation (35%) - colors on all 4 sides should match
-        scores['color_preservation'] = self._evaluate_color_preservation(
-            first_frame, final_frame, center_x, center_y
-        )
+        scores["color_preservation"] = self._evaluate_color_preservation(first_frame, final_frame, center_x, center_y)
 
         # 3. Check blue outline addition (20%)
-        scores['outline_addition'] = self._evaluate_outline_addition(
-            first_frame, final_frame, center_x, center_y
-        )
+        scores["outline_addition"] = self._evaluate_outline_addition(first_frame, final_frame, center_x, center_y)
 
         # 4. Element preservation (5%)
-        scores['element_preservation'] = self._evaluate_element_preservation(
-            first_frame, final_frame
-        )
+        scores["element_preservation"] = self._evaluate_element_preservation(first_frame, final_frame)
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -294,27 +269,17 @@ class OutlineInnermostSquareEvaluator(BaseEvaluator):
             if prev_color is not None:
                 color_diff = sum(abs(int(c1) - int(c2)) for c1, c2 in zip(color, prev_color, strict=False))
                 if color_diff > 30:  # Color transition = square boundary
-                    squares.append({
-                        'distance': x - center_x,
-                        'color': prev_color
-                    })
+                    squares.append({"distance": x - center_x, "color": prev_color})
             prev_color = color
 
         # Add the outermost square
         if prev_color is not None:
-            squares.append({
-                'distance': w - center_x,
-                'color': prev_color
-            })
+            squares.append({"distance": w - center_x, "color": prev_color})
 
         return squares
 
     def _evaluate_concentric_structure(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray,
-        center_x: int,
-        center_y: int
+        self, first_frame: np.ndarray, final_frame: np.ndarray, center_x: int, center_y: int
     ) -> float:
         """Check if concentric square structure is preserved."""
         h, w = first_frame.shape[:2]
@@ -335,14 +300,14 @@ class OutlineInnermostSquareEvaluator(BaseEvaluator):
             final_colors = []
 
             # Right
-            first_colors.append(tuple(first_frame[center_y, min(center_x + dist, w-1)]))
-            final_colors.append(tuple(final_frame[center_y, min(center_x + dist, w-1)]))
+            first_colors.append(tuple(first_frame[center_y, min(center_x + dist, w - 1)]))
+            final_colors.append(tuple(final_frame[center_y, min(center_x + dist, w - 1)]))
             # Left
             first_colors.append(tuple(first_frame[center_y, max(center_x - dist, 0)]))
             final_colors.append(tuple(final_frame[center_y, max(center_x - dist, 0)]))
             # Down
-            first_colors.append(tuple(first_frame[min(center_y + dist, h-1), center_x]))
-            final_colors.append(tuple(final_frame[min(center_y + dist, h-1), center_x]))
+            first_colors.append(tuple(first_frame[min(center_y + dist, h - 1), center_x]))
+            final_colors.append(tuple(final_frame[min(center_y + dist, h - 1), center_x]))
             # Up
             first_colors.append(tuple(first_frame[max(center_y - dist, 0), center_x]))
             final_colors.append(tuple(final_frame[max(center_y - dist, 0), center_x]))
@@ -365,11 +330,7 @@ class OutlineInnermostSquareEvaluator(BaseEvaluator):
         return matches / total
 
     def _evaluate_color_preservation(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray,
-        center_x: int,
-        center_y: int
+        self, first_frame: np.ndarray, final_frame: np.ndarray, center_x: int, center_y: int
     ) -> float:
         """Check if colors on all 4 sides (上下左右) are preserved."""
         h, w = first_frame.shape[:2]
@@ -385,15 +346,15 @@ class OutlineInnermostSquareEvaluator(BaseEvaluator):
                 continue
 
             # Get first frame colors at 4 directions
-            first_right = tuple(first_frame[center_y, min(center_x + dist, w-1)])
+            first_right = tuple(first_frame[center_y, min(center_x + dist, w - 1)])
             first_left = tuple(first_frame[center_y, max(center_x - dist, 0)])
-            first_down = tuple(first_frame[min(center_y + dist, h-1), center_x])
+            first_down = tuple(first_frame[min(center_y + dist, h - 1), center_x])
             first_up = tuple(first_frame[max(center_y - dist, 0), center_x])
 
             # Get final frame colors
-            final_right = tuple(final_frame[center_y, min(center_x + dist, w-1)])
+            final_right = tuple(final_frame[center_y, min(center_x + dist, w - 1)])
             final_left = tuple(final_frame[center_y, max(center_x - dist, 0)])
-            final_down = tuple(final_frame[min(center_y + dist, h-1), center_x])
+            final_down = tuple(final_frame[min(center_y + dist, h - 1), center_x])
             final_up = tuple(final_frame[max(center_y - dist, 0), center_x])
 
             # Check if 4 sides have same color in first frame (concentric property)
@@ -418,11 +379,7 @@ class OutlineInnermostSquareEvaluator(BaseEvaluator):
         return preserved / total
 
     def _evaluate_outline_addition(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray,
-        center_x: int,
-        center_y: int
+        self, first_frame: np.ndarray, final_frame: np.ndarray, center_x: int, center_y: int
     ) -> float:
         """Check if blue outline was added around innermost square."""
         # Count blue pixels in first vs final
@@ -445,7 +402,7 @@ class OutlineInnermostSquareEvaluator(BaseEvaluator):
         avg_y = np.mean(blue_points[0])
         avg_x = np.mean(blue_points[1])
 
-        dist_from_center = np.sqrt((avg_x - center_x)**2 + (avg_y - center_y)**2)
+        dist_from_center = np.sqrt((avg_x - center_x) ** 2 + (avg_y - center_y) ** 2)
 
         # Blue outline should be near center (innermost square)
         h, w = final_frame.shape[:2]
@@ -459,11 +416,7 @@ class OutlineInnermostSquareEvaluator(BaseEvaluator):
         else:
             return 0.4
 
-    def _evaluate_element_preservation(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_element_preservation(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Check if overall structure is preserved."""
         # Compare histograms (excluding blue)
         first_hist = cv2.calcHist([first_frame], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
@@ -483,6 +436,7 @@ class OutlineInnermostSquareEvaluator(BaseEvaluator):
         b, g, r = cv2.split(frame)
         return ((b > 200) & (g < 50) & (r < 50)).astype(np.uint8) * 255
 
+
 class MarkTangentPointEvaluator(BaseEvaluator):
     """
     G-222: Mark tangent point of circles evaluator.
@@ -494,28 +448,19 @@ class MarkTangentPointEvaluator(BaseEvaluator):
     - Visual annotation quality (5%): Black circle proper
     """
 
-    TASK_WEIGHTS = {
-        'pair_id': 0.40,
-        'calculation': 0.40,
-        'position': 0.15,
-        'annotation': 0.05
-    }
+    TASK_WEIGHTS = {"pair_id": 0.40, "calculation": 0.40, "position": 0.15, "annotation": 0.05}
 
     def _detect_circles(self, frame: np.ndarray) -> list[dict]:
         """Detect circles in the frame."""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, 1, 30,
-                                    param1=50, param2=30, minRadius=20, maxRadius=200)
+        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, 1, 30, param1=50, param2=30, minRadius=20, maxRadius=200)
 
         detected = []
         if circles is not None:
             circles = np.uint16(np.around(circles))
             for i in circles[0, :]:
-                detected.append({
-                    'center': (i[0], i[1]),
-                    'radius': i[2]
-                })
+                detected.append({"center": (i[0], i[1]), "radius": i[2]})
 
         return detected
 
@@ -528,11 +473,11 @@ class MarkTangentPointEvaluator(BaseEvaluator):
                 c1, c2 = circles[i], circles[j]
 
                 # Convert to float to avoid overflow
-                c1x, c1y = float(c1['center'][0]), float(c1['center'][1])
-                c2x, c2y = float(c2['center'][0]), float(c2['center'][1])
-                r1, r2 = float(c1['radius']), float(c2['radius'])
+                c1x, c1y = float(c1["center"][0]), float(c1["center"][1])
+                c2x, c2y = float(c2["center"][0]), float(c2["center"][1])
+                r1, r2 = float(c1["radius"]), float(c2["radius"])
 
-                dist = np.sqrt((c1x - c2x)**2 + (c1y - c2y)**2)
+                dist = np.sqrt((c1x - c2x) ** 2 + (c1y - c2y) ** 2)
 
                 # Check if externally tangent (distance ≈ r1 + r2)
                 expected_dist = r1 + r2
@@ -568,9 +513,9 @@ class MarkTangentPointEvaluator(BaseEvaluator):
 
             if circularity > 0.5:
                 M = cv2.moments(cnt)
-                if M['m00'] > 0:
-                    cx = int(M['m10'] / M['m00'])
-                    cy = int(M['m01'] / M['m00'])
+                if M["m00"] > 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
                     return (cx, cy)
 
         return None
@@ -581,7 +526,7 @@ class MarkTangentPointEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate mark tangent point task."""
         scores = {}
@@ -604,30 +549,27 @@ class MarkTangentPointEvaluator(BaseEvaluator):
         if gen_marking is not None and tangent_pairs:
             near_tangent = False
             for _, _, tangent_point in tangent_pairs:
-                dist = np.sqrt((gen_marking[0] - tangent_point[0])**2 +
-                              (gen_marking[1] - tangent_point[1])**2)
+                dist = np.sqrt((gen_marking[0] - tangent_point[0]) ** 2 + (gen_marking[1] - tangent_point[1]) ** 2)
                 if dist < 30:
                     near_tangent = True
                     break
-            scores['pair_id'] = 1.0 if near_tangent else 0.3
+            scores["pair_id"] = 1.0 if near_tangent else 0.3
         else:
-            scores['pair_id'] = 0.2  # Detection failed
+            scores["pair_id"] = 0.2  # Detection failed
 
         # 2. Calculation accuracy: Compare marking positions
         if gen_marking is not None and gt_marking is not None:
-            dist = np.sqrt((gen_marking[0] - gt_marking[0])**2 +
-                          (gen_marking[1] - gt_marking[1])**2)
-            scores['calculation'] = max(0, 1.0 - dist / 30.0)
+            dist = np.sqrt((gen_marking[0] - gt_marking[0]) ** 2 + (gen_marking[1] - gt_marking[1]) ** 2)
+            scores["calculation"] = max(0, 1.0 - dist / 30.0)
         else:
-            scores['calculation'] = 0.2  # Detection failed
+            scores["calculation"] = 0.2  # Detection failed
 
         # 3. Position accuracy: Same with looser tolerance
         if gen_marking is not None and gt_marking is not None:
-            dist = np.sqrt((gen_marking[0] - gt_marking[0])**2 +
-                          (gen_marking[1] - gt_marking[1])**2)
-            scores['position'] = max(0, 1.0 - dist / 50.0)
+            dist = np.sqrt((gen_marking[0] - gt_marking[0]) ** 2 + (gen_marking[1] - gt_marking[1]) ** 2)
+            scores["position"] = max(0, 1.0 - dist / 50.0)
         else:
-            scores['position'] = 0.2  # Detection failed
+            scores["position"] = 0.2  # Detection failed
 
         # 4. Annotation quality: Black pixel IoU
         gray_gen = cv2.cvtColor(last_frame, cv2.COLOR_BGR2GRAY)
@@ -639,7 +581,7 @@ class MarkTangentPointEvaluator(BaseEvaluator):
         black_overlap = np.sum((black_mask_gen > 0) & (black_mask_gt > 0))
         black_union = np.sum((black_mask_gen > 0) | (black_mask_gt > 0))
 
-        scores['annotation'] = black_overlap / black_union if black_union > 0 else 0.5
+        scores["annotation"] = black_overlap / black_union if black_union > 0 else 0.5
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -656,12 +598,7 @@ class HighlightHorizontalLinesEvaluator(BaseEvaluator):
     - Visual annotation quality (10%): Black circles proper
     """
 
-    TASK_WEIGHTS = {
-        'identification': 0.40,
-        'completeness': 0.30,
-        'position': 0.20,
-        'annotation': 0.10
-    }
+    TASK_WEIGHTS = {"identification": 0.40, "completeness": 0.30, "position": 0.20, "annotation": 0.10}
 
     def _detect_horizontal_lines(self, frame: np.ndarray) -> list[dict]:
         """Detect horizontal line segments using contour analysis."""
@@ -683,12 +620,7 @@ class HighlightHorizontalLinesEvaluator(BaseEvaluator):
             # Horizontal line: width >> height (aspect > 5)
             if aspect > 5:
                 midpoint = (x + w // 2, y + h // 2)
-                horizontal_lines.append({
-                    'start': (x, y),
-                    'end': (x + w, y),
-                    'midpoint': midpoint,
-                    'length': w
-                })
+                horizontal_lines.append({"start": (x, y), "end": (x + w, y), "midpoint": midpoint, "length": w})
 
         return horizontal_lines
 
@@ -708,9 +640,9 @@ class HighlightHorizontalLinesEvaluator(BaseEvaluator):
                 continue
 
             M = cv2.moments(cnt)
-            if M['m00'] > 0:
-                cx = int(M['m10'] / M['m00'])
-                cy = int(M['m01'] / M['m00'])
+            if M["m00"] > 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
                 centers.append((cx, cy))
 
         return centers
@@ -721,7 +653,7 @@ class HighlightHorizontalLinesEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate highlight horizontal lines task."""
         scores = {}
@@ -745,9 +677,7 @@ class HighlightHorizontalLinesEvaluator(BaseEvaluator):
         gt_lines = self._detect_horizontal_lines(gt_last)
 
         # Count expected horizontal lines (lines with y1 = y2)
-        expected_horizontal_count = len(
-            [line for line in gt_lines if abs(line['start'][1] - line['end'][1]) < 10]
-        )
+        expected_horizontal_count = len([line for line in gt_lines if abs(line["start"][1] - line["end"][1]) < 10])
 
         # 1. Identification: Check if markings are on horizontal lines (40%)
         # Rule: Must correctly identify horizontal lines (y1 = y2) vs vertical (x1 = x2)
@@ -755,15 +685,14 @@ class HighlightHorizontalLinesEvaluator(BaseEvaluator):
             on_line_count = 0
             for marking in gen_markings:
                 for line in gen_lines:
-                    dist = np.sqrt((marking[0] - line['midpoint'][0])**2 +
-                                  (marking[1] - line['midpoint'][1])**2)
+                    dist = np.sqrt((marking[0] - line["midpoint"][0]) ** 2 + (marking[1] - line["midpoint"][1]) ** 2)
                     if dist < 80:  # More lenient threshold
                         on_line_count += 1
                         break
-            scores['identification'] = on_line_count / len(gen_markings) if gen_markings else 0.0
+            scores["identification"] = on_line_count / len(gen_markings) if gen_markings else 0.0
         else:
             # No markings - score based on whether horizontal lines exist
-            scores['identification'] = 0.5 if expected_horizontal_count == 0 else 0.0
+            scores["identification"] = 0.5 if expected_horizontal_count == 0 else 0.0
 
         # 2. Completeness: Compare marking counts (30%)
         # Rule: All horizontal lines must be marked (recall = 100%)
@@ -771,23 +700,23 @@ class HighlightHorizontalLinesEvaluator(BaseEvaluator):
             count_diff = abs(len(gen_markings) - len(gt_markings))
             # Exact match or very close gets full score
             if count_diff == 0:
-                scores['completeness'] = 1.0
+                scores["completeness"] = 1.0
             elif count_diff == 1:
-                scores['completeness'] = 0.7
+                scores["completeness"] = 0.7
             else:
-                scores['completeness'] = max(0.3, 1.0 - count_diff * 0.2)
+                scores["completeness"] = max(0.3, 1.0 - count_diff * 0.2)
         else:
             # No GT markings means no horizontal lines expected
-            scores['completeness'] = 1.0 if len(gen_markings) == 0 else 0.5
+            scores["completeness"] = 1.0 if len(gen_markings) == 0 else 0.5
 
         # 3. Position accuracy: Compare marking positions with GT
         if gen_markings and gt_markings:
             matched = 0
             total_dist = 0
             for gm in gen_markings:
-                min_dist = float('inf')
+                min_dist = float("inf")
                 for gtm in gt_markings:
-                    dist = np.sqrt((gm[0] - gtm[0])**2 + (gm[1] - gtm[1])**2)
+                    dist = np.sqrt((gm[0] - gtm[0]) ** 2 + (gm[1] - gtm[1]) ** 2)
                     min_dist = min(min_dist, dist)
                 # Very close match (< 10 pixels) counts as perfect match
                 if min_dist < 10:
@@ -799,11 +728,11 @@ class HighlightHorizontalLinesEvaluator(BaseEvaluator):
 
             if matched > 0:
                 avg_dist = total_dist / matched
-                scores['position'] = max(0, 1.0 - avg_dist / 40.0)
+                scores["position"] = max(0, 1.0 - avg_dist / 40.0)
             else:
-                scores['position'] = 0.3
+                scores["position"] = 0.3
         else:
-            scores['position'] = 0.2  # Detection failed
+            scores["position"] = 0.2  # Detection failed
 
         # 4. Annotation quality: Black pixel IoU
         gray_gen = cv2.cvtColor(last_frame, cv2.COLOR_BGR2GRAY)
@@ -815,10 +744,11 @@ class HighlightHorizontalLinesEvaluator(BaseEvaluator):
         black_overlap = np.sum((black_mask_gen > 0) & (black_mask_gt > 0))
         black_union = np.sum((black_mask_gen > 0) | (black_mask_gt > 0))
 
-        scores['annotation'] = black_overlap / black_union if black_union > 0 else 0.5
+        scores["annotation"] = black_overlap / black_union if black_union > 0 else 0.5
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
+
 
 class AddBordersToUnborderedEvaluator(BaseEvaluator):
     """
@@ -832,10 +762,10 @@ class AddBordersToUnborderedEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'border_identification': 0.40,
-        'border_addition': 0.35,
-        'border_appearance': 0.15,
-        'scene_preservation': 0.10
+        "border_identification": 0.40,
+        "border_addition": 0.35,
+        "border_appearance": 0.15,
+        "scene_preservation": 0.10,
     }
 
     def _evaluate_task_specific(
@@ -844,7 +774,7 @@ class AddBordersToUnborderedEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         if len(video_frames) < 2:
             return 0.0
@@ -861,13 +791,13 @@ class AddBordersToUnborderedEvaluator(BaseEvaluator):
         # If so, no change is needed and the task is already complete
         if len(first_shapes) > 0 and first_bordered == len(first_shapes):
             self._last_task_details = {
-                'border_identification': 1.0,
-                'border_addition': 1.0,
-                'border_appearance': 1.0,
-                'scene_preservation': 1.0,
-                'all_already_bordered': True,
-                'first_shapes': len(first_shapes),
-                'first_bordered': first_bordered
+                "border_identification": 1.0,
+                "border_addition": 1.0,
+                "border_appearance": 1.0,
+                "scene_preservation": 1.0,
+                "all_already_bordered": True,
+                "first_shapes": len(first_shapes),
+                "first_bordered": first_bordered,
             }
             return 1.0  # Task already complete
 
@@ -885,13 +815,13 @@ class AddBordersToUnborderedEvaluator(BaseEvaluator):
         if dark_increase < 500 and frame_diff < 1:
             # No meaningful change - task not completed - ALL scores 0
             self._last_task_details = {
-                'border_identification': 0.0,
-                'border_addition': 0.0,
-                'border_appearance': 0.0,
-                'scene_preservation': 0.0,
-                'no_change_detected': True,
-                'dark_increase': int(dark_increase),
-                'frame_diff': float(frame_diff)
+                "border_identification": 0.0,
+                "border_addition": 0.0,
+                "border_appearance": 0.0,
+                "scene_preservation": 0.0,
+                "no_change_detected": True,
+                "dark_increase": int(dark_increase),
+                "frame_diff": float(frame_diff),
             }
             return 0.0
 
@@ -899,12 +829,12 @@ class AddBordersToUnborderedEvaluator(BaseEvaluator):
         # Borders are BLACK lines, so should add at least 1000 dark pixels
         if dark_increase < 1000:
             self._last_task_details = {
-                'border_identification': 0.0,
-                'border_addition': 0.0,
-                'border_appearance': 0.0,
-                'scene_preservation': 0.5,
-                'no_borders_added': True,
-                'dark_pixel_increase': int(dark_increase)
+                "border_identification": 0.0,
+                "border_addition": 0.0,
+                "border_appearance": 0.0,
+                "scene_preservation": 0.5,
+                "no_borders_added": True,
+                "dark_pixel_increase": int(dark_increase),
             }
             return 0.0
 
@@ -921,41 +851,37 @@ class AddBordersToUnborderedEvaluator(BaseEvaluator):
         if shape_count_change > 2:
             # Too many new shapes created - model is not just adding borders
             self._last_task_details = {
-                'border_identification': 0.0,
-                'border_addition': 0.0,
-                'border_appearance': 0.0,
-                'scene_preservation': 0.0,
-                'too_many_new_shapes': True,
-                'first_shapes': int(len(first_shapes)),
-                'final_shapes': int(len(final_shapes)),
-                'shape_count_change': int(shape_count_change)
+                "border_identification": 0.0,
+                "border_addition": 0.0,
+                "border_appearance": 0.0,
+                "scene_preservation": 0.0,
+                "too_many_new_shapes": True,
+                "first_shapes": int(len(first_shapes)),
+                "final_shapes": int(len(final_shapes)),
+                "shape_count_change": int(shape_count_change),
             }
             return 0.0
 
         # 1. Border identification (40%): Check if unbordered shapes were identified
-        scores['border_identification'] = self._evaluate_border_id(
-            first_shapes, first_bordered, final_bordered
-        )
+        scores["border_identification"] = self._evaluate_border_id(first_shapes, first_bordered, final_bordered)
 
         # 2. Border addition (35%): Check if black borders were added correctly
-        scores['border_addition'] = self._evaluate_border_addition(
-            first_frame, final_frame, dark_increase
-        )
+        scores["border_addition"] = self._evaluate_border_addition(first_frame, final_frame, dark_increase)
 
         # 3. Border appearance (15%): Check border quality (black, clean lines)
-        scores['border_appearance'] = self._evaluate_border_appearance(final_frame)
+        scores["border_appearance"] = self._evaluate_border_appearance(final_frame)
 
         # 4. Scene preservation (10%): Check shapes preserved
-        scores['scene_preservation'] = self._evaluate_scene_preservation(
+        scores["scene_preservation"] = self._evaluate_scene_preservation(
             first_frame, final_frame, first_shapes, final_shapes
         )
 
         self._last_task_details = scores
-        self._last_task_details['first_shapes'] = int(len(first_shapes))
-        self._last_task_details['final_shapes'] = int(len(final_shapes))
-        self._last_task_details['first_bordered'] = int(first_bordered)
-        self._last_task_details['final_bordered'] = int(final_bordered)
-        self._last_task_details['dark_increase'] = int(dark_increase)
+        self._last_task_details["first_shapes"] = int(len(first_shapes))
+        self._last_task_details["final_shapes"] = int(len(final_shapes))
+        self._last_task_details["first_bordered"] = int(first_bordered)
+        self._last_task_details["final_bordered"] = int(final_bordered)
+        self._last_task_details["dark_increase"] = int(dark_increase)
 
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
@@ -977,19 +903,14 @@ class AddBordersToUnborderedEvaluator(BaseEvaluator):
                 continue
 
             M = cv2.moments(cnt)
-            if M['m00'] == 0:
+            if M["m00"] == 0:
                 continue
 
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
             x, y, w, h = cv2.boundingRect(cnt)
 
-            shapes.append({
-                'contour': cnt,
-                'center': (cx, cy),
-                'bbox': (x, y, w, h),
-                'area': area
-            })
+            shapes.append({"contour": cnt, "center": (cx, cy), "bbox": (x, y, w, h), "area": area})
 
         return shapes
 
@@ -999,7 +920,7 @@ class AddBordersToUnborderedEvaluator(BaseEvaluator):
         bordered_count = 0
 
         for shape in shapes:
-            x, y, w, h = shape['bbox']
+            x, y, w, h = shape["bbox"]
 
             # Expand bbox slightly to check for border
             margin = 5
@@ -1026,12 +947,7 @@ class AddBordersToUnborderedEvaluator(BaseEvaluator):
 
         return bordered_count
 
-    def _evaluate_border_id(
-        self,
-        first_shapes: list[dict],
-        first_bordered: int,
-        final_bordered: int
-    ) -> float:
+    def _evaluate_border_id(self, first_shapes: list[dict], first_bordered: int, final_bordered: int) -> float:
         """Rule-based: Check if unbordered shapes were identified and bordered."""
         if len(first_shapes) == 0:
             return 0.0
@@ -1052,12 +968,7 @@ class AddBordersToUnborderedEvaluator(BaseEvaluator):
         else:
             return 0.0
 
-    def _evaluate_border_addition(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray,
-        dark_increase: int
-    ) -> float:
+    def _evaluate_border_addition(self, first_frame: np.ndarray, final_frame: np.ndarray, dark_increase: int) -> float:
         """Rule-based: Check if black borders were added correctly."""
         # Borders should add significant dark pixels
         if dark_increase < 1000:
@@ -1101,11 +1012,7 @@ class AddBordersToUnborderedEvaluator(BaseEvaluator):
             return 0.2
 
     def _evaluate_scene_preservation(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray,
-        first_shapes: list[dict],
-        final_shapes: list[dict]
+        self, first_frame: np.ndarray, final_frame: np.ndarray, first_shapes: list[dict], final_shapes: list[dict]
     ) -> float:
         """Rule-based: Check if shape colors and positions are preserved."""
         # Check if same number of shapes exist
@@ -1174,10 +1081,10 @@ class IdentifyChineseCharacterEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'character_recognition': 0.45,
-        'marking_target': 0.30,
-        'marking_position': 0.15,
-        'marking_specification': 0.10
+        "character_recognition": 0.45,
+        "marking_target": 0.30,
+        "marking_position": 0.15,
+        "marking_specification": 0.10,
     }
 
     def _evaluate_task_specific(
@@ -1186,7 +1093,7 @@ class IdentifyChineseCharacterEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         if len(video_frames) < 2:
             return 0.0
@@ -1196,29 +1103,21 @@ class IdentifyChineseCharacterEvaluator(BaseEvaluator):
         final_frame = video_frames[-1]
 
         # 1. Character recognition (45%)
-        scores['character_recognition'] = self._evaluate_character_recognition(
-            first_frame, final_frame
-        )
+        scores["character_recognition"] = self._evaluate_character_recognition(first_frame, final_frame)
 
         # 2. Marking target (30%)
-        scores['marking_target'] = self._evaluate_marking_target(
-            first_frame, final_frame
-        )
+        scores["marking_target"] = self._evaluate_marking_target(first_frame, final_frame)
 
         # 3. Marking position (15%)
-        scores['marking_position'] = self._evaluate_marking_position(final_frame)
+        scores["marking_position"] = self._evaluate_marking_position(final_frame)
 
         # 4. Marking specification (10%)
-        scores['marking_specification'] = self._evaluate_marking_spec(final_frame)
+        scores["marking_specification"] = self._evaluate_marking_spec(final_frame)
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
-    def _evaluate_character_recognition(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_character_recognition(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if Chinese character is identified."""
         # Find Chinese character (more complex pattern)
         chinese_pos = self._find_chinese_character(first_frame)
@@ -1232,7 +1131,7 @@ class IdentifyChineseCharacterEvaluator(BaseEvaluator):
         if chinese_pos is None:
             return 0.5
 
-        dist = np.sqrt((circle[0] - chinese_pos[0])**2 + (circle[1] - chinese_pos[1])**2)
+        dist = np.sqrt((circle[0] - chinese_pos[0]) ** 2 + (circle[1] - chinese_pos[1]) ** 2)
 
         if dist < 40:
             return 1.0
@@ -1243,11 +1142,7 @@ class IdentifyChineseCharacterEvaluator(BaseEvaluator):
         else:
             return 0.2
 
-    def _evaluate_marking_target(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_marking_target(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if correct character is marked."""
         circle = self._detect_red_circle(final_frame)
         chinese_pos = self._find_chinese_character(first_frame)
@@ -1257,7 +1152,7 @@ class IdentifyChineseCharacterEvaluator(BaseEvaluator):
         if chinese_pos is None:
             return 0.5
 
-        dist = np.sqrt((circle[0] - chinese_pos[0])**2 + (circle[1] - chinese_pos[1])**2)
+        dist = np.sqrt((circle[0] - chinese_pos[0]) ** 2 + (circle[1] - chinese_pos[1]) ** 2)
         return max(0.0, 1.0 - dist / 60)
 
     def _evaluate_marking_position(self, final_frame: np.ndarray) -> float:
@@ -1352,10 +1247,10 @@ class MarkAsymmetricalShapeEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'symmetry_identification': 0.45,
-        'marking_precision': 0.30,
-        'marking_quality': 0.15,
-        'scene_preservation': 0.10
+        "symmetry_identification": 0.45,
+        "marking_precision": 0.30,
+        "marking_quality": 0.15,
+        "scene_preservation": 0.10,
     }
 
     def _evaluate_task_specific(
@@ -1364,7 +1259,7 @@ class MarkAsymmetricalShapeEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         if len(video_frames) < 2:
             return 0.0
@@ -1374,31 +1269,21 @@ class MarkAsymmetricalShapeEvaluator(BaseEvaluator):
         final_frame = video_frames[-1]
 
         # 1. Symmetry identification (45%)
-        scores['symmetry_identification'] = self._evaluate_symmetry_id(
-            first_frame, final_frame
-        )
+        scores["symmetry_identification"] = self._evaluate_symmetry_id(first_frame, final_frame)
 
         # 2. Marking precision (30%)
-        scores['marking_precision'] = self._evaluate_marking_precision(
-            first_frame, final_frame
-        )
+        scores["marking_precision"] = self._evaluate_marking_precision(first_frame, final_frame)
 
         # 3. Marking quality (15%)
-        scores['marking_quality'] = self._evaluate_marking_quality(final_frame)
+        scores["marking_quality"] = self._evaluate_marking_quality(final_frame)
 
         # 4. Scene preservation (10%)
-        scores['scene_preservation'] = self._evaluate_scene_preservation(
-            first_frame, final_frame
-        )
+        scores["scene_preservation"] = self._evaluate_scene_preservation(first_frame, final_frame)
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
-    def _evaluate_symmetry_id(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_symmetry_id(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if asymmetrical shape is identified."""
         # Find asymmetrical shape
         asymmetric = self._find_asymmetrical_shape(first_frame)
@@ -1412,7 +1297,7 @@ class MarkAsymmetricalShapeEvaluator(BaseEvaluator):
         if asymmetric is None:
             return 0.5
 
-        dist = np.sqrt((circle[0] - asymmetric[0])**2 + (circle[1] - asymmetric[1])**2)
+        dist = np.sqrt((circle[0] - asymmetric[0]) ** 2 + (circle[1] - asymmetric[1]) ** 2)
 
         if dist < 50:
             return 1.0
@@ -1423,11 +1308,7 @@ class MarkAsymmetricalShapeEvaluator(BaseEvaluator):
         else:
             return 0.2
 
-    def _evaluate_marking_precision(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_marking_precision(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Evaluate marking precision."""
         circle = self._detect_red_circle(final_frame)
         asymmetric = self._find_asymmetrical_shape(first_frame)
@@ -1437,7 +1318,7 @@ class MarkAsymmetricalShapeEvaluator(BaseEvaluator):
         if asymmetric is None:
             return 0.5
 
-        dist = np.sqrt((circle[0] - asymmetric[0])**2 + (circle[1] - asymmetric[1])**2)
+        dist = np.sqrt((circle[0] - asymmetric[0]) ** 2 + (circle[1] - asymmetric[1]) ** 2)
         return max(0.0, 1.0 - dist / 80)
 
     def _evaluate_marking_quality(self, final_frame: np.ndarray) -> float:
@@ -1454,11 +1335,7 @@ class MarkAsymmetricalShapeEvaluator(BaseEvaluator):
         else:
             return 0.5
 
-    def _evaluate_scene_preservation(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_scene_preservation(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if shapes are preserved."""
         first_count = self._count_shapes(first_frame)
 
@@ -1552,7 +1429,7 @@ class MarkAsymmetricalShapeEvaluator(BaseEvaluator):
             return 0.5
 
         # Circularity (how close to a circle)
-        circularity = 4 * np.pi * area / (perimeter ** 2)
+        circularity = 4 * np.pi * area / (perimeter**2)
 
         # Convex hull for solidity
         hull = cv2.convexHull(contour)
@@ -1577,7 +1454,7 @@ class MarkAsymmetricalShapeEvaluator(BaseEvaluator):
         # Also do mirror symmetry check
         x, y, w, h = cv2.boundingRect(contour)
         mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
-        cv2.drawContours(mask, [contour - [x-1, y-1]], -1, 255, -1)
+        cv2.drawContours(mask, [contour - [x - 1, y - 1]], -1, 255, -1)
 
         mid = w // 2
         left = mask[:, :mid]
@@ -1629,6 +1506,7 @@ class MarkAsymmetricalShapeEvaluator(BaseEvaluator):
 
         return None
 
+
 class ColorTripleIntersectionEvaluator(BaseEvaluator):
     """
     G-250: Color Triple Intersection Red
@@ -1644,10 +1522,10 @@ class ColorTripleIntersectionEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'triple_intersection_identification': 0.40,
-        'fill_coverage': 0.30,
-        'fill_precision': 0.20,
-        'visual_quality': 0.10
+        "triple_intersection_identification": 0.40,
+        "fill_coverage": 0.30,
+        "fill_precision": 0.20,
+        "visual_quality": 0.10,
     }
 
     def _detect_red_region(self, frame: np.ndarray) -> np.ndarray:
@@ -1689,17 +1567,13 @@ class ColorTripleIntersectionEvaluator(BaseEvaluator):
         """Detect circles in the Venn diagram."""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 
-        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, 1, 50,
-                                    param1=50, param2=30, minRadius=50, maxRadius=300)
+        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, 1, 50, param1=50, param2=30, minRadius=50, maxRadius=300)
 
         detected = []
         if circles is not None:
             circles = np.uint16(np.around(circles))
             for i in circles[0, :]:
-                detected.append({
-                    'center': (i[0], i[1]),
-                    'radius': i[2]
-                })
+                detected.append({"center": (i[0], i[1]), "radius": i[2]})
 
         return detected
 
@@ -1709,7 +1583,7 @@ class ColorTripleIntersectionEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate triple intersection filling accuracy."""
 
@@ -1746,12 +1620,13 @@ class ColorTripleIntersectionEvaluator(BaseEvaluator):
         # Visual quality - check red color purity
         visual_quality = self._check_red_purity(gen_final, red_mask_gen)
 
-        scores['triple_intersection_identification'] = identification_score
-        scores['fill_coverage'] = coverage
-        scores['fill_precision'] = precision
-        scores['visual_quality'] = visual_quality
+        scores["triple_intersection_identification"] = identification_score
+        scores["fill_coverage"] = coverage
+        scores["fill_precision"] = precision
+        scores["visual_quality"] = visual_quality
 
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
+
 
 class HighDensityLiquidEvaluator(BaseEvaluator):
     """
@@ -1765,10 +1640,10 @@ class HighDensityLiquidEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'physics_reasoning': 0.45,
-        'marking_correctness': 0.30,
-        'marking_standardization': 0.20,
-        'element_preservation': 0.05
+        "physics_reasoning": 0.45,
+        "marking_correctness": 0.30,
+        "marking_standardization": 0.20,
+        "element_preservation": 0.05,
     }
 
     def _evaluate_task_specific(
@@ -1777,7 +1652,7 @@ class HighDensityLiquidEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         if len(video_frames) < 2:
             return 0.0
@@ -1787,31 +1662,21 @@ class HighDensityLiquidEvaluator(BaseEvaluator):
         final_frame = video_frames[-1]
 
         # 1. Physics reasoning (45%)
-        scores['physics_reasoning'] = self._evaluate_physics_reasoning(
-            first_frame, final_frame
-        )
+        scores["physics_reasoning"] = self._evaluate_physics_reasoning(first_frame, final_frame)
 
         # 2. Marking correctness (30%)
-        scores['marking_correctness'] = self._evaluate_marking_correctness(
-            first_frame, final_frame
-        )
+        scores["marking_correctness"] = self._evaluate_marking_correctness(first_frame, final_frame)
 
         # 3. Marking standardization (20%)
-        scores['marking_standardization'] = self._evaluate_marking_standard(final_frame)
+        scores["marking_standardization"] = self._evaluate_marking_standard(final_frame)
 
         # 4. Element preservation (5%)
-        scores['element_preservation'] = self._evaluate_preservation(
-            first_frame, final_frame
-        )
+        scores["element_preservation"] = self._evaluate_preservation(first_frame, final_frame)
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
-    def _evaluate_physics_reasoning(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_physics_reasoning(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if high-density liquid (floating yellow square) is identified.
 
         CRITICAL RULES:
@@ -1849,11 +1714,11 @@ class HighDensityLiquidEvaluator(BaseEvaluator):
         if rect is None:
             return 0.2  # No marking found
 
-        rect_center = ((rect[0] + rect[2])//2, (rect[1] + rect[3])//2)
+        rect_center = ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
 
         # Check if rectangle marks the HIGHER floating square
-        dist_to_higher = np.sqrt((rect_center[0] - higher_obj[0])**2 + (rect_center[1] - higher_obj[1])**2)
-        dist_to_lower = np.sqrt((rect_center[0] - lower_obj[0])**2 + (rect_center[1] - lower_obj[1])**2)
+        dist_to_higher = np.sqrt((rect_center[0] - higher_obj[0]) ** 2 + (rect_center[1] - higher_obj[1]) ** 2)
+        dist_to_lower = np.sqrt((rect_center[0] - lower_obj[0]) ** 2 + (rect_center[1] - lower_obj[1]) ** 2)
 
         # Rectangle should be closer to the higher floating square
         if dist_to_higher < dist_to_lower:
@@ -1894,11 +1759,7 @@ class HighDensityLiquidEvaluator(BaseEvaluator):
 
         return yellow_objects
 
-    def _evaluate_marking_correctness(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_marking_correctness(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if the correct yellow square is marked with red rectangle."""
         rect = self._detect_red_rectangle(final_frame)
         floating_obj = self._find_floating_object(final_frame)
@@ -1907,7 +1768,7 @@ class HighDensityLiquidEvaluator(BaseEvaluator):
             return 0.0
 
         h, w = final_frame.shape[:2]
-        rect_center = ((rect[0] + rect[2])//2, (rect[1] + rect[3])//2)
+        rect_center = ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
 
         if floating_obj is None:
             # Fallback: check if rectangle is in the expected region
@@ -1915,7 +1776,7 @@ class HighDensityLiquidEvaluator(BaseEvaluator):
                 return 0.8  # Rectangle is in reasonable position
             return 0.0
 
-        dist = np.sqrt((rect_center[0] - floating_obj[0])**2 + (rect_center[1] - floating_obj[1])**2)
+        dist = np.sqrt((rect_center[0] - floating_obj[0]) ** 2 + (rect_center[1] - floating_obj[1]) ** 2)
 
         # More lenient distance threshold for this task
         return max(0.3, 1.0 - dist / 150)
@@ -1936,11 +1797,7 @@ class HighDensityLiquidEvaluator(BaseEvaluator):
         else:
             return 0.5
 
-    def _evaluate_preservation(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_preservation(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if elements are preserved."""
         # Count objects
         first_objects = self._count_objects(first_frame)
@@ -2054,6 +1911,7 @@ class HighDensityLiquidEvaluator(BaseEvaluator):
 
         return None
 
+
 class PigmentColorMixingEvaluator(BaseEvaluator):
     """
     O-2: Pigment color mixing (subtractive) evaluator.
@@ -2073,17 +1931,17 @@ class PigmentColorMixingEvaluator(BaseEvaluator):
 
     # CMY subtractive mixing expected results (in BGR format)
     CMY_MIXING_RULES = {
-        ('cyan', 'magenta'): (255, 0, 0),      # Blue
-        ('cyan', 'yellow'): (0, 255, 0),        # Green
-        ('magenta', 'yellow'): (0, 0, 255),     # Red
-        ('cyan', 'magenta', 'yellow'): (0, 0, 0),  # Black
+        ("cyan", "magenta"): (255, 0, 0),  # Blue
+        ("cyan", "yellow"): (0, 255, 0),  # Green
+        ("magenta", "yellow"): (0, 0, 255),  # Red
+        ("cyan", "magenta", "yellow"): (0, 0, 0),  # Black
     }
 
     TASK_WEIGHTS = {
-        'mixing_correctness': 0.60,
-        'fill_accuracy': 0.25,
-        'scene_preservation': 0.10,
-        'visual_quality': 0.05
+        "mixing_correctness": 0.60,
+        "fill_accuracy": 0.25,
+        "scene_preservation": 0.10,
+        "visual_quality": 0.05,
     }
 
     def _evaluate_task_specific(
@@ -2092,7 +1950,7 @@ class PigmentColorMixingEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         if len(video_frames) < 2:
             return 0.0
@@ -2101,25 +1959,16 @@ class PigmentColorMixingEvaluator(BaseEvaluator):
         first_frame = video_frames[0]
         final_frame = video_frames[-1]
 
-        scores['mixing_correctness'] = self._evaluate_color_mixing(
-            first_frame, final_frame, gt_final_frame
-        )
-        scores['fill_accuracy'] = self._evaluate_fill_region(
-            first_frame, final_frame
-        )
-        scores['scene_preservation'] = self._evaluate_preservation(
-            first_frame, final_frame
-        )
-        scores['visual_quality'] = self._evaluate_visual_quality(final_frame)
+        scores["mixing_correctness"] = self._evaluate_color_mixing(first_frame, final_frame, gt_final_frame)
+        scores["fill_accuracy"] = self._evaluate_fill_region(first_frame, final_frame)
+        scores["scene_preservation"] = self._evaluate_preservation(first_frame, final_frame)
+        scores["visual_quality"] = self._evaluate_visual_quality(final_frame)
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
     def _evaluate_color_mixing(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray,
-        gt_final_frame: np.ndarray | None = None
+        self, first_frame: np.ndarray, final_frame: np.ndarray, gt_final_frame: np.ndarray | None = None
     ) -> float:
         """Rule-based: Check if mixed color matches expected result."""
         # Get mixed color from final frame (center region)
@@ -2172,7 +2021,7 @@ class PigmentColorMixingEvaluator(BaseEvaluator):
         size = 60
 
         # Get center region
-        region = final_frame[max(0, cy-size):min(h, cy+size), max(0, cx-size):min(w, cx+size)]
+        region = final_frame[max(0, cy - size) : min(h, cy + size), max(0, cx - size) : min(w, cx + size)]
 
         if region.size == 0:
             return 0.5
@@ -2195,10 +2044,10 @@ class PigmentColorMixingEvaluator(BaseEvaluator):
         # Count colored regions in left/right thirds
         h, w = first_frame.shape[:2]
 
-        first_left = self._count_colored_pixels(first_frame[:, :w//3])
-        first_right = self._count_colored_pixels(first_frame[:, 2*w//3:])
-        final_left = self._count_colored_pixels(final_frame[:, :w//3])
-        final_right = self._count_colored_pixels(final_frame[:, 2*w//3:])
+        first_left = self._count_colored_pixels(first_frame[:, : w // 3])
+        first_right = self._count_colored_pixels(first_frame[:, 2 * w // 3 :])
+        final_left = self._count_colored_pixels(final_frame[:, : w // 3])
+        final_right = self._count_colored_pixels(final_frame[:, 2 * w // 3 :])
 
         # Circles should be preserved (similar pixel counts)
         left_ratio = min(first_left, final_left) / max(first_left, final_left, 1)
@@ -2235,17 +2084,17 @@ class PigmentColorMixingEvaluator(BaseEvaluator):
         # Cyan detection (hue ~90) - lower saturation threshold
         cyan_mask = cv2.inRange(hsv, np.array([80, 50, 50]), np.array([100, 255, 255]))
         if np.sum(cyan_mask > 0) > 500:
-            colors_present.append('cyan')
+            colors_present.append("cyan")
 
         # Magenta detection (hue ~140-170) - lower saturation threshold
         magenta_mask = cv2.inRange(hsv, np.array([130, 50, 50]), np.array([170, 255, 255]))
         if np.sum(magenta_mask > 0) > 500:
-            colors_present.append('magenta')
+            colors_present.append("magenta")
 
         # Yellow detection (hue ~20-40) - lower saturation threshold
         yellow_mask = cv2.inRange(hsv, np.array([15, 50, 50]), np.array([45, 255, 255]))
         if np.sum(yellow_mask > 0) > 500:
-            colors_present.append('yellow')
+            colors_present.append("yellow")
 
         return colors_present
 
@@ -2255,7 +2104,7 @@ class PigmentColorMixingEvaluator(BaseEvaluator):
         cx, cy = w // 2, h // 2
         size = 40
 
-        region = frame[max(0, cy-size):min(h, cy+size), max(0, cx-size):min(w, cx+size)]
+        region = frame[max(0, cy - size) : min(h, cy + size), max(0, cx - size) : min(w, cx + size)]
 
         if region.size == 0:
             return None
@@ -2278,16 +2127,17 @@ class PigmentColorMixingEvaluator(BaseEvaluator):
         hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
         return np.sum(hsv[:, :, 1] > 50)
 
+
 # Export all evaluators
 OUT_OF_DOMAIN_50_EVALUATORS_PART3 = {
-    'G-219_select_leftmost_shape_data-generator': SelectLeftmostShapeEvaluator,
-    'G-221_outline_innermost_square_data-generator': OutlineInnermostSquareEvaluator,
-    'G-222_mark_tangent_point_of_circles_data-generator': MarkTangentPointEvaluator,
-    'G-223_highlight_horizontal_lines_data-generator': HighlightHorizontalLinesEvaluator,
-    'G-240_add_borders_to_unbordered_shapes_data-generator': AddBordersToUnborderedEvaluator,
-    'G-247_identify_chinese_character_data-generator': IdentifyChineseCharacterEvaluator,
-    'G-248_mark_asymmetrical_shape_data-generator': MarkAsymmetricalShapeEvaluator,
-    'G-250_color_triple_intersection_red_data-generator': ColorTripleIntersectionEvaluator,
-    'G-273_high_density_liquid_data-generator': HighDensityLiquidEvaluator,
-    'O-2_pigment_color_mixing_subtractive_data-generator': PigmentColorMixingEvaluator
+    "G-219_select_leftmost_shape_data-generator": SelectLeftmostShapeEvaluator,
+    "G-221_outline_innermost_square_data-generator": OutlineInnermostSquareEvaluator,
+    "G-222_mark_tangent_point_of_circles_data-generator": MarkTangentPointEvaluator,
+    "G-223_highlight_horizontal_lines_data-generator": HighlightHorizontalLinesEvaluator,
+    "G-240_add_borders_to_unbordered_shapes_data-generator": AddBordersToUnborderedEvaluator,
+    "G-247_identify_chinese_character_data-generator": IdentifyChineseCharacterEvaluator,
+    "G-248_mark_asymmetrical_shape_data-generator": MarkAsymmetricalShapeEvaluator,
+    "G-250_color_triple_intersection_red_data-generator": ColorTripleIntersectionEvaluator,
+    "G-273_high_density_liquid_data-generator": HighDensityLiquidEvaluator,
+    "O-2_pigment_color_mixing_subtractive_data-generator": PigmentColorMixingEvaluator,
 }

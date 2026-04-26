@@ -2,7 +2,6 @@
 Specific evaluators for In-Domain_50 tasks (Part 5).
 """
 
-
 import cv2
 import numpy as np
 
@@ -25,14 +24,14 @@ class GridShiftEvaluator(BaseEvaluator):
     5. Completeness (5%) - All blocks moved, properties preserved
     """
 
-    def __init__(self, device: str = 'cuda', task_name: str = ''):
+    def __init__(self, device: str = "cuda", task_name: str = ""):
         super().__init__(device, task_name)
         self.DEFAULT_WEIGHTS = {
-            'direction_correctness': 0.30,
-            'step_accuracy': 0.30,
-            'synchronization': 0.20,
-            'position_precision': 0.15,
-            'completeness': 0.05
+            "direction_correctness": 0.30,
+            "step_accuracy": 0.30,
+            "synchronization": 0.20,
+            "position_precision": 0.15,
+            "completeness": 0.05,
         }
 
     def _evaluate_task_specific(
@@ -41,7 +40,7 @@ class GridShiftEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate grid shift movement."""
 
@@ -74,30 +73,30 @@ class GridShiftEvaluator(BaseEvaluator):
 
         # Combine: blocks must be preserved AND patterns must be unchanged
         block_preserved = min(completeness_score, pattern_score) > 0.5
-        scores['completeness'] = min(completeness_score, pattern_score)
+        scores["completeness"] = min(completeness_score, pattern_score)
 
         # If blocks are NOT preserved, all other scores should be 0
         if not block_preserved:
-            scores['direction_correctness'] = 0.0
-            scores['step_accuracy'] = 0.0
-            scores['synchronization'] = 0.0
-            scores['position_precision'] = 0.0
+            scores["direction_correctness"] = 0.0
+            scores["step_accuracy"] = 0.0
+            scores["synchronization"] = 0.0
+            scores["position_precision"] = 0.0
         else:
             # 1. Direction correctness (30%): Check if blocks moved in correct direction
             direction_score = self._evaluate_direction(first_blocks, gen_final_blocks, gt_final_blocks)
-            scores['direction_correctness'] = direction_score
+            scores["direction_correctness"] = direction_score
 
             # 2. Step accuracy (30%): Check if blocks moved correct number of steps
             step_score = self._evaluate_step_accuracy(first_blocks, gen_final_blocks, gt_final_blocks, gen_final)
-            scores['step_accuracy'] = step_score
+            scores["step_accuracy"] = step_score
 
             # 3. Synchronization (20%): Check if all blocks moved together
             sync_score = self._evaluate_synchronization(video_frames)
-            scores['synchronization'] = sync_score
+            scores["synchronization"] = sync_score
 
             # 4. Position precision (15%): Check final block positions
             position_score = self._evaluate_position_precision(gen_final_blocks, gt_final_blocks)
-            scores['position_precision'] = position_score
+            scores["position_precision"] = position_score
 
         self._last_task_details = scores
         return sum(scores[k] * self.DEFAULT_WEIGHTS[k] for k in self.DEFAULT_WEIGHTS)
@@ -110,13 +109,13 @@ class GridShiftEvaluator(BaseEvaluator):
 
         # Define color ranges for common block colors (lower saturation threshold)
         color_ranges = {
-            'red': ([0, 50, 50], [10, 255, 255], [160, 50, 50], [180, 255, 255]),
-            'green': ([35, 50, 50], [85, 255, 255], None, None),
-            'blue': ([100, 50, 50], [130, 255, 255], None, None),
-            'yellow': ([20, 50, 50], [35, 255, 255], None, None),
-            'orange': ([10, 50, 50], [20, 255, 255], None, None),
-            'purple': ([130, 50, 50], [160, 255, 255], None, None),
-            'cyan': ([85, 50, 50], [100, 255, 255], None, None),
+            "red": ([0, 50, 50], [10, 255, 255], [160, 50, 50], [180, 255, 255]),
+            "green": ([35, 50, 50], [85, 255, 255], None, None),
+            "blue": ([100, 50, 50], [130, 255, 255], None, None),
+            "yellow": ([20, 50, 50], [35, 255, 255], None, None),
+            "orange": ([10, 50, 50], [20, 255, 255], None, None),
+            "purple": ([130, 50, 50], [160, 255, 255], None, None),
+            "cyan": ([85, 50, 50], [100, 255, 255], None, None),
         }
 
         detected_centers = set()  # Avoid duplicates
@@ -135,9 +134,9 @@ class GridShiftEvaluator(BaseEvaluator):
                     continue
 
                 M = cv2.moments(contour)
-                if M['m00'] > 0:
-                    cx = int(M['m10'] / M['m00'])
-                    cy = int(M['m01'] / M['m00'])
+                if M["m00"] > 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
 
                     # Avoid duplicates
                     center_key = (cx // 20, cy // 20)
@@ -147,12 +146,7 @@ class GridShiftEvaluator(BaseEvaluator):
 
                     x, y, w, h = cv2.boundingRect(contour)
 
-                    blocks.append({
-                        'color': color_name,
-                        'center': (cx, cy),
-                        'bbox': (x, y, w, h),
-                        'area': area
-                    })
+                    blocks.append({"color": color_name, "center": (cx, cy), "bbox": (x, y, w, h), "area": area})
 
         # Also detect gray/neutral blocks (low saturation, medium value)
         if not blocks:
@@ -172,21 +166,15 @@ class GridShiftEvaluator(BaseEvaluator):
                     continue
 
                 M = cv2.moments(contour)
-                if M['m00'] > 0:
-                    cx = int(M['m10'] / M['m00'])
-                    cy = int(M['m01'] / M['m00'])
+                if M["m00"] > 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
 
-                    blocks.append({
-                        'color': 'gray',
-                        'center': (cx, cy),
-                        'bbox': (x, y, w, h),
-                        'area': area
-                    })
+                    blocks.append({"color": "gray", "center": (cx, cy), "bbox": (x, y, w, h), "area": area})
 
         return blocks
 
-    def _evaluate_direction(self, first_blocks: list[dict], gen_blocks: list[dict],
-                            gt_blocks: list[dict]) -> float:
+    def _evaluate_direction(self, first_blocks: list[dict], gen_blocks: list[dict], gt_blocks: list[dict]) -> float:
         """Evaluate if blocks moved in correct direction."""
         if not first_blocks or not gen_blocks or not gt_blocks:
             return 0.0
@@ -196,9 +184,9 @@ class GridShiftEvaluator(BaseEvaluator):
         for fb in first_blocks:
             # Find matching GT block by color
             for gtb in gt_blocks:
-                if fb['color'] == gtb['color']:
-                    dx = float(gtb['center'][0]) - float(fb['center'][0])
-                    dy = float(gtb['center'][1]) - float(fb['center'][1])
+                if fb["color"] == gtb["color"]:
+                    dx = float(gtb["center"][0]) - float(fb["center"][0])
+                    dy = float(gtb["center"][1]) - float(fb["center"][1])
                     gt_movements.append((dx, dy))
                     break
 
@@ -213,9 +201,9 @@ class GridShiftEvaluator(BaseEvaluator):
         gen_movements = []
         for fb in first_blocks:
             for gb in gen_blocks:
-                if fb['color'] == gb['color']:
-                    dx = float(gb['center'][0]) - float(fb['center'][0])
-                    dy = float(gb['center'][1]) - float(fb['center'][1])
+                if fb["color"] == gb["color"]:
+                    dx = float(gb["center"][0]) - float(fb["center"][0])
+                    dy = float(gb["center"][1]) - float(fb["center"][1])
                     gen_movements.append((dx, dy))
                     break
 
@@ -246,8 +234,9 @@ class GridShiftEvaluator(BaseEvaluator):
 
         return direction_match
 
-    def _evaluate_step_accuracy(self, first_blocks: list[dict], gen_blocks: list[dict],
-                                gt_blocks: list[dict], frame: np.ndarray) -> float:
+    def _evaluate_step_accuracy(
+        self, first_blocks: list[dict], gen_blocks: list[dict], gt_blocks: list[dict], frame: np.ndarray
+    ) -> float:
         """Evaluate if blocks moved correct number of steps."""
         if not first_blocks or not gen_blocks or not gt_blocks:
             return 0.0
@@ -261,9 +250,9 @@ class GridShiftEvaluator(BaseEvaluator):
         gt_displacements = []
         for fb in first_blocks:
             for gtb in gt_blocks:
-                if fb['color'] == gtb['color']:
-                    dx = abs(float(gtb['center'][0]) - float(fb['center'][0]))
-                    dy = abs(float(gtb['center'][1]) - float(fb['center'][1]))
+                if fb["color"] == gtb["color"]:
+                    dx = abs(float(gtb["center"][0]) - float(fb["center"][0]))
+                    dy = abs(float(gtb["center"][1]) - float(fb["center"][1]))
                     gt_displacements.append(max(dx, dy))
                     break
 
@@ -271,9 +260,9 @@ class GridShiftEvaluator(BaseEvaluator):
         gen_displacements = []
         for fb in first_blocks:
             for gb in gen_blocks:
-                if fb['color'] == gb['color']:
-                    dx = abs(float(gb['center'][0]) - float(fb['center'][0]))
-                    dy = abs(float(gb['center'][1]) - float(fb['center'][1]))
+                if fb["color"] == gb["color"]:
+                    dx = abs(float(gb["center"][0]) - float(fb["center"][0]))
+                    dy = abs(float(gb["center"][1]) - float(fb["center"][1]))
                     gen_displacements.append(max(dx, dy))
                     break
 
@@ -311,7 +300,7 @@ class GridShiftEvaluator(BaseEvaluator):
         for idx in sample_indices:
             blocks = self._detect_colored_blocks(frames[idx])
             if blocks:
-                positions = [b['center'] for b in blocks]
+                positions = [b["center"] for b in blocks]
                 all_positions.append(positions)
 
         if len(all_positions) < 3:
@@ -320,13 +309,13 @@ class GridShiftEvaluator(BaseEvaluator):
         # Check if all blocks move together (similar displacement at each frame)
         sync_scores = []
         for i in range(1, len(all_positions)):
-            if len(all_positions[i]) != len(all_positions[i-1]):
+            if len(all_positions[i]) != len(all_positions[i - 1]):
                 continue
 
             displacements = []
             for j in range(len(all_positions[i])):
-                dx = all_positions[i][j][0] - all_positions[i-1][j][0]
-                dy = all_positions[i][j][1] - all_positions[i-1][j][1]
+                dx = all_positions[i][j][0] - all_positions[i - 1][j][0]
+                dy = all_positions[i][j][1] - all_positions[i - 1][j][1]
                 displacements.append((dx, dy))
 
             if len(displacements) > 1:
@@ -353,13 +342,13 @@ class GridShiftEvaluator(BaseEvaluator):
         matched_scores = []
 
         for gtb in gt_blocks:
-            best_dist = float('inf')
+            best_dist = float("inf")
             for gb in gen_blocks:
-                if gb['color'] == gtb['color']:
-                    dist = safe_distance(gb['center'], gtb['center'])
+                if gb["color"] == gtb["color"]:
+                    dist = safe_distance(gb["center"], gtb["center"])
                     best_dist = min(best_dist, dist)
 
-            if best_dist < float('inf'):
+            if best_dist < float("inf"):
                 # Score based on distance
                 if best_dist < 10:
                     matched_scores.append(1.0)
@@ -385,8 +374,8 @@ class GridShiftEvaluator(BaseEvaluator):
             return 0.0  # Block count changed - STRICT failure
 
         # Check if all block colors are preserved
-        first_colors = sorted([b['color'] for b in first_blocks])
-        gen_colors = sorted([b['color'] for b in gen_blocks])
+        first_colors = sorted([b["color"] for b in first_blocks])
+        gen_colors = sorted([b["color"] for b in gen_blocks])
 
         if first_colors != gen_colors:
             return 0.0  # Block colors changed - STRICT failure
@@ -394,11 +383,7 @@ class GridShiftEvaluator(BaseEvaluator):
         return 1.0  # All blocks preserved with same colors
 
     def _evaluate_block_pattern_preservation(
-        self,
-        first_frame: np.ndarray,
-        gen_final: np.ndarray,
-        first_blocks: list[dict],
-        gen_blocks: list[dict]
+        self, first_frame: np.ndarray, gen_final: np.ndarray, first_blocks: list[dict], gen_blocks: list[dict]
     ) -> float:
         """Check if block patterns/content remain unchanged during shift."""
         if not first_blocks or not gen_blocks:
@@ -412,7 +397,7 @@ class GridShiftEvaluator(BaseEvaluator):
             # Find matching block by color in gen_blocks
             matching_gb = None
             for gb in gen_blocks:
-                if gb['color'] == fb['color']:
+                if gb["color"] == fb["color"]:
                     matching_gb = gb
                     break
 
@@ -421,12 +406,12 @@ class GridShiftEvaluator(BaseEvaluator):
                 continue
 
             # Extract block regions
-            fx, fy, fw, fh = fb['bbox']
-            gx, gy, gw, gh = matching_gb['bbox']
+            fx, fy, fw, fh = fb["bbox"]
+            gx, gy, gw, gh = matching_gb["bbox"]
 
             # Get block regions
-            first_region = first_frame[fy:fy+fh, fx:fx+fw]
-            gen_region = gen_final[gy:gy+gh, gx:gx+gw]
+            first_region = first_frame[fy : fy + fh, fx : fx + fw]
+            gen_region = gen_final[gy : gy + gh, gx : gx + gw]
 
             # Resize to same size for comparison
             if first_region.size > 0 and gen_region.size > 0:
@@ -463,13 +448,13 @@ class LightSequenceEvaluator(BaseEvaluator):
     4. Visual quality (10%) - Colors and glow effects
     """
 
-    def __init__(self, device: str = 'cuda', task_name: str = ''):
+    def __init__(self, device: str = "cuda", task_name: str = ""):
         super().__init__(device, task_name)
         self.DEFAULT_WEIGHTS = {
-            'rule_understanding': 0.35,
-            'position_identification': 0.30,
-            'state_transition': 0.25,
-            'visual_quality': 0.10
+            "rule_understanding": 0.35,
+            "position_identification": 0.30,
+            "state_transition": 0.25,
+            "visual_quality": 0.10,
         }
 
     def _evaluate_task_specific(
@@ -478,7 +463,7 @@ class LightSequenceEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate light sequence state control - RULE-BASED comparison."""
         if not video_frames or gt_final_frame is None or gt_first_frame is None:
@@ -501,10 +486,10 @@ class LightSequenceEvaluator(BaseEvaluator):
         if len(light_positions) == 0:
             # Fallback to pixel comparison if detection fails
             final_diff = np.abs(gen_final.astype(float) - gt_final.astype(float)).mean()
-            scores['rule_understanding'] = 1.0 if final_diff < 10 else 0.0
-            scores['position_identification'] = 1.0 if final_diff < 10 else 0.0
-            scores['state_transition'] = 1.0 if final_diff < 10 else 0.0
-            scores['visual_quality'] = 1.0 if final_diff < 15 else 0.0
+            scores["rule_understanding"] = 1.0 if final_diff < 10 else 0.0
+            scores["position_identification"] = 1.0 if final_diff < 10 else 0.0
+            scores["state_transition"] = 1.0 if final_diff < 10 else 0.0
+            scores["visual_quality"] = 1.0 if final_diff < 15 else 0.0
             self._last_task_details = scores
             return sum(scores[k] * self.DEFAULT_WEIGHTS[k] for k in self.DEFAULT_WEIGHTS)
 
@@ -524,25 +509,25 @@ class LightSequenceEvaluator(BaseEvaluator):
         # All scores depend on state accuracy
         # If states don't match, the rule was not followed correctly
         if state_accuracy == 1.0:  # Perfect match
-            scores['rule_understanding'] = 1.0
-            scores['position_identification'] = 1.0
-            scores['state_transition'] = 1.0
-            scores['visual_quality'] = 1.0
+            scores["rule_understanding"] = 1.0
+            scores["position_identification"] = 1.0
+            scores["state_transition"] = 1.0
+            scores["visual_quality"] = 1.0
         elif state_accuracy >= 0.8:  # Minor errors
-            scores['rule_understanding'] = 0.5
-            scores['position_identification'] = 0.5
-            scores['state_transition'] = 0.5
-            scores['visual_quality'] = 0.8
+            scores["rule_understanding"] = 0.5
+            scores["position_identification"] = 0.5
+            scores["state_transition"] = 0.5
+            scores["visual_quality"] = 0.8
         else:  # Wrong states
-            scores['rule_understanding'] = 0.0
-            scores['position_identification'] = 0.0
-            scores['state_transition'] = 0.0
-            scores['visual_quality'] = 0.3
+            scores["rule_understanding"] = 0.0
+            scores["position_identification"] = 0.0
+            scores["state_transition"] = 0.0
+            scores["visual_quality"] = 0.3
 
         self._last_task_details = scores
-        self._last_task_details['gt_on_states'] = str(gt_on_states)
-        self._last_task_details['gen_on_states'] = str(gen_on_states)
-        self._last_task_details['state_accuracy'] = state_accuracy
+        self._last_task_details["gt_on_states"] = str(gt_on_states)
+        self._last_task_details["gen_on_states"] = str(gen_on_states)
+        self._last_task_details["state_accuracy"] = state_accuracy
 
         return sum(scores[k] * self.DEFAULT_WEIGHTS[k] for k in self.DEFAULT_WEIGHTS)
 
@@ -559,9 +544,9 @@ class LightSequenceEvaluator(BaseEvaluator):
             area = cv2.contourArea(cnt)
             if area > 100:  # Filter noise
                 M = cv2.moments(cnt)
-                if M['m00'] > 0:
-                    cx = int(M['m10'] / M['m00'])
-                    cy = int(M['m01'] / M['m00'])
+                if M["m00"] > 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
                     positions.append((cx, cy))
 
         # Sort by x position (left to right)
@@ -573,8 +558,8 @@ class LightSequenceEvaluator(BaseEvaluator):
         states = []
         for cx, cy in positions:
             # Sample color at light center
-            y1, y2 = max(0, cy-10), min(frame.shape[0], cy+10)
-            x1, x2 = max(0, cx-10), min(frame.shape[1], cx+10)
+            y1, y2 = max(0, cy - 10), min(frame.shape[0], cy + 10)
+            x1, x2 = max(0, cx - 10), min(frame.shape[1], cx + 10)
             region = frame[y1:y2, x1:x2]
 
             if region.size > 0:
@@ -604,10 +589,10 @@ class LightSequenceEvaluator(BaseEvaluator):
                 continue
 
             M = cv2.moments(cnt)
-            if M['m00'] == 0:
+            if M["m00"] == 0:
                 continue
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
 
             # Get average color in the region
             mask = np.zeros(frame.shape[:2], dtype=np.uint8)
@@ -623,19 +608,16 @@ class LightSequenceEvaluator(BaseEvaluator):
 
             # ON lights have high color difference (gold/orange is saturated)
             # OFF lights have low color difference (gray is desaturated)
-            is_on = (r_val > 200 and g_val > 150 and b_val < 100) or \
-                    (r_val > 220 and g_val > 180) or \
-                    (color_diff > 50 and r_val > 180)  # Saturated warm color
+            is_on = (
+                (r_val > 200 and g_val > 150 and b_val < 100)
+                or (r_val > 220 and g_val > 180)
+                or (color_diff > 50 and r_val > 180)
+            )  # Saturated warm color
 
-            lights.append({
-                'center': (cx, cy),
-                'area': area,
-                'is_on': is_on,
-                'color': mean_color
-            })
+            lights.append({"center": (cx, cy), "area": area, "is_on": is_on, "color": mean_color})
 
         # Sort by x position (left to right)
-        lights.sort(key=lambda light: light['center'][0])
+        lights.sort(key=lambda light: light["center"][0])
         return lights
 
     def _detect_lights_by_color(self, frame: np.ndarray) -> list[dict]:
@@ -666,10 +648,10 @@ class LightSequenceEvaluator(BaseEvaluator):
             area = cv2.contourArea(contour)
             if area > 50:  # Lower threshold
                 M = cv2.moments(contour)
-                if M['m00'] > 0:
-                    cx = int(M['m10'] / M['m00'])
-                    cy = int(M['m01'] / M['m00'])
-                    lights.append({'center': (cx, cy), 'is_on': True, 'area': area})
+                if M["m00"] > 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
+                    lights.append({"center": (cx, cy), "is_on": True, "area": area})
 
         # Find gray lights (OFF)
         contours, _ = cv2.findContours(gray_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -679,18 +661,18 @@ class LightSequenceEvaluator(BaseEvaluator):
                 # Check circularity
                 perimeter = cv2.arcLength(contour, True)
                 if perimeter > 0:
-                    circularity = 4 * np.pi * area / (perimeter ** 2)
+                    circularity = 4 * np.pi * area / (perimeter**2)
                     if circularity > 0.4:  # More lenient circularity
                         M = cv2.moments(contour)
-                        if M['m00'] > 0:
-                            cx = int(M['m10'] / M['m00'])
-                            cy = int(M['m01'] / M['m00'])
+                        if M["m00"] > 0:
+                            cx = int(M["m10"] / M["m00"])
+                            cy = int(M["m01"] / M["m00"])
                             # Check not already added as gold
-                            is_new = all(abs(light['center'][0] - cx) > 15 for light in lights)
+                            is_new = all(abs(light["center"][0] - cx) > 15 for light in lights)
                             if is_new:
-                                lights.append({'center': (cx, cy), 'is_on': False, 'area': area})
+                                lights.append({"center": (cx, cy), "is_on": False, "area": area})
 
-        lights.sort(key=lambda light: light['center'][0])
+        lights.sort(key=lambda light: light["center"][0])
         return lights
 
     def _evaluate_rule_understanding(self, gen_lights: list[dict], gt_lights: list[dict]) -> float:
@@ -699,8 +681,8 @@ class LightSequenceEvaluator(BaseEvaluator):
             return 0.5
 
         # Get on/off pattern
-        gt_pattern = [light['is_on'] for light in gt_lights]
-        gen_pattern = [light['is_on'] for light in gen_lights]
+        gt_pattern = [light["is_on"] for light in gt_lights]
+        gen_pattern = [light["is_on"] for light in gen_lights]
 
         if len(gen_pattern) != len(gt_pattern):
             # Different number of lights
@@ -718,9 +700,9 @@ class LightSequenceEvaluator(BaseEvaluator):
         # Compare positions
         position_scores = []
         for gt_l in gt_lights:
-            best_dist = float('inf')
+            best_dist = float("inf")
             for gen_l in gen_lights:
-                dist = safe_distance(gt_l['center'], gen_l['center'])
+                dist = safe_distance(gt_l["center"], gen_l["center"])
                 best_dist = min(best_dist, dist)
 
             if best_dist < 20:
@@ -744,35 +726,36 @@ class LightSequenceEvaluator(BaseEvaluator):
         for gt_l in gt_lights:
             # Find closest generated light
             best_match = None
-            best_dist = float('inf')
+            best_dist = float("inf")
 
             for gen_l in gen_lights:
-                dist = safe_distance(gt_l['center'], gen_l['center'])
+                dist = safe_distance(gt_l["center"], gen_l["center"])
                 if dist < best_dist:
                     best_dist = dist
                     best_match = gen_l
 
-            if best_match and best_dist < 50 and best_match['is_on'] == gt_l['is_on']:
+            if best_match and best_dist < 50 and best_match["is_on"] == gt_l["is_on"]:
                 correct_states += 1
 
         return correct_states / total if total > 0 else 0.0
 
-    def _evaluate_light_visual_quality(self, gen_frame: np.ndarray, gt_frame: np.ndarray,
-                                        gen_lights: list[dict], gt_lights: list[dict]) -> float:
+    def _evaluate_light_visual_quality(
+        self, gen_frame: np.ndarray, gt_frame: np.ndarray, gen_lights: list[dict], gt_lights: list[dict]
+    ) -> float:
         """Evaluate visual quality of lights (renamed to avoid conflict with base class)."""
         if not gen_lights:
             return 0.0
 
         # Check if ON lights have gold/yellow color
-        on_lights = [light for light in gen_lights if light.get('is_on', False)]
-        [light for light in gen_lights if not light.get('is_on', False)]
+        on_lights = [light for light in gen_lights if light.get("is_on", False)]
+        [light for light in gen_lights if not light.get("is_on", False)]
 
         quality_scores = []
 
         # Check ON lights are gold/yellow
         for light in on_lights:
-            if 'color' in light:
-                r, g, b = light['color'][2], light['color'][1], light['color'][0]
+            if "color" in light:
+                r, g, b = light["color"][2], light["color"][1], light["color"][0]
                 # Gold should be high R, high G, low B
                 if r > 180 and g > 150 and b < 150:
                     quality_scores.append(1.0)
@@ -794,12 +777,12 @@ class MajorityColorEvaluator(BaseEvaluator):
     3. Final frame should have only ONE color (the majority color)
     """
 
-    def __init__(self, device: str = 'cuda', task_name: str = ''):
+    def __init__(self, device: str = "cuda", task_name: str = ""):
         super().__init__(device, task_name)
         self.DEFAULT_WEIGHTS = {
-            'shapes_preserved': 0.30,      # Same number of shapes
-            'single_color': 0.55,          # Only one color in final - MOST IMPORTANT
-            'correct_majority': 0.15       # Correct majority color
+            "shapes_preserved": 0.30,  # Same number of shapes
+            "single_color": 0.55,  # Only one color in final - MOST IMPORTANT
+            "correct_majority": 0.15,  # Correct majority color
         }
 
     def _count_total_shapes(self, frame: np.ndarray) -> int:
@@ -816,7 +799,7 @@ class MajorityColorEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate majority color identification.
 
@@ -846,24 +829,24 @@ class MajorityColorEvaluator(BaseEvaluator):
             count_change = abs(final_shape_count - first_shape_count) / first_shape_count
             if count_change > 0.5:
                 # Shapes changed significantly
-                scores['shapes_preserved'] = 0.0
+                scores["shapes_preserved"] = 0.0
             else:
-                scores['shapes_preserved'] = max(0, 1.0 - count_change)
+                scores["shapes_preserved"] = max(0, 1.0 - count_change)
         else:
-            scores['shapes_preserved'] = 0.0
+            scores["shapes_preserved"] = 0.0
 
         # 2. Final frame should have only ONE color
         gen_final_colors = self._count_shapes_by_color(gen_final)
 
         if len(gen_final_colors) == 0:
-            scores['single_color'] = 0.0
+            scores["single_color"] = 0.0
         elif len(gen_final_colors) == 1:
-            scores['single_color'] = 1.0
+            scores["single_color"] = 1.0
         else:
             # Multiple colors - penalize
             total_shapes = sum(gen_final_colors.values())
             max_color_count = max(gen_final_colors.values())
-            scores['single_color'] = max_color_count / total_shapes * 0.5  # Max 0.5 if not single
+            scores["single_color"] = max_color_count / total_shapes * 0.5  # Max 0.5 if not single
 
         # 3. Check if correct majority color
         initial_colors = self._count_shapes_by_color(first_frame)
@@ -873,11 +856,11 @@ class MajorityColorEvaluator(BaseEvaluator):
             majority_color = max(initial_colors.items(), key=lambda x: x[1])[0]
 
             if majority_color in gen_final_colors:
-                scores['correct_majority'] = 1.0
+                scores["correct_majority"] = 1.0
             else:
-                scores['correct_majority'] = 0.0
+                scores["correct_majority"] = 0.0
         else:
-            scores['correct_majority'] = 0.0
+            scores["correct_majority"] = 0.0
 
         self._last_task_details = scores
         return sum(scores[k] * self.DEFAULT_WEIGHTS[k] for k in self.DEFAULT_WEIGHTS)
@@ -888,14 +871,14 @@ class MajorityColorEvaluator(BaseEvaluator):
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
         color_ranges = {
-            'red': ([0, 100, 100], [10, 255, 255], [160, 100, 100], [180, 255, 255]),
-            'green': ([35, 100, 100], [85, 255, 255], None, None),
-            'blue': ([100, 100, 100], [130, 255, 255], None, None),
-            'yellow': ([20, 100, 100], [35, 255, 255], None, None),
-            'orange': ([10, 100, 100], [20, 255, 255], None, None),
-            'purple': ([130, 100, 100], [160, 255, 255], None, None),
-            'cyan': ([85, 100, 100], [100, 255, 255], None, None),
-            'pink': ([140, 50, 100], [170, 255, 255], None, None),
+            "red": ([0, 100, 100], [10, 255, 255], [160, 100, 100], [180, 255, 255]),
+            "green": ([35, 100, 100], [85, 255, 255], None, None),
+            "blue": ([100, 100, 100], [130, 255, 255], None, None),
+            "yellow": ([20, 100, 100], [35, 255, 255], None, None),
+            "orange": ([10, 100, 100], [20, 255, 255], None, None),
+            "purple": ([130, 100, 100], [160, 255, 255], None, None),
+            "cyan": ([85, 100, 100], [100, 255, 255], None, None),
+            "pink": ([140, 50, 100], [170, 255, 255], None, None),
         }
 
         for color_name, ranges in color_ranges.items():
@@ -917,21 +900,21 @@ class MajorityColorEvaluator(BaseEvaluator):
 
         return color_counts
 
-    def _evaluate_majority_identification(self, initial_colors: dict[str, int],
-                                          gen_colors: dict[str, int],
-                                          gt_colors: dict[str, int]) -> float:
+    def _evaluate_majority_identification(
+        self, initial_colors: dict[str, int], gen_colors: dict[str, int], gt_colors: dict[str, int]
+    ) -> float:
         """Evaluate if correct majority color was identified."""
         if not gt_colors:
             return 0.0  # STRICT: No GT to compare
 
         # Find majority color in GT (should be only one color remaining)
-        gt_majority = max(gt_colors.items(), key=lambda x: x[1], default=('none', 0))
+        gt_majority = max(gt_colors.items(), key=lambda x: x[1], default=("none", 0))
 
         # Find dominant color in generated
         if not gen_colors:
             return 0.0
 
-        gen_dominant = max(gen_colors.items(), key=lambda x: x[1], default=('none', 0))
+        gen_dominant = max(gen_colors.items(), key=lambda x: x[1], default=("none", 0))
 
         # Check if same color
         if gt_majority[0] == gen_dominant[0]:
@@ -943,8 +926,7 @@ class MajorityColorEvaluator(BaseEvaluator):
 
         return 0.0
 
-    def _evaluate_non_majority_removal(self, gen_colors: dict[str, int],
-                                        gt_colors: dict[str, int]) -> float:
+    def _evaluate_non_majority_removal(self, gen_colors: dict[str, int], gt_colors: dict[str, int]) -> float:
         """Evaluate if non-majority colors were removed."""
         if not gt_colors:
             return 0.5
@@ -963,13 +945,12 @@ class MajorityColorEvaluator(BaseEvaluator):
 
         return 0.5
 
-    def _evaluate_majority_preservation(self, gen_colors: dict[str, int],
-                                         gt_colors: dict[str, int]) -> float:
+    def _evaluate_majority_preservation(self, gen_colors: dict[str, int], gt_colors: dict[str, int]) -> float:
         """Evaluate if all majority color shapes were preserved."""
         if not gt_colors:
             return 0.5
 
-        gt_majority = max(gt_colors.items(), key=lambda x: x[1], default=('none', 0))
+        gt_majority = max(gt_colors.items(), key=lambda x: x[1], default=("none", 0))
 
         if gt_majority[0] in gen_colors:
             gen_count = gen_colors[gt_majority[0]]
@@ -1017,13 +998,13 @@ class RotationPuzzleEvaluator(BaseEvaluator):
     4. Alignment precision (10%) - Pipe openings aligned
     """
 
-    def __init__(self, device: str = 'cuda', task_name: str = ''):
+    def __init__(self, device: str = "cuda", task_name: str = ""):
         super().__init__(device, task_name)
         self.DEFAULT_WEIGHTS = {
-            'path_connection': 0.40,
-            'rotation_accuracy': 0.30,
-            'position_preservation': 0.20,
-            'alignment_precision': 0.10
+            "path_connection": 0.40,
+            "rotation_accuracy": 0.30,
+            "position_preservation": 0.20,
+            "alignment_precision": 0.10,
         }
 
     def _evaluate_task_specific(
@@ -1032,7 +1013,7 @@ class RotationPuzzleEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate rotation puzzle solution."""
 
@@ -1051,19 +1032,19 @@ class RotationPuzzleEvaluator(BaseEvaluator):
 
         # 1. Path connection (40%): Check if pipes form connected path
         connection_score = self._evaluate_path_connection(gen_final, gt_final)
-        scores['path_connection'] = connection_score
+        scores["path_connection"] = connection_score
 
         # 2. Rotation accuracy (30%): Check pipe orientations match GT
         rotation_score = self._evaluate_rotation_accuracy(gen_final, gt_final)
-        scores['rotation_accuracy'] = rotation_score
+        scores["rotation_accuracy"] = rotation_score
 
         # 3. Position preservation (20%): Check tiles are in correct positions
         position_score = self._evaluate_position_preservation(first_frame, gen_final)
-        scores['position_preservation'] = position_score
+        scores["position_preservation"] = position_score
 
         # 4. Alignment precision (10%): Check pipe openings align
         alignment_score = self._evaluate_alignment_precision(gen_final, gt_final)
-        scores['alignment_precision'] = alignment_score
+        scores["alignment_precision"] = alignment_score
 
         self._last_task_details = scores
         return sum(scores[k] * self.DEFAULT_WEIGHTS[k] for k in self.DEFAULT_WEIGHTS)
@@ -1138,11 +1119,11 @@ class RotationPuzzleEvaluator(BaseEvaluator):
         center_x = w // 2
 
         # Sample around center for grid line detection
-        gen_center_h = gen_gray[center_y-5:center_y+5, :]
-        gen_center_v = gen_gray[:, center_x-5:center_x+5]
+        gen_center_h = gen_gray[center_y - 5 : center_y + 5, :]
+        gen_center_v = gen_gray[:, center_x - 5 : center_x + 5]
 
-        first_center_h = first_gray[center_y-5:center_y+5, :]
-        first_center_v = first_gray[:, center_x-5:center_x+5]
+        first_center_h = first_gray[center_y - 5 : center_y + 5, :]
+        first_center_v = first_gray[:, center_x - 5 : center_x + 5]
 
         # Compare patterns
         h_diff = np.mean(np.abs(gen_center_h.astype(float) - first_center_h.astype(float)))
@@ -1166,12 +1147,12 @@ class RotationPuzzleEvaluator(BaseEvaluator):
         h, w = gen_frame.shape[:2]
 
         # Horizontal boundary (middle row)
-        gen_h_boundary = gen_blue[h//2-10:h//2+10, :]
-        gt_h_boundary = gt_blue[h//2-10:h//2+10, :]
+        gen_h_boundary = gen_blue[h // 2 - 10 : h // 2 + 10, :]
+        gt_h_boundary = gt_blue[h // 2 - 10 : h // 2 + 10, :]
 
         # Vertical boundary (middle column)
-        gen_v_boundary = gen_blue[:, w//2-10:w//2+10]
-        gt_v_boundary = gt_blue[:, w//2-10:w//2+10]
+        gen_v_boundary = gen_blue[:, w // 2 - 10 : w // 2 + 10]
+        gt_v_boundary = gt_blue[:, w // 2 - 10 : w // 2 + 10]
 
         h_match = np.sum((gen_h_boundary > 0) & (gt_h_boundary > 0)) / max(1, np.sum(gt_h_boundary > 0))
         v_match = np.sum((gen_v_boundary > 0) & (gt_v_boundary > 0)) / max(1, np.sum(gt_v_boundary > 0))
@@ -1193,13 +1174,13 @@ class SequenceCompletionEvaluator(BaseEvaluator):
     4. Sequence integrity (10%) - Complete sequence valid
     """
 
-    def __init__(self, device: str = 'cuda', task_name: str = ''):
+    def __init__(self, device: str = "cuda", task_name: str = ""):
         super().__init__(device, task_name)
         self.DEFAULT_WEIGHTS = {
-            'sequence_type_identification': 0.35,
-            'element_calculation': 0.35,
-            'element_rendering': 0.20,
-            'sequence_integrity': 0.10
+            "sequence_type_identification": 0.35,
+            "element_calculation": 0.35,
+            "element_rendering": 0.20,
+            "sequence_integrity": 0.10,
         }
 
     def _evaluate_task_specific(
@@ -1208,7 +1189,7 @@ class SequenceCompletionEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate sequence completion accuracy - RULE-BASED."""
 
@@ -1251,40 +1232,40 @@ class SequenceCompletionEvaluator(BaseEvaluator):
 
         # 1. Sequence type identification (35%): Did they add an element?
         if not answer_added:
-            scores['sequence_type_identification'] = 0.0  # No answer added
+            scores["sequence_type_identification"] = 0.0  # No answer added
         elif gt_answer_color is not None and gen_answer_color is not None:
             # Check if answer color matches
-            color_diff = np.sqrt(sum((a - b)**2 for a, b in zip(gt_answer_color, gen_answer_color, strict=False)))
+            color_diff = np.sqrt(sum((a - b) ** 2 for a, b in zip(gt_answer_color, gen_answer_color, strict=False)))
             if color_diff < 50:
-                scores['sequence_type_identification'] = 1.0
+                scores["sequence_type_identification"] = 1.0
             elif color_diff < 100:
-                scores['sequence_type_identification'] = 0.3
+                scores["sequence_type_identification"] = 0.3
             else:
-                scores['sequence_type_identification'] = 0.0
+                scores["sequence_type_identification"] = 0.0
         else:
-            scores['sequence_type_identification'] = 0.0
+            scores["sequence_type_identification"] = 0.0
 
         # 2. Element calculation (35%): Is the answer color correct?
         if not answer_added:
-            scores['element_calculation'] = 0.0
+            scores["element_calculation"] = 0.0
         elif gt_answer_color is not None and gen_answer_color is not None:
-            color_diff = np.sqrt(sum((a - b)**2 for a, b in zip(gt_answer_color, gen_answer_color, strict=False)))
+            color_diff = np.sqrt(sum((a - b) ** 2 for a, b in zip(gt_answer_color, gen_answer_color, strict=False)))
             if color_diff < 50:
-                scores['element_calculation'] = 1.0
+                scores["element_calculation"] = 1.0
             elif color_diff < 100:
-                scores['element_calculation'] = 0.3
+                scores["element_calculation"] = 0.3
             else:
-                scores['element_calculation'] = 0.0
+                scores["element_calculation"] = 0.0
         else:
-            scores['element_calculation'] = 0.0
+            scores["element_calculation"] = 0.0
 
         # 3. Element rendering (20%): Is the element count correct?
         if len(gen_final_elements) == len(gt_final_elements):
-            scores['element_rendering'] = 1.0
+            scores["element_rendering"] = 1.0
         elif abs(len(gen_final_elements) - len(gt_final_elements)) == 1:
-            scores['element_rendering'] = 0.5
+            scores["element_rendering"] = 0.5
         else:
-            scores['element_rendering'] = 0.0
+            scores["element_rendering"] = 0.0
 
         # 4. Sequence integrity (10%): Are original elements preserved?
         if len(gt_first_elements) > 0:
@@ -1293,21 +1274,21 @@ class SequenceCompletionEvaluator(BaseEvaluator):
             for i, (_, _, gt_color) in enumerate(gt_first_elements[:-1]):  # Exclude ? position
                 if i < len(gen_final_elements):
                     gen_color = gen_final_elements[i][2]
-                    color_diff = np.sqrt(sum((a - b)**2 for a, b in zip(gt_color, gen_color, strict=False)))
+                    color_diff = np.sqrt(sum((a - b) ** 2 for a, b in zip(gt_color, gen_color, strict=False)))
                     if color_diff < 80:
                         preserved += 1
 
             if len(gt_first_elements) > 1:
-                scores['sequence_integrity'] = preserved / (len(gt_first_elements) - 1)
+                scores["sequence_integrity"] = preserved / (len(gt_first_elements) - 1)
             else:
-                scores['sequence_integrity'] = 1.0
+                scores["sequence_integrity"] = 1.0
         else:
-            scores['sequence_integrity'] = 0.0  # STRICT: No GT elements
+            scores["sequence_integrity"] = 0.0  # STRICT: No GT elements
 
         self._last_task_details = scores
-        self._last_task_details['gt_first_count'] = len(gt_first_elements)
-        self._last_task_details['gt_final_count'] = len(gt_final_elements)
-        self._last_task_details['gen_final_count'] = len(gen_final_elements)
+        self._last_task_details["gt_first_count"] = len(gt_first_elements)
+        self._last_task_details["gt_final_count"] = len(gt_final_elements)
+        self._last_task_details["gen_final_count"] = len(gen_final_elements)
 
         return sum(scores[k] * self.DEFAULT_WEIGHTS[k] for k in self.DEFAULT_WEIGHTS)
 
@@ -1325,9 +1306,9 @@ class SequenceCompletionEvaluator(BaseEvaluator):
             area = cv2.contourArea(cnt)
             if area > 500:  # Filter noise
                 M = cv2.moments(cnt)
-                if M['m00'] > 0:
-                    cx = int(M['m10'] / M['m00'])
-                    cy = int(M['m01'] / M['m00'])
+                if M["m00"] > 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
 
                     # Get dominant color
                     mask_cnt = np.zeros(frame.shape[:2], dtype=np.uint8)
@@ -1350,9 +1331,9 @@ class SequenceCompletionEvaluator(BaseEvaluator):
                 area = cv2.contourArea(cnt)
                 if area > 100:  # Filter noise
                     M = cv2.moments(cnt)
-                    if M['m00'] > 0:
-                        cx = int(M['m10'] / M['m00'])
-                        cy = int(M['m01'] / M['m00'])
+                    if M["m00"] > 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
                         x_positions.append(cx)
 
             if x_positions:
@@ -1403,7 +1384,7 @@ class SequenceCompletionEvaluator(BaseEvaluator):
             return 0.5
 
         # Compare colors
-        color_diff = np.sqrt(np.sum((np.array(gen_colors) - np.array(gt_colors))**2))
+        color_diff = np.sqrt(np.sum((np.array(gen_colors) - np.array(gt_colors)) ** 2))
 
         if color_diff < 30:
             return 1.0
@@ -1435,8 +1416,8 @@ class SequenceCompletionEvaluator(BaseEvaluator):
         h, w = gen_frame.shape[:2]
 
         # Compare answer region sizes
-        gen_answer = gen_frame[:, w*3//4:]
-        gt_answer = gt_frame[:, w*3//4:]
+        gen_answer = gen_frame[:, w * 3 // 4 :]
+        gt_answer = gt_frame[:, w * 3 // 4 :]
 
         # Detect shapes in answer regions
         gen_shapes = self._detect_shapes(gen_answer)
@@ -1449,8 +1430,8 @@ class SequenceCompletionEvaluator(BaseEvaluator):
             return 0.0
 
         # Compare shape sizes
-        gen_areas = [s['area'] for s in gen_shapes]
-        gt_areas = [s['area'] for s in gt_shapes]
+        gen_areas = [s["area"] for s in gen_shapes]
+        gt_areas = [s["area"] for s in gt_shapes]
 
         if gen_areas and gt_areas:
             gen_avg = np.mean(gen_areas)
@@ -1478,7 +1459,7 @@ class SequenceCompletionEvaluator(BaseEvaluator):
         for contour in contours:
             area = cv2.contourArea(contour)
             if area > 100:
-                shapes.append({'contour': contour, 'area': area})
+                shapes.append({"contour": contour, "area": area})
 
         return shapes
 
@@ -1516,13 +1497,13 @@ class SlidingPuzzleEvaluator(BaseEvaluator):
     4. Grid structure (10%) - 3x3 preserved
     """
 
-    def __init__(self, device: str = 'cuda', task_name: str = ''):
+    def __init__(self, device: str = "cuda", task_name: str = ""):
         super().__init__(device, task_name)
         self.DEFAULT_WEIGHTS = {
-            'target_state_accuracy': 0.40,
-            'move_count_constraint': 0.30,
-            'move_legality': 0.20,
-            'grid_structure': 0.10
+            "target_state_accuracy": 0.40,
+            "move_count_constraint": 0.30,
+            "move_legality": 0.20,
+            "grid_structure": 0.10,
         }
 
     def _evaluate_task_specific(
@@ -1531,7 +1512,7 @@ class SlidingPuzzleEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate sliding puzzle solution."""
 
@@ -1551,22 +1532,22 @@ class SlidingPuzzleEvaluator(BaseEvaluator):
         # 1. Target state accuracy (40%): Check final arrangement
         # Compare with GT final to see if arrangement matches
         target_score = self._evaluate_target_state_rule_based(gen_final, gt_final)
-        scores['target_state_accuracy'] = target_score
+        scores["target_state_accuracy"] = target_score
 
         # CRITICAL: If target state is wrong, other scores should be penalized
         target_correct = target_score > 0.5
 
         # 2. Move count constraint (30%): Count tile movements
         move_score = self._evaluate_move_count(video_frames) if target_correct else 0.0
-        scores['move_count_constraint'] = move_score
+        scores["move_count_constraint"] = move_score
 
         # 3. Move legality (20%): Check moves are legal
         legality_score = self._evaluate_move_legality(video_frames) if target_correct else 0.0
-        scores['move_legality'] = legality_score
+        scores["move_legality"] = legality_score
 
         # 4. Grid structure (10%): Check 3x3 grid preserved
         structure_score = self._evaluate_grid_structure(gen_final, gt_final)
-        scores['grid_structure'] = structure_score
+        scores["grid_structure"] = structure_score
 
         self._last_task_details = scores
         return sum(scores[k] * self.DEFAULT_WEIGHTS[k] for k in self.DEFAULT_WEIGHTS)
@@ -1602,14 +1583,10 @@ class SlidingPuzzleEvaluator(BaseEvaluator):
             if area > 500:  # Filter noise
                 x, y, w, h = cv2.boundingRect(contour)
                 M = cv2.moments(contour)
-                if M['m00'] > 0:
-                    cx = int(M['m10'] / M['m00'])
-                    cy = int(M['m01'] / M['m00'])
-                    tiles.append({
-                        'center': (cx, cy),
-                        'bbox': (x, y, w, h),
-                        'area': area
-                    })
+                if M["m00"] > 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
+                    tiles.append({"center": (cx, cy), "bbox": (x, y, w, h), "area": area})
 
         return tiles
 
@@ -1650,7 +1627,7 @@ class SlidingPuzzleEvaluator(BaseEvaluator):
                 for ct in curr_tiles:
                     moved = True
                     for pt in prev_tiles:
-                        dist = safe_distance(ct['center'], pt['center'])
+                        dist = safe_distance(ct["center"], pt["center"])
                         if dist < 20:
                             moved = False
                             break
@@ -1688,7 +1665,7 @@ class SlidingPuzzleEvaluator(BaseEvaluator):
                 # Find moved tile
                 for ct in curr_tiles:
                     for pt in prev_tiles:
-                        dist = safe_distance(ct['center'], pt['center'])
+                        dist = safe_distance(ct["center"], pt["center"])
 
                         if dist > 20:  # Tile moved
                             total_moves += 1
@@ -1744,13 +1721,13 @@ class TrafficLightEvaluator(BaseEvaluator):
     4. Opposite rule (10%) - Lights always opposite
     """
 
-    def __init__(self, device: str = 'cuda', task_name: str = ''):
+    def __init__(self, device: str = "cuda", task_name: str = ""):
         super().__init__(device, task_name)
         self.DEFAULT_WEIGHTS = {
-            'final_state_accuracy': 0.35,
-            'countdown_correctness': 0.30,
-            'switch_timing': 0.25,
-            'opposite_rule': 0.10
+            "final_state_accuracy": 0.35,
+            "countdown_correctness": 0.30,
+            "switch_timing": 0.25,
+            "opposite_rule": 0.10,
         }
 
     def _evaluate_task_specific(
@@ -1759,7 +1736,7 @@ class TrafficLightEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate traffic light state reasoning."""
 
@@ -1777,19 +1754,19 @@ class TrafficLightEvaluator(BaseEvaluator):
 
         # 1. Final state accuracy (35%): Check light colors
         final_score = self._evaluate_final_state(gen_final, gt_final)
-        scores['final_state_accuracy'] = final_score
+        scores["final_state_accuracy"] = final_score
 
         # 2. Countdown correctness (30%): Track countdown through video
         countdown_score = self._evaluate_countdown(video_frames)
-        scores['countdown_correctness'] = countdown_score
+        scores["countdown_correctness"] = countdown_score
 
         # 3. Switch timing (25%): Check if switch happens at right time
         timing_score = self._evaluate_switch_timing(video_frames)
-        scores['switch_timing'] = timing_score
+        scores["switch_timing"] = timing_score
 
         # 4. Opposite rule (10%): Check if lights are opposite
         opposite_score = self._evaluate_opposite_rule(gen_final)
-        scores['opposite_rule'] = opposite_score
+        scores["opposite_rule"] = opposite_score
 
         self._last_task_details = scores
         return sum(scores[k] * self.DEFAULT_WEIGHTS[k] for k in self.DEFAULT_WEIGHTS)
@@ -1800,8 +1777,8 @@ class TrafficLightEvaluator(BaseEvaluator):
         h, w = frame.shape[:2]
 
         # Split into left and right halves
-        left_half = hsv[:, :w//2]
-        right_half = hsv[:, w//2:]
+        left_half = hsv[:, : w // 2]
+        right_half = hsv[:, w // 2 :]
 
         def detect_color(region):
             # Red detection
@@ -1810,8 +1787,7 @@ class TrafficLightEvaluator(BaseEvaluator):
             lower_red2 = np.array([160, 100, 100])
             upper_red2 = np.array([180, 255, 255])
 
-            red_mask = cv2.inRange(region, lower_red1, upper_red1) | \
-                       cv2.inRange(region, lower_red2, upper_red2)
+            red_mask = cv2.inRange(region, lower_red1, upper_red1) | cv2.inRange(region, lower_red2, upper_red2)
 
             # Green detection
             lower_green = np.array([35, 100, 100])
@@ -1822,16 +1798,13 @@ class TrafficLightEvaluator(BaseEvaluator):
             green_pixels = np.sum(green_mask > 0)
 
             if red_pixels > green_pixels and red_pixels > 100:
-                return 'red'
+                return "red"
             elif green_pixels > red_pixels and green_pixels > 100:
-                return 'green'
+                return "green"
             else:
-                return 'unknown'
+                return "unknown"
 
-        return {
-            'left': detect_color(left_half),
-            'right': detect_color(right_half)
-        }
+        return {"left": detect_color(left_half), "right": detect_color(right_half)}
 
     def _evaluate_final_state(self, gen_frame: np.ndarray, gt_frame: np.ndarray) -> float:
         """Evaluate if final light colors are correct."""
@@ -1841,8 +1814,8 @@ class TrafficLightEvaluator(BaseEvaluator):
         matches = 0
         total = 0
 
-        for side in ['left', 'right']:
-            if gt_lights[side] != 'unknown':
+        for side in ["left", "right"]:
+            if gt_lights[side] != "unknown":
                 total += 1
                 if gen_lights[side] == gt_lights[side]:
                     matches += 1
@@ -1857,14 +1830,14 @@ class TrafficLightEvaluator(BaseEvaluator):
 
         # Track light colors through video
         colors_over_time = []
-        for frame in frames[::max(1, len(frames)//10)]:
+        for frame in frames[:: max(1, len(frames) // 10)]:
             lights = self._detect_traffic_lights(frame)
             colors_over_time.append(lights)
 
         # Check if there's a state change (indicating countdown reached 0)
         changes = 0
         for i in range(1, len(colors_over_time)):
-            if colors_over_time[i]['left'] != colors_over_time[i-1]['left']:
+            if colors_over_time[i]["left"] != colors_over_time[i - 1]["left"]:
                 changes += 1
 
         # Should have 0 or 1 change typically
@@ -1885,14 +1858,13 @@ class TrafficLightEvaluator(BaseEvaluator):
         last_lights = self._detect_traffic_lights(frames[-1])
 
         # Check if there was a change
-        changed = first_lights['left'] != last_lights['left'] or \
-                  first_lights['right'] != last_lights['right']
+        changed = first_lights["left"] != last_lights["left"] or first_lights["right"] != last_lights["right"]
 
         if changed:
             # Find when change happened
             for i, frame in enumerate(frames):
                 lights = self._detect_traffic_lights(frame)
-                if lights['left'] != first_lights['left']:
+                if lights["left"] != first_lights["left"]:
                     # Change happened at frame i
                     # Should be towards the end (after countdown)
                     progress = i / len(frames)
@@ -1909,13 +1881,13 @@ class TrafficLightEvaluator(BaseEvaluator):
         """Evaluate if lights are opposite (one red, one green)."""
         lights = self._detect_traffic_lights(frame)
 
-        left = lights['left']
-        right = lights['right']
+        left = lights["left"]
+        right = lights["right"]
 
         # Should be opposite
-        if (left == 'red' and right == 'green') or (left == 'green' and right == 'red'):
+        if (left == "red" and right == "green") or (left == "green" and right == "red"):
             return 1.0
-        elif left == 'unknown' or right == 'unknown':
+        elif left == "unknown" or right == "unknown":
             return 0.0  # STRICT: Cannot detect lights
         else:
             return 0.0  # Same color - violation
@@ -1935,13 +1907,13 @@ class ClockTimeEvaluator(BaseEvaluator):
     4. Clock fidelity (5%) - Face preserved
     """
 
-    def __init__(self, device: str = 'cuda', task_name: str = ''):
+    def __init__(self, device: str = "cuda", task_name: str = ""):
         super().__init__(device, task_name)
         self.DEFAULT_WEIGHTS = {
-            'time_calculation_accuracy': 0.50,
-            'hand_position_accuracy': 0.30,
-            'rotation_direction': 0.15,
-            'clock_fidelity': 0.05
+            "time_calculation_accuracy": 0.50,
+            "hand_position_accuracy": 0.30,
+            "rotation_direction": 0.15,
+            "clock_fidelity": 0.05,
         }
 
     def _evaluate_task_specific(
@@ -1950,7 +1922,7 @@ class ClockTimeEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate clock time reasoning."""
 
@@ -1969,19 +1941,19 @@ class ClockTimeEvaluator(BaseEvaluator):
 
         # 1. Time calculation (50%): Check if hour hand angle matches GT
         time_score = self._evaluate_time_calculation(gen_final, gt_final)
-        scores['time_calculation_accuracy'] = time_score
+        scores["time_calculation_accuracy"] = time_score
 
         # 2. Hand position (30%): Check angle accuracy
         position_score = self._evaluate_hand_position(gen_final, gt_final)
-        scores['hand_position_accuracy'] = position_score
+        scores["hand_position_accuracy"] = position_score
 
         # 3. Rotation direction (15%): Check clockwise rotation
         direction_score = self._evaluate_rotation_direction(video_frames)
-        scores['rotation_direction'] = direction_score
+        scores["rotation_direction"] = direction_score
 
         # 4. Clock fidelity (5%): Check clock face preserved
         fidelity_score = self._evaluate_clock_fidelity(gen_final, gt_final)
-        scores['clock_fidelity'] = fidelity_score
+        scores["clock_fidelity"] = fidelity_score
 
         self._last_task_details = scores
         return sum(scores[k] * self.DEFAULT_WEIGHTS[k] for k in self.DEFAULT_WEIGHTS)
@@ -1996,21 +1968,21 @@ class ClockTimeEvaluator(BaseEvaluator):
 
         # Detect lines
         edges = cv2.Canny(gray, 50, 150)
-        lines = cv2.HoughLinesP(edges, 1, np.pi/180, 30, minLineLength=20, maxLineGap=10)
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 30, minLineLength=20, maxLineGap=10)
 
         if lines is None:
             return None
 
         # Find line from center (hour hand)
         best_line = None
-        best_dist = float('inf')
+        best_dist = float("inf")
 
         for line in lines:
             x1, y1, x2, y2 = line[0]
 
             # Check if line passes near center
-            dist1 = np.sqrt((x1 - center[0])**2 + (y1 - center[1])**2)
-            dist2 = np.sqrt((x2 - center[0])**2 + (y2 - center[1])**2)
+            dist1 = np.sqrt((x1 - center[0]) ** 2 + (y1 - center[1]) ** 2)
+            dist2 = np.sqrt((x2 - center[0]) ** 2 + (y2 - center[1]) ** 2)
 
             min_dist = min(dist1, dist2)
             if min_dist < best_dist and min_dist < 30:
@@ -2023,8 +1995,9 @@ class ClockTimeEvaluator(BaseEvaluator):
         x1, y1, x2, y2 = best_line
 
         # Calculate angle from center
-        if np.sqrt((x1 - center[0])**2 + (y1 - center[1])**2) < \
-           np.sqrt((x2 - center[0])**2 + (y2 - center[1])**2):
+        if np.sqrt((x1 - center[0]) ** 2 + (y1 - center[1]) ** 2) < np.sqrt(
+            (x2 - center[0]) ** 2 + (y2 - center[1]) ** 2
+        ):
             # x1, y1 is closer to center
             dx, dy = x2 - center[0], y2 - center[1]
         else:
@@ -2089,7 +2062,7 @@ class ClockTimeEvaluator(BaseEvaluator):
             return 0.5
 
         angles = []
-        for frame in frames[::max(1, len(frames)//5)]:
+        for frame in frames[:: max(1, len(frames) // 5)]:
             angle = self._detect_hand_angle(frame)
             if angle is not None:
                 angles.append(angle)
@@ -2100,7 +2073,7 @@ class ClockTimeEvaluator(BaseEvaluator):
         # Check if angles increase (clockwise)
         increasing = 0
         for i in range(1, len(angles)):
-            diff = angles[i] - angles[i-1]
+            diff = angles[i] - angles[i - 1]
             # Handle wrap-around
             if diff < -180:
                 diff += 360
@@ -2118,10 +2091,12 @@ class ClockTimeEvaluator(BaseEvaluator):
         gen_gray = cv2.cvtColor(gen_frame, cv2.COLOR_BGR2GRAY)
         gt_gray = cv2.cvtColor(gt_frame, cv2.COLOR_BGR2GRAY)
 
-        gen_circles = cv2.HoughCircles(gen_gray, cv2.HOUGH_GRADIENT, 1, 50,
-                                       param1=50, param2=30, minRadius=50, maxRadius=200)
-        gt_circles = cv2.HoughCircles(gt_gray, cv2.HOUGH_GRADIENT, 1, 50,
-                                      param1=50, param2=30, minRadius=50, maxRadius=200)
+        gen_circles = cv2.HoughCircles(
+            gen_gray, cv2.HOUGH_GRADIENT, 1, 50, param1=50, param2=30, minRadius=50, maxRadius=200
+        )
+        gt_circles = cv2.HoughCircles(
+            gt_gray, cv2.HOUGH_GRADIENT, 1, 50, param1=50, param2=30, minRadius=50, maxRadius=200
+        )
 
         if gen_circles is not None and gt_circles is not None:
             return 1.0
@@ -2145,13 +2120,13 @@ class RotationEvaluator(BaseEvaluator):
     4. Rendering quality (10%) - Proper 3D rendering
     """
 
-    def __init__(self, device: str = 'cuda', task_name: str = ''):
+    def __init__(self, device: str = "cuda", task_name: str = ""):
         super().__init__(device, task_name)
         self.DEFAULT_WEIGHTS = {
-            'spatial_understanding': 0.35,
-            'rotation_angle_accuracy': 0.35,
-            'view_consistency': 0.20,
-            'rendering_quality': 0.10
+            "spatial_understanding": 0.35,
+            "rotation_angle_accuracy": 0.35,
+            "view_consistency": 0.20,
+            "rendering_quality": 0.10,
         }
 
     def _evaluate_task_specific(
@@ -2160,7 +2135,7 @@ class RotationEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate 3D rotation view."""
 
@@ -2179,19 +2154,19 @@ class RotationEvaluator(BaseEvaluator):
 
         # 1. 3D spatial understanding (35%): Check voxel structure match
         spatial_score = self._evaluate_spatial_understanding(gen_final, gt_final)
-        scores['spatial_understanding'] = spatial_score
+        scores["spatial_understanding"] = spatial_score
 
         # 2. Rotation angle accuracy (35%): Check 180° rotation
         rotation_score = self._evaluate_rotation_angle(first_frame, gen_final, gt_final)
-        scores['rotation_angle_accuracy'] = rotation_score
+        scores["rotation_angle_accuracy"] = rotation_score
 
         # 3. View consistency (20%): Same structure from opposite view
         consistency_score = self._evaluate_view_consistency(first_frame, gen_final)
-        scores['view_consistency'] = consistency_score
+        scores["view_consistency"] = consistency_score
 
         # 4. Rendering quality (10%): 3D rendering quality
         rendering_score = self._evaluate_rendering_quality(gen_final, gt_final)
-        scores['rendering_quality'] = rendering_score
+        scores["rendering_quality"] = rendering_score
 
         self._last_task_details = scores
         return sum(scores[k] * self.DEFAULT_WEIGHTS[k] for k in self.DEFAULT_WEIGHTS)
@@ -2223,8 +2198,7 @@ class RotationEvaluator(BaseEvaluator):
             return intersection / union
         return 0.5
 
-    def _evaluate_rotation_angle(self, first_frame: np.ndarray, gen_final: np.ndarray,
-                                  gt_final: np.ndarray) -> float:
+    def _evaluate_rotation_angle(self, first_frame: np.ndarray, gen_final: np.ndarray, gt_final: np.ndarray) -> float:
         """Evaluate if 180° rotation was achieved."""
         # Compare generated final with GT final
         gen_voxels = self._detect_voxels(gen_final)
@@ -2296,13 +2270,13 @@ class CommunicatingVesselsEvaluator(BaseEvaluator):
     4. Visual fidelity (10%) - Vessels and markings preserved
     """
 
-    def __init__(self, device: str = 'cuda', task_name: str = ''):
+    def __init__(self, device: str = "cuda", task_name: str = ""):
         super().__init__(device, task_name)
         self.DEFAULT_WEIGHTS = {
-            'final_equilibrium': 0.40,
-            'flow_process': 0.30,
-            'volume_conservation': 0.20,
-            'visual_fidelity': 0.10
+            "final_equilibrium": 0.40,
+            "flow_process": 0.30,
+            "volume_conservation": 0.20,
+            "visual_fidelity": 0.10,
         }
 
     def _evaluate_task_specific(
@@ -2311,7 +2285,7 @@ class CommunicatingVesselsEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate communicating vessels simulation.
 
@@ -2339,16 +2313,16 @@ class CommunicatingVesselsEvaluator(BaseEvaluator):
         # 1. Final equilibrium (40%): Check if liquid levels match GT equilibrium
         # CRITICAL: Compare against GT target, not just check if levels are equal
         equilibrium_score = self._evaluate_final_equilibrium_vs_gt(gen_levels, gt_levels)
-        scores['final_equilibrium'] = equilibrium_score
+        scores["final_equilibrium"] = equilibrium_score
 
         # CRITICAL: If equilibrium is not reached, heavily penalize other scores
         if equilibrium_score < 0.5:
             # Task fundamentally failed - liquid levels don't match GT
-            scores['flow_process'] = 0.3
-            scores['volume_conservation'] = 0.3
-            scores['visual_fidelity'] = 0.5
+            scores["flow_process"] = 0.3
+            scores["volume_conservation"] = 0.3
+            scores["visual_fidelity"] = 0.5
             self._last_task_details = scores
-            self._last_task_details['equilibrium_not_reached'] = True
+            self._last_task_details["equilibrium_not_reached"] = True
             return sum(scores[k] * self.DEFAULT_WEIGHTS[k] for k in self.DEFAULT_WEIGHTS)
 
         # 2. Flow process (30%): Check realistic flow
@@ -2356,17 +2330,17 @@ class CommunicatingVesselsEvaluator(BaseEvaluator):
         frame_diff = cv2.absdiff(video_frames[0], video_frames[-1])
         mean_diff = np.mean(frame_diff)
         if mean_diff < 10:
-            scores['flow_process'] = max(flow_score, 0.8)
+            scores["flow_process"] = max(flow_score, 0.8)
         else:
-            scores['flow_process'] = flow_score
+            scores["flow_process"] = flow_score
 
         # 3. Volume conservation (20%): Check total volume
         conservation_score = self._evaluate_volume_conservation(first_frame, gen_final)
-        scores['volume_conservation'] = conservation_score
+        scores["volume_conservation"] = conservation_score
 
         # 4. Visual fidelity (10%): Check vessel structure
         fidelity_score = self._evaluate_visual_fidelity(gen_final, gt_final)
-        scores['visual_fidelity'] = fidelity_score
+        scores["visual_fidelity"] = fidelity_score
 
         self._last_task_details = scores
         return sum(scores[k] * self.DEFAULT_WEIGHTS[k] for k in self.DEFAULT_WEIGHTS)
@@ -2481,7 +2455,6 @@ class CommunicatingVesselsEvaluator(BaseEvaluator):
 
         return levels
 
-
     def _evaluate_flow_process(self, frames: list[np.ndarray]) -> float:
         """Evaluate if flow process is realistic."""
         if len(frames) < 5:
@@ -2489,7 +2462,7 @@ class CommunicatingVesselsEvaluator(BaseEvaluator):
 
         # Track level variance over time
         variances = []
-        for frame in frames[::max(1, len(frames)//10)]:
+        for frame in frames[:: max(1, len(frames) // 10)]:
             levels = self._detect_liquid_levels(frame)
             if len(levels) >= 2:
                 variances.append(np.std(levels))
@@ -2500,13 +2473,14 @@ class CommunicatingVesselsEvaluator(BaseEvaluator):
         # Variance should decrease over time (approaching equilibrium)
         decreasing = 0
         for i in range(1, len(variances)):
-            if variances[i] <= variances[i-1] + 5:  # Allow small fluctuations
+            if variances[i] <= variances[i - 1] + 5:  # Allow small fluctuations
                 decreasing += 1
 
         return decreasing / (len(variances) - 1)
 
     def _evaluate_volume_conservation(self, first_frame: np.ndarray, gen_final: np.ndarray) -> float:
         """Evaluate if total liquid volume is conserved."""
+
         def count_liquid_pixels(frame):
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             saturation = hsv[:, :, 1]
@@ -2551,14 +2525,14 @@ class CommunicatingVesselsEvaluator(BaseEvaluator):
 
 # Export mapping for this batch
 IN_DOMAIN_50_EVALUATORS_PART5 = {
-    'O-36_grid_shift_data-generator': GridShiftEvaluator,
-    'O-37_light_sequence_data-generator': LightSequenceEvaluator,
-    'O-38_majority_color_data-generator': MajorityColorEvaluator,
-    'O-44_rotation_puzzle_data-generator': RotationPuzzleEvaluator,
-    'O-45_sequence_completion_data-generator': SequenceCompletionEvaluator,
-    'O-47_sliding_puzzle_data-generator': SlidingPuzzleEvaluator,
-    'O-52_traffic_light_data-generator': TrafficLightEvaluator,
-    'O-53_clock_data-generator': ClockTimeEvaluator,
-    'O-55_rotation_data-generator': RotationEvaluator,
-    'O-75_communicating_vessels_data-generator': CommunicatingVesselsEvaluator,
+    "O-36_grid_shift_data-generator": GridShiftEvaluator,
+    "O-37_light_sequence_data-generator": LightSequenceEvaluator,
+    "O-38_majority_color_data-generator": MajorityColorEvaluator,
+    "O-44_rotation_puzzle_data-generator": RotationPuzzleEvaluator,
+    "O-45_sequence_completion_data-generator": SequenceCompletionEvaluator,
+    "O-47_sliding_puzzle_data-generator": SlidingPuzzleEvaluator,
+    "O-52_traffic_light_data-generator": TrafficLightEvaluator,
+    "O-53_clock_data-generator": ClockTimeEvaluator,
+    "O-55_rotation_data-generator": RotationEvaluator,
+    "O-75_communicating_vessels_data-generator": CommunicatingVesselsEvaluator,
 }

@@ -459,9 +459,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
                 data_rank = self.rank
                 data_world_size = self.world_size
             data_seed = (
-                self._get_expert_parallel_sampler_seed(cfg)
-                if self._expert_parallel_duplicates_data(cfg)
-                else cfg.seed
+                self._get_expert_parallel_sampler_seed(cfg) if self._expert_parallel_duplicates_data(cfg) else cfg.seed
             )
             epoch_length = None
             if cfg.dataset_size is not None:

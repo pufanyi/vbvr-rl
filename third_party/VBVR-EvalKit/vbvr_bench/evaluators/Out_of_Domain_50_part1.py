@@ -2,7 +2,6 @@
 Specific evaluators for Out-of-Domain_50 tasks (Part 1).
 """
 
-
 import cv2
 import numpy as np
 
@@ -26,12 +25,7 @@ class SeparateObjectsNoSpinEvaluator(BaseEvaluator):
     - Visual fidelity (15%): Shape, color, size preserved
     """
 
-    TASK_WEIGHTS = {
-        'alignment': 0.35,
-        'no_rotation': 0.30,
-        'movement': 0.20,
-        'fidelity': 0.15
-    }
+    TASK_WEIGHTS = {"alignment": 0.35, "no_rotation": 0.30, "movement": 0.20, "fidelity": 0.15}
 
     def _detect_colored_shapes(self, frame: np.ndarray) -> list[dict]:
         """Detect colored shapes and their properties."""
@@ -49,21 +43,16 @@ class SeparateObjectsNoSpinEvaluator(BaseEvaluator):
                 continue
 
             M = cv2.moments(cnt)
-            if M['m00'] == 0:
+            if M["m00"] == 0:
                 continue
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
 
             # Get bounding rect for orientation
             rect = cv2.minAreaRect(cnt)
             angle = rect[2]
 
-            shapes.append({
-                'center': (cx, cy),
-                'area': area,
-                'angle': angle,
-                'contour': cnt
-            })
+            shapes.append({"center": (cx, cy), "area": area, "angle": angle, "contour": cnt})
 
         return shapes
 
@@ -73,7 +62,7 @@ class SeparateObjectsNoSpinEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate separate objects no spin task - rule-based, no SSIM."""
         if len(video_frames) < 2:
@@ -93,11 +82,11 @@ class SeparateObjectsNoSpinEvaluator(BaseEvaluator):
             total_dist = 0
             matched = 0
             for fs in final_shapes:
-                min_dist = float('inf')
+                min_dist = float("inf")
                 for gts in gt_final_shapes:
-                    dist = _safe_distance(fs['center'], gts['center'])
+                    dist = _safe_distance(fs["center"], gts["center"])
                     min_dist = min(min_dist, dist)
-                if min_dist < float('inf'):
+                if min_dist < float("inf"):
                     total_dist += min_dist
                     matched += 1
 
@@ -105,28 +94,28 @@ class SeparateObjectsNoSpinEvaluator(BaseEvaluator):
                 avg_dist = total_dist / matched
                 # Close match (< 10 pixels) gets full score
                 if avg_dist < 10:
-                    scores['alignment'] = 1.0
+                    scores["alignment"] = 1.0
                 else:
                     # Lenient threshold (100 pixels)
-                    scores['alignment'] = max(0, 1.0 - avg_dist / 100.0)
+                    scores["alignment"] = max(0, 1.0 - avg_dist / 100.0)
             else:
                 # No matches found - check if shapes moved right
-                scores['alignment'] = self._check_rightward_movement(initial_shapes, final_shapes)
+                scores["alignment"] = self._check_rightward_movement(initial_shapes, final_shapes)
         else:
             # Fallback: check if shapes are on right side
-            scores['alignment'] = self._check_rightward_movement(initial_shapes, final_shapes)
+            scores["alignment"] = self._check_rightward_movement(initial_shapes, final_shapes)
 
         # 2. No rotation constraint: Compare angles between initial and final
         if initial_shapes and final_shapes:
             angle_diffs = []
             # Sort by area to match shapes (more robust than position)
-            initial_sorted = sorted(initial_shapes, key=lambda s: s['area'], reverse=True)
-            final_sorted = sorted(final_shapes, key=lambda s: s['area'], reverse=True)
+            initial_sorted = sorted(initial_shapes, key=lambda s: s["area"], reverse=True)
+            final_sorted = sorted(final_shapes, key=lambda s: s["area"], reverse=True)
 
             for i, (i_shape, f_shape) in enumerate(zip(initial_sorted, final_sorted, strict=False)):
                 if i >= min(len(initial_sorted), len(final_sorted)):
                     break
-                angle_diff = abs(i_shape['angle'] - f_shape['angle'])
+                angle_diff = abs(i_shape["angle"] - f_shape["angle"])
                 angle_diff = min(angle_diff, 90 - angle_diff)  # Handle angle wrapping
                 angle_diffs.append(angle_diff)
 
@@ -134,22 +123,22 @@ class SeparateObjectsNoSpinEvaluator(BaseEvaluator):
                 avg_angle_diff = np.mean(angle_diffs)
                 # Small angle diff (< 2 degrees) gets full score
                 if avg_angle_diff < 2:
-                    scores['no_rotation'] = 1.0
+                    scores["no_rotation"] = 1.0
                 elif avg_angle_diff < 15:
-                    scores['no_rotation'] = 0.8
+                    scores["no_rotation"] = 0.8
                 elif avg_angle_diff < 30:
-                    scores['no_rotation'] = 0.2  # Detection failed
+                    scores["no_rotation"] = 0.2  # Detection failed
                 else:
-                    scores['no_rotation'] = max(0, 1.0 - avg_angle_diff / 45.0)
+                    scores["no_rotation"] = max(0, 1.0 - avg_angle_diff / 45.0)
             else:
-                scores['no_rotation'] = 0.2  # Detection failed
+                scores["no_rotation"] = 0.2  # Detection failed
         else:
-            scores['no_rotation'] = 0.2  # Detection failed
+            scores["no_rotation"] = 0.2  # Detection failed
 
         # 3. Movement correctness: Check horizontal motion
         frame_diff = cv2.absdiff(first_frame, last_frame)
         if np.mean(frame_diff) < 5:  # Very similar frames
-            scores['movement'] = 1.0
+            scores["movement"] = 1.0
         else:
             try:
                 flow_result = compute_optical_flow(first_frame, last_frame)
@@ -159,14 +148,14 @@ class SeparateObjectsNoSpinEvaluator(BaseEvaluator):
                     v_flow = np.abs(flow[:, :, 1]).mean()
                     if h_flow + v_flow > 0:
                         # Horizontal movement should dominate
-                        scores['movement'] = h_flow / (h_flow + v_flow)
+                        scores["movement"] = h_flow / (h_flow + v_flow)
                     else:
-                        scores['movement'] = 0.8
+                        scores["movement"] = 0.8
                 else:
                     # Check centroid movement direction
-                    scores['movement'] = self._check_horizontal_movement(initial_shapes, final_shapes)
+                    scores["movement"] = self._check_horizontal_movement(initial_shapes, final_shapes)
             except Exception:
-                scores['movement'] = self._check_horizontal_movement(initial_shapes, final_shapes)
+                scores["movement"] = self._check_horizontal_movement(initial_shapes, final_shapes)
 
         # 4. Fidelity: Check shape preservation
         if initial_shapes and final_shapes:
@@ -174,13 +163,13 @@ class SeparateObjectsNoSpinEvaluator(BaseEvaluator):
             count_match = max(0, 1.0 - abs(len(initial_shapes) - len(final_shapes)) / max(len(initial_shapes), 1))
 
             # Check area preservation
-            initial_total_area = sum(s['area'] for s in initial_shapes)
-            final_total_area = sum(s['area'] for s in final_shapes)
+            initial_total_area = sum(s["area"] for s in initial_shapes)
+            final_total_area = sum(s["area"] for s in final_shapes)
             area_ratio = min(initial_total_area, final_total_area) / max(initial_total_area, final_total_area, 1)
 
-            scores['fidelity'] = 0.5 * count_match + 0.5 * area_ratio
+            scores["fidelity"] = 0.5 * count_match + 0.5 * area_ratio
         else:
-            scores['fidelity'] = 0.2  # Detection failed
+            scores["fidelity"] = 0.2  # Detection failed
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -190,8 +179,8 @@ class SeparateObjectsNoSpinEvaluator(BaseEvaluator):
         if not initial_shapes or not final_shapes:
             return 0.5
 
-        initial_avg_x = np.mean([s['center'][0] for s in initial_shapes])
-        final_avg_x = np.mean([s['center'][0] for s in final_shapes])
+        initial_avg_x = np.mean([s["center"][0] for s in initial_shapes])
+        final_avg_x = np.mean([s["center"][0] for s in final_shapes])
 
         # Shapes should move right
         if final_avg_x > initial_avg_x:
@@ -203,8 +192,8 @@ class SeparateObjectsNoSpinEvaluator(BaseEvaluator):
         if not initial_shapes or not final_shapes:
             return 0.5
 
-        initial_centers = [s['center'] for s in initial_shapes]
-        final_centers = [s['center'] for s in final_shapes]
+        initial_centers = [s["center"] for s in initial_shapes]
+        final_centers = [s["center"] for s in final_shapes]
 
         # Calculate average movement
         if len(initial_centers) != len(final_centers):
@@ -220,6 +209,7 @@ class SeparateObjectsNoSpinEvaluator(BaseEvaluator):
             return total_h / (total_h + total_v)
         return 0.8
 
+
 class MultipleKeysForOneDoorEvaluator(BaseEvaluator):
     """
     G-47: Multi-key collection maze evaluator.
@@ -232,10 +222,10 @@ class MultipleKeysForOneDoorEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'key_collection': 0.30,
-        'order_optimization': 0.25,
-        'path_efficiency': 0.25,
-        'movement_legality': 0.20
+        "key_collection": 0.30,
+        "order_optimization": 0.25,
+        "path_efficiency": 0.25,
+        "movement_legality": 0.20,
     }
 
     def _evaluate_task_specific(
@@ -244,7 +234,7 @@ class MultipleKeysForOneDoorEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         if len(video_frames) < 2:
             return 0.0
@@ -255,32 +245,24 @@ class MultipleKeysForOneDoorEvaluator(BaseEvaluator):
 
         # 1. Key collection completeness (30%)
         # Rule: Count colored key objects in first vs final frame
-        scores['key_collection'] = self._evaluate_key_collection(
-            first_frame, final_frame
-        )
+        scores["key_collection"] = self._evaluate_key_collection(first_frame, final_frame)
 
         # 2. Visit order optimization (25%)
         # Rule: Track agent reaching key positions before door
-        scores['order_optimization'] = self._evaluate_visit_order(video_frames)
+        scores["order_optimization"] = self._evaluate_visit_order(video_frames)
 
         # 3. Path efficiency (25%)
         # Rule: Check for minimal backtracking
-        scores['path_efficiency'] = self._evaluate_path_efficiency(video_frames)
+        scores["path_efficiency"] = self._evaluate_path_efficiency(video_frames)
 
         # 4. Movement legality (20%)
         # Rule: Check for wall crossing and valid moves
-        scores['movement_legality'] = self._evaluate_movement_legality(
-            video_frames, first_frame
-        )
+        scores["movement_legality"] = self._evaluate_movement_legality(video_frames, first_frame)
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
-    def _evaluate_key_collection(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_key_collection(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Count keys collected (colored objects that disappear)."""
         # Detect colored objects (keys) - typically yellow, blue, red
         initial_keys = self._count_key_objects(first_frame)
@@ -313,7 +295,7 @@ class MultipleKeysForOneDoorEvaluator(BaseEvaluator):
 
             # Track key collection events (reduction in key count)
             if i > 0:
-                prev_keys = self._count_key_objects(video_frames[i-1])
+                prev_keys = self._count_key_objects(video_frames[i - 1])
                 curr_keys = self._count_key_objects(frame)
                 if curr_keys < prev_keys:
                     key_collection_frames.append(i)
@@ -333,7 +315,7 @@ class MultipleKeysForOneDoorEvaluator(BaseEvaluator):
     def _evaluate_path_efficiency(self, video_frames: list[np.ndarray]) -> float:
         """Rule-based: Check for minimal backtracking."""
         positions = []
-        for frame in video_frames[::max(1, len(video_frames)//30)]:
+        for frame in video_frames[:: max(1, len(video_frames) // 30)]:
             pos = self._detect_agent_position(frame)
             if pos:
                 positions.append(pos)
@@ -361,11 +343,7 @@ class MultipleKeysForOneDoorEvaluator(BaseEvaluator):
         else:
             return max(0.2, 1.0 - revisit_ratio)
 
-    def _evaluate_movement_legality(
-        self,
-        video_frames: list[np.ndarray],
-        first_frame: np.ndarray
-    ) -> float:
+    def _evaluate_movement_legality(self, video_frames: list[np.ndarray], first_frame: np.ndarray) -> float:
         """Rule-based: Check for wall crossing (illegal moves)."""
         # Detect walls from first frame (black pixels)
         wall_mask = self._detect_walls(first_frame)
@@ -450,7 +428,7 @@ class MultipleKeysForOneDoorEvaluator(BaseEvaluator):
         h, w = frame.shape[:2]
 
         # Sample region around agent
-        region = frame[max(0, y-40):min(h, y+40), max(0, x-40):min(w, x+40)]
+        region = frame[max(0, y - 40) : min(h, y + 40), max(0, x - 40) : min(w, x + 40)]
         if region.size == 0:
             return False
 
@@ -488,6 +466,7 @@ class MultipleKeysForOneDoorEvaluator(BaseEvaluator):
                 return (cx, cy)
         return None
 
+
 class ConnectingColorEvaluator(BaseEvaluator):
     """
     G-54: Connecting color evaluator.
@@ -513,11 +492,7 @@ class ConnectingColorEvaluator(BaseEvaluator):
     - No wrong connections (30%): No lines connecting different colors
     """
 
-    TASK_WEIGHTS = {
-        'object_preservation': 0.20,
-        'correct_connections': 0.50,
-        'no_wrong_connections': 0.30
-    }
+    TASK_WEIGHTS = {"object_preservation": 0.20, "correct_connections": 0.50, "no_wrong_connections": 0.30}
 
     def _evaluate_task_specific(
         self,
@@ -525,7 +500,7 @@ class ConnectingColorEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate connecting color task with proper connection counting."""
         scores = {}
@@ -551,31 +526,29 @@ class ConnectingColorEvaluator(BaseEvaluator):
         last_objects = self._detect_circular_objects(last_frame)
 
         # Store detection info for debugging
-        scores['num_first_objects'] = len(first_objects)
-        scores['num_last_objects'] = len(last_objects)
+        scores["num_first_objects"] = len(first_objects)
+        scores["num_last_objects"] = len(last_objects)
 
         if len(first_objects) < 2:
-            scores['object_preservation'] = 0.0
-            scores['correct_connections'] = 0.0
-            scores['no_wrong_connections'] = 0.0
+            scores["object_preservation"] = 0.0
+            scores["correct_connections"] = 0.0
+            scores["no_wrong_connections"] = 0.0
             self._last_task_details = scores
-            self._last_task_details['error'] = 'not_enough_objects_in_first_frame'
+            self._last_task_details["error"] = "not_enough_objects_in_first_frame"
             return 0.0
 
         # 1. Object preservation (20%): Check if objects remain at similar positions
         preservation_score = self._evaluate_object_preservation(first_objects, last_objects)
-        scores['object_preservation'] = preservation_score
+        scores["object_preservation"] = preservation_score
 
         # Group first frame objects by color
         objects_by_color = {}
         for obj in first_objects:
-            objects_by_color.setdefault(obj['color'], []).append(obj)
+            objects_by_color.setdefault(obj["color"], []).append(obj)
 
         # Count expected connections (pairs of same-color objects)
         expected_connections = sum(
-            len(objs) * (len(objs) - 1) // 2
-            for objs in objects_by_color.values()
-            if len(objs) >= 2
+            len(objs) * (len(objs) - 1) // 2 for objs in objects_by_color.values() if len(objs) >= 2
         )
 
         # 2 & 3. Count correct and wrong connections
@@ -584,24 +557,24 @@ class ConnectingColorEvaluator(BaseEvaluator):
         )
 
         # Store connection info
-        scores['expected_connections'] = expected_connections
-        scores['correct_connections_count'] = correct_count
-        scores['wrong_connections_count'] = wrong_count
+        scores["expected_connections"] = expected_connections
+        scores["correct_connections_count"] = correct_count
+        scores["wrong_connections_count"] = wrong_count
 
         # 2. Correct connections score (50%)
         if expected_connections > 0:
-            scores['correct_connections'] = min(1.0, correct_count / expected_connections)
+            scores["correct_connections"] = min(1.0, correct_count / expected_connections)
         else:
-            scores['correct_connections'] = 0.0
+            scores["correct_connections"] = 0.0
 
         # 3. No wrong connections score (30%)
         if wrong_count == 0:
-            scores['no_wrong_connections'] = 1.0
+            scores["no_wrong_connections"] = 1.0
         else:
             # Each wrong connection heavily penalizes
-            scores['no_wrong_connections'] = max(0.0, 1.0 - wrong_count * 0.4)
+            scores["no_wrong_connections"] = max(0.0, 1.0 - wrong_count * 0.4)
 
-        scores['connection_details'] = connection_details
+        scores["connection_details"] = connection_details
 
         self._last_task_details = scores
         return sum(scores.get(k, 0) * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS if k in scores)
@@ -617,13 +590,13 @@ class ConnectingColorEvaluator(BaseEvaluator):
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
         color_ranges = {
-            'red': ([0, 100, 100], [10, 255, 255], [160, 100, 100], [180, 255, 255]),
-            'green': ([35, 100, 100], [85, 255, 255], None, None),
-            'blue': ([100, 100, 100], [130, 255, 255], None, None),
-            'yellow': ([20, 100, 100], [35, 255, 255], None, None),
-            'orange': ([10, 100, 100], [20, 255, 255], None, None),
-            'purple': ([130, 100, 100], [160, 255, 255], None, None),
-            'cyan': ([85, 100, 100], [100, 255, 255], None, None),
+            "red": ([0, 100, 100], [10, 255, 255], [160, 100, 100], [180, 255, 255]),
+            "green": ([35, 100, 100], [85, 255, 255], None, None),
+            "blue": ([100, 100, 100], [130, 255, 255], None, None),
+            "yellow": ([20, 100, 100], [35, 255, 255], None, None),
+            "orange": ([10, 100, 100], [20, 255, 255], None, None),
+            "purple": ([130, 100, 100], [160, 255, 255], None, None),
+            "cyan": ([85, 100, 100], [100, 255, 255], None, None),
         }
 
         for color_name, ranges in color_ranges.items():
@@ -643,25 +616,21 @@ class ConnectingColorEvaluator(BaseEvaluator):
                 # Check circularity (lowered threshold to accept more shapes)
                 perimeter = cv2.arcLength(contour, True)
                 if perimeter > 0:
-                    circularity = 4 * np.pi * area / (perimeter ** 2)
+                    circularity = 4 * np.pi * area / (perimeter**2)
                     # Accept reasonably compact objects (circularity > 0.3)
                     # This accepts ovals, squares with rounded corners, etc.
                     if circularity > 0.3:
                         M = cv2.moments(contour)
-                        if M['m00'] > 0:
-                            cx = int(M['m10'] / M['m00'])
-                            cy = int(M['m01'] / M['m00'])
-                            objects.append({
-                                'color': color_name,
-                                'center': (cx, cy),
-                                'area': area,
-                                'circularity': circularity
-                            })
+                        if M["m00"] > 0:
+                            cx = int(M["m10"] / M["m00"])
+                            cy = int(M["m01"] / M["m00"])
+                            objects.append(
+                                {"color": color_name, "center": (cx, cy), "area": area, "circularity": circularity}
+                            )
 
         return objects
 
-    def _evaluate_object_preservation(self, first_objects: list[dict],
-                                      last_objects: list[dict]) -> float:
+    def _evaluate_object_preservation(self, first_objects: list[dict], last_objects: list[dict]) -> float:
         """Check if original objects are preserved in similar positions."""
         if not first_objects:
             return 0.0
@@ -670,16 +639,17 @@ class ConnectingColorEvaluator(BaseEvaluator):
         for first_obj in first_objects:
             # Find matching object in last frame (same color, similar position)
             for last_obj in last_objects:
-                if first_obj['color'] == last_obj['color']:
-                    dist = _safe_distance(first_obj['center'], last_obj['center'])
+                if first_obj["color"] == last_obj["color"]:
+                    dist = _safe_distance(first_obj["center"], last_obj["center"])
                     if dist < 50:  # Object within 50 pixels of original position
                         matched += 1
                         break
 
         return matched / len(first_objects)
 
-    def _count_connections(self, frame: np.ndarray, first_objects: list[dict],
-                          objects_by_color: dict) -> tuple[int, int, dict]:
+    def _count_connections(
+        self, frame: np.ndarray, first_objects: list[dict], objects_by_color: dict
+    ) -> tuple[int, int, dict]:
         """
         Count correct and wrong line connections.
 
@@ -691,13 +661,13 @@ class ConnectingColorEvaluator(BaseEvaluator):
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
         color_ranges = {
-            'red': ([0, 100, 100], [10, 255, 255], [160, 100, 100], [180, 255, 255]),
-            'green': ([35, 100, 100], [85, 255, 255], None, None),
-            'blue': ([100, 100, 100], [130, 255, 255], None, None),
-            'yellow': ([20, 100, 100], [35, 255, 255], None, None),
-            'orange': ([10, 100, 100], [20, 255, 255], None, None),
-            'purple': ([130, 100, 100], [160, 255, 255], None, None),
-            'cyan': ([85, 100, 100], [100, 255, 255], None, None),
+            "red": ([0, 100, 100], [10, 255, 255], [160, 100, 100], [180, 255, 255]),
+            "green": ([35, 100, 100], [85, 255, 255], None, None),
+            "blue": ([100, 100, 100], [130, 255, 255], None, None),
+            "yellow": ([20, 100, 100], [35, 255, 255], None, None),
+            "orange": ([10, 100, 100], [20, 255, 255], None, None),
+            "purple": ([130, 100, 100], [160, 255, 255], None, None),
+            "cyan": ([85, 100, 100], [100, 255, 255], None, None),
         }
 
         correct_connections = []
@@ -724,12 +694,10 @@ class ConnectingColorEvaluator(BaseEvaluator):
                     obj1, obj2 = objs[i], objs[j]
 
                     # Check if there's a continuous path of this color between them
-                    if self._has_color_path(mask, obj1['center'], obj2['center']):
-                        correct_connections.append({
-                            'color': color_name,
-                            'obj1': obj1['center'],
-                            'obj2': obj2['center']
-                        })
+                    if self._has_color_path(mask, obj1["center"], obj2["center"]):
+                        correct_connections.append(
+                            {"color": color_name, "obj1": obj1["center"], "obj2": obj2["center"]}
+                        )
 
         # Check wrong connections: different-color objects connected
         colors_list = list(objects_by_color.keys())
@@ -741,22 +709,16 @@ class ConnectingColorEvaluator(BaseEvaluator):
 
                 for obj1 in objs1:
                     for obj2 in objs2:
-                        if self._has_any_line_connection(frame, obj1['center'], obj2['center']):
-                            wrong_connections.append({
-                                'colors': (color1, color2),
-                                'obj1': obj1['center'],
-                                'obj2': obj2['center']
-                            })
+                        if self._has_any_line_connection(frame, obj1["center"], obj2["center"]):
+                            wrong_connections.append(
+                                {"colors": (color1, color2), "obj1": obj1["center"], "obj2": obj2["center"]}
+                            )
 
-        details = {
-            'correct': correct_connections,
-            'wrong': wrong_connections
-        }
+        details = {"correct": correct_connections, "wrong": wrong_connections}
 
         return len(correct_connections), len(wrong_connections), details
 
-    def _has_color_path(self, color_mask: np.ndarray,
-                        p1: tuple[int, int], p2: tuple[int, int]) -> bool:
+    def _has_color_path(self, color_mask: np.ndarray, p1: tuple[int, int], p2: tuple[int, int]) -> bool:
         """
         Check if there's a continuous path of the specific color between two points.
         Uses line sampling with wider search region and checks for color presence along the path.
@@ -776,8 +738,8 @@ class ConnectingColorEvaluator(BaseEvaluator):
 
             if 0 <= x < color_mask.shape[1] and 0 <= y < color_mask.shape[0]:
                 # Check a LARGER region around the sample point (curves may not be straight)
-                y_min, y_max = max(0, y-20), min(color_mask.shape[0], y+20)
-                x_min, x_max = max(0, x-20), min(color_mask.shape[1], x+20)
+                y_min, y_max = max(0, y - 20), min(color_mask.shape[0], y + 20)
+                x_min, x_max = max(0, x - 20), min(color_mask.shape[1], x + 20)
                 region = color_mask[y_min:y_max, x_min:x_max]
 
                 if np.sum(region > 0) > 5:  # Some pixels of this color
@@ -786,8 +748,7 @@ class ConnectingColorEvaluator(BaseEvaluator):
         # Connection exists if more than 30% of samples have the color (curves may not follow straight line)
         return connected_count > num_samples * 0.3
 
-    def _has_any_line_connection(self, frame: np.ndarray,
-                                 p1: tuple[int, int], p2: tuple[int, int]) -> bool:
+    def _has_any_line_connection(self, frame: np.ndarray, p1: tuple[int, int], p2: tuple[int, int]) -> bool:
         """
         Check if there's any drawn line connecting two different-colored objects.
         Looks for non-background colored pixels along the path.
@@ -813,6 +774,7 @@ class ConnectingColorEvaluator(BaseEvaluator):
         # If more than 40% of middle samples have colored pixels, there's a connection
         return colored_count > num_samples * 0.4
 
+
 class SelectNextFigureAlternatingEvaluator(BaseEvaluator):
     """
     G-135: Select next figure in small-big alternating sequence.
@@ -825,10 +787,10 @@ class SelectNextFigureAlternatingEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'pattern_recognition': 0.40,
-        'selection_correctness': 0.35,
-        'marking_accuracy': 0.15,
-        'animation_quality': 0.10
+        "pattern_recognition": 0.40,
+        "selection_correctness": 0.35,
+        "marking_accuracy": 0.15,
+        "animation_quality": 0.10,
     }
 
     def _evaluate_task_specific(
@@ -837,7 +799,7 @@ class SelectNextFigureAlternatingEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         if len(video_frames) < 2:
             return 0.0
@@ -848,32 +810,24 @@ class SelectNextFigureAlternatingEvaluator(BaseEvaluator):
 
         # 1. Pattern recognition (40%)
         # Rule: Check if pattern analysis shows alternating sizes
-        scores['pattern_recognition'] = self._evaluate_pattern_recognition(
-            first_frame, final_frame
-        )
+        scores["pattern_recognition"] = self._evaluate_pattern_recognition(first_frame, final_frame)
 
         # 2. Selection correctness (35%)
         # Rule: Red circle should mark the largest candidate figure
-        scores['selection_correctness'] = self._evaluate_selection(
-            first_frame, final_frame
-        )
+        scores["selection_correctness"] = self._evaluate_selection(first_frame, final_frame)
 
         # 3. Marking accuracy (15%)
         # Rule: Exactly one red circle marking
-        scores['marking_accuracy'] = self._evaluate_marking(final_frame, first_frame)
+        scores["marking_accuracy"] = self._evaluate_marking(final_frame, first_frame)
 
         # 4. Animation quality (10%)
         # Rule: Circle should expand smoothly
-        scores['animation_quality'] = self._evaluate_animation(video_frames)
+        scores["animation_quality"] = self._evaluate_animation(video_frames)
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
-    def _evaluate_pattern_recognition(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_pattern_recognition(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if alternating pattern is understood."""
         # Detect existing shapes
         shapes = self._detect_shapes_with_sizes(first_frame)
@@ -898,7 +852,7 @@ class SelectNextFigureAlternatingEvaluator(BaseEvaluator):
         # Check for alternating pattern: small-big-small or big-small-big
         is_alternating = True
         for i in range(len(sizes) - 2):
-            if sizes[i] < sizes[i+1] > sizes[i+2] or sizes[i] > sizes[i+1] < sizes[i+2]:
+            if sizes[i] < sizes[i + 1] > sizes[i + 2] or sizes[i] > sizes[i + 1] < sizes[i + 2]:
                 continue
             else:
                 is_alternating = False
@@ -908,11 +862,7 @@ class SelectNextFigureAlternatingEvaluator(BaseEvaluator):
             return 1.0
         return 0.5
 
-    def _evaluate_selection(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_selection(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if the correct candidate is marked based on pattern."""
         # Detect red circle marking (new markings only)
         circles = self._detect_red_circles(final_frame, first_frame)
@@ -938,9 +888,9 @@ class SelectNextFigureAlternatingEvaluator(BaseEvaluator):
 
         # Find which candidate is marked
         marked_candidate = None
-        min_dist = float('inf')
+        min_dist = float("inf")
         for cand in candidate_shapes:
-            dist = np.sqrt((cand[0] - marked_pos[0])**2 + (cand[1] - marked_pos[1])**2)
+            dist = np.sqrt((cand[0] - marked_pos[0]) ** 2 + (cand[1] - marked_pos[1]) ** 2)
             if dist < min_dist:
                 min_dist = dist
                 marked_candidate = cand
@@ -958,14 +908,14 @@ class SelectNextFigureAlternatingEvaluator(BaseEvaluator):
             threshold = (min_size + max_size) / 2
 
             # Classify each shape as small or big
-            pattern = ['small' if s <= threshold else 'big' for s in sizes]
+            pattern = ["small" if s <= threshold else "big" for s in sizes]
             last_type = pattern[-1]
 
             # Determine expected next type
-            expected_type = 'big' if last_type == 'small' else 'small'
+            expected_type = "big" if last_type == "small" else "small"
 
             # Check if marked candidate matches expected type
-            marked_type = 'small' if marked_candidate[2] <= threshold else 'big'
+            marked_type = "small" if marked_candidate[2] <= threshold else "big"
 
             if marked_type == expected_type:
                 return 1.0
@@ -978,11 +928,7 @@ class SelectNextFigureAlternatingEvaluator(BaseEvaluator):
             return 0.8
         return 0.5
 
-    def _evaluate_marking(
-        self,
-        final_frame: np.ndarray,
-        first_frame: np.ndarray | None = None
-    ) -> float:
+    def _evaluate_marking(self, final_frame: np.ndarray, first_frame: np.ndarray | None = None) -> float:
         """Rule-based: Evaluate red circle marking quality."""
         circles = self._detect_red_circles(final_frame, first_frame)
 
@@ -1000,7 +946,7 @@ class SelectNextFigureAlternatingEvaluator(BaseEvaluator):
 
         # Check for smooth circle expansion
         circle_sizes = []
-        for frame in video_frames[len(video_frames)//2:]:
+        for frame in video_frames[len(video_frames) // 2 :]:
             circles = self._detect_red_circles(frame)
             if circles:
                 circle_sizes.append(circles[0][2] if len(circles[0]) > 2 else 30)
@@ -1009,8 +955,7 @@ class SelectNextFigureAlternatingEvaluator(BaseEvaluator):
             return 0.5
 
         # Check if sizes increase smoothly
-        increases = sum(1 for i in range(1, len(circle_sizes))
-                       if circle_sizes[i] >= circle_sizes[i-1] * 0.95)
+        increases = sum(1 for i in range(1, len(circle_sizes)) if circle_sizes[i] >= circle_sizes[i - 1] * 0.95)
         smoothness = increases / (len(circle_sizes) - 1)
 
         return smoothness
@@ -1039,7 +984,7 @@ class SelectNextFigureAlternatingEvaluator(BaseEvaluator):
         h, w = frame.shape[:2]
 
         # Focus on bottom half or right portion where candidates usually are
-        bottom_region = frame[h//2:, :]
+        bottom_region = frame[h // 2 :, :]
 
         gray = cv2.cvtColor(bottom_region, cv2.COLOR_BGR2GRAY)
         _, binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
@@ -1053,15 +998,13 @@ class SelectNextFigureAlternatingEvaluator(BaseEvaluator):
                 M = cv2.moments(cnt)
                 if M["m00"] > 0:
                     cx = int(M["m10"] / M["m00"])
-                    cy = int(M["m01"] / M["m00"]) + h//2  # Adjust for cropped region
+                    cy = int(M["m01"] / M["m00"]) + h // 2  # Adjust for cropped region
                     candidates.append((cx, cy, area))
 
         return candidates
 
     def _detect_red_circles(
-        self,
-        frame: np.ndarray,
-        first_frame: np.ndarray | None = None
+        self, frame: np.ndarray, first_frame: np.ndarray | None = None
     ) -> list[tuple[int, int, int]]:
         """Detect red circles in the frame (new markings only if first_frame provided)."""
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -1090,6 +1033,7 @@ class SelectNextFigureAlternatingEvaluator(BaseEvaluator):
 
         return circles
 
+
 class LocatePointInOverlappingAreaEvaluator(BaseEvaluator):
     """
     G-136: Locate points in overlapping region of two shapes.
@@ -1102,10 +1046,10 @@ class LocatePointInOverlappingAreaEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'overlap_identification': 0.30,
-        'point_containment': 0.35,
-        'marking_completeness': 0.20,
-        'marking_accuracy': 0.15
+        "overlap_identification": 0.30,
+        "point_containment": 0.35,
+        "marking_completeness": 0.20,
+        "marking_accuracy": 0.15,
     }
 
     def _evaluate_task_specific(
@@ -1114,7 +1058,7 @@ class LocatePointInOverlappingAreaEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         if len(video_frames) < 2:
             return 0.0
@@ -1133,25 +1077,19 @@ class LocatePointInOverlappingAreaEvaluator(BaseEvaluator):
         marked_circles = self._detect_circles(final_frame)
 
         # 1. Overlap identification (30%)
-        scores['overlap_identification'] = self._evaluate_overlap_understanding(
-            overlap_region
-        )
+        scores["overlap_identification"] = self._evaluate_overlap_understanding(overlap_region)
 
         # 2. Point containment (35%)
-        scores['point_containment'] = self._evaluate_point_marking(
-            marked_circles, overlap_region, all_points
-        )
+        scores["point_containment"] = self._evaluate_point_marking(marked_circles, overlap_region, all_points)
 
         # 3. Marking completeness (20%) - compare with GT marking count
         gt_marked_circles = self._detect_circles(gt_final_frame) if gt_final_frame is not None else []
-        scores['marking_completeness'] = self._evaluate_completeness(
+        scores["marking_completeness"] = self._evaluate_completeness(
             marked_circles, overlap_region, all_points, gt_marked_circles
         )
 
         # 4. Marking accuracy (15%)
-        scores['marking_accuracy'] = self._evaluate_marking_accuracy(
-            marked_circles, overlap_region
-        )
+        scores["marking_accuracy"] = self._evaluate_marking_accuracy(marked_circles, overlap_region)
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -1174,7 +1112,7 @@ class LocatePointInOverlappingAreaEvaluator(BaseEvaluator):
         self,
         marked_circles: list[tuple[int, int]],
         overlap_region: np.ndarray | None,
-        all_points: list[tuple[int, int]]
+        all_points: list[tuple[int, int]],
     ) -> float:
         """Rule-based: Check if marked points are in overlap region."""
         if len(marked_circles) == 0:
@@ -1201,7 +1139,7 @@ class LocatePointInOverlappingAreaEvaluator(BaseEvaluator):
         marked_circles: list[tuple[int, int]],
         overlap_region: np.ndarray | None,
         all_points: list[tuple[int, int]],
-        gt_marked_circles: list[tuple[int, int]] = None
+        gt_marked_circles: list[tuple[int, int]] = None,
     ) -> float:
         """Rule-based: Check marking completeness compared to GT."""
         if len(marked_circles) == 0:
@@ -1213,7 +1151,7 @@ class LocatePointInOverlappingAreaEvaluator(BaseEvaluator):
             matched = 0
             for gt_circle in gt_marked_circles:
                 for gen_circle in marked_circles:
-                    dist = np.sqrt((gen_circle[0] - gt_circle[0])**2 + (gen_circle[1] - gt_circle[1])**2)
+                    dist = np.sqrt((gen_circle[0] - gt_circle[0]) ** 2 + (gen_circle[1] - gt_circle[1]) ** 2)
                     if dist < 50:  # Within matching distance
                         matched += 1
                         break
@@ -1246,7 +1184,7 @@ class LocatePointInOverlappingAreaEvaluator(BaseEvaluator):
         marked_count = 0
         for point in points_in_overlap:
             for circle in marked_circles:
-                dist = np.sqrt((circle[0] - point[0])**2 + (circle[1] - point[1])**2)
+                dist = np.sqrt((circle[0] - point[0]) ** 2 + (circle[1] - point[1]) ** 2)
                 if dist < 40:
                     marked_count += 1
                     break
@@ -1259,9 +1197,7 @@ class LocatePointInOverlappingAreaEvaluator(BaseEvaluator):
         return 0.3
 
     def _evaluate_marking_accuracy(
-        self,
-        marked_circles: list[tuple[int, int]],
-        overlap_region: np.ndarray | None
+        self, marked_circles: list[tuple[int, int]], overlap_region: np.ndarray | None
     ) -> float:
         """Rule-based: Check for false positives (precision)."""
         if len(marked_circles) == 0:
@@ -1309,9 +1245,9 @@ class LocatePointInOverlappingAreaEvaluator(BaseEvaluator):
         # Detect different colored shapes and find their intersection
         color_ranges = [
             ([100, 50, 50], [130, 255, 255]),  # Blue
-            ([15, 50, 50], [45, 255, 255]),     # Yellow/Orange
-            ([140, 50, 50], [170, 255, 255]),   # Magenta/Pink
-            ([35, 50, 50], [85, 255, 255]),     # Green
+            ([15, 50, 50], [45, 255, 255]),  # Yellow/Orange
+            ([140, 50, 50], [170, 255, 255]),  # Magenta/Pink
+            ([35, 50, 50], [85, 255, 255]),  # Green
         ]
 
         masks = []
@@ -1385,10 +1321,10 @@ class LocateTopmostFigureEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'z_order_identification': 0.45,
-        'outline_accuracy': 0.30,
-        'marking_uniqueness': 0.15,
-        'visual_clarity': 0.10
+        "z_order_identification": 0.45,
+        "outline_accuracy": 0.30,
+        "marking_uniqueness": 0.15,
+        "visual_clarity": 0.10,
     }
 
     def _evaluate_task_specific(
@@ -1397,7 +1333,7 @@ class LocateTopmostFigureEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         if len(video_frames) < 2:
             return 0.0
@@ -1407,27 +1343,21 @@ class LocateTopmostFigureEvaluator(BaseEvaluator):
         final_frame = video_frames[-1]
 
         # 1. Z-order identification (45%)
-        scores['z_order_identification'] = self._evaluate_z_order(
-            first_frame, final_frame
-        )
+        scores["z_order_identification"] = self._evaluate_z_order(first_frame, final_frame)
 
         # 2. Outline accuracy (30%)
-        scores['outline_accuracy'] = self._evaluate_outline(final_frame)
+        scores["outline_accuracy"] = self._evaluate_outline(final_frame)
 
         # 3. Marking uniqueness (15%)
-        scores['marking_uniqueness'] = self._evaluate_uniqueness(final_frame)
+        scores["marking_uniqueness"] = self._evaluate_uniqueness(final_frame)
 
         # 4. Visual clarity (10%)
-        scores['visual_clarity'] = self._evaluate_clarity(final_frame)
+        scores["visual_clarity"] = self._evaluate_clarity(final_frame)
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
-    def _evaluate_z_order(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_z_order(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if the topmost (least occluded) shape is outlined."""
         # Detect the topmost shape from first frame
         topmost_center = self._find_topmost_shape_center(first_frame)
@@ -1444,8 +1374,7 @@ class LocateTopmostFigureEvaluator(BaseEvaluator):
             return 0.3
 
         # Check if outline is around topmost shape
-        dist = np.sqrt((outline_center[0] - topmost_center[0])**2 +
-                      (outline_center[1] - topmost_center[1])**2)
+        dist = np.sqrt((outline_center[0] - topmost_center[0]) ** 2 + (outline_center[1] - topmost_center[1]) ** 2)
 
         if dist < 50:
             return 1.0
@@ -1469,7 +1398,7 @@ class LocateTopmostFigureEvaluator(BaseEvaluator):
 
         if perimeter > 100 and area > 500:
             # Check circularity (how well-formed the outline is)
-            circularity = 4 * np.pi * area / (perimeter ** 2 + 1e-6)
+            circularity = 4 * np.pi * area / (perimeter**2 + 1e-6)
             if circularity > 0.1:  # Reasonable shape
                 return 1.0
             return 0.7
@@ -1578,10 +1507,10 @@ class IdentifyUniqueFigureEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'shape_recognition': 0.40,
-        'marking_precision': 0.35,
-        'marking_quality': 0.15,
-        'scene_preservation': 0.10
+        "shape_recognition": 0.40,
+        "marking_precision": 0.35,
+        "marking_quality": 0.15,
+        "scene_preservation": 0.10,
     }
 
     def _evaluate_task_specific(
@@ -1590,7 +1519,7 @@ class IdentifyUniqueFigureEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         if len(video_frames) < 2:
             return 0.0
@@ -1600,29 +1529,21 @@ class IdentifyUniqueFigureEvaluator(BaseEvaluator):
         final_frame = video_frames[-1]
 
         # 1. Shape recognition (40%)
-        scores['shape_recognition'] = self._evaluate_recognition(
-            first_frame, final_frame
-        )
+        scores["shape_recognition"] = self._evaluate_recognition(first_frame, final_frame)
 
         # 2. Marking precision (35%)
-        scores['marking_precision'] = self._evaluate_marking_position(final_frame)
+        scores["marking_precision"] = self._evaluate_marking_position(final_frame)
 
         # 3. Marking quality (15%)
-        scores['marking_quality'] = self._evaluate_marking_quality(final_frame)
+        scores["marking_quality"] = self._evaluate_marking_quality(final_frame)
 
         # 4. Scene preservation (10%)
-        scores['scene_preservation'] = self._evaluate_scene_preservation(
-            first_frame, final_frame
-        )
+        scores["scene_preservation"] = self._evaluate_scene_preservation(first_frame, final_frame)
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
-    def _evaluate_recognition(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_recognition(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if unique shape is identified."""
         # Find the unique shape from first frame
         unique_shape_center = self._find_unique_shape(first_frame)
@@ -1638,8 +1559,7 @@ class IdentifyUniqueFigureEvaluator(BaseEvaluator):
             return 0.5
 
         # Check if circle marks the unique shape
-        dist = np.sqrt((circle[0] - unique_shape_center[0])**2 +
-                      (circle[1] - unique_shape_center[1])**2)
+        dist = np.sqrt((circle[0] - unique_shape_center[0]) ** 2 + (circle[1] - unique_shape_center[1]) ** 2)
 
         if dist < 30:
             return 1.0
@@ -1685,7 +1605,7 @@ class IdentifyUniqueFigureEvaluator(BaseEvaluator):
         roi_y = max(0, y - r - 10)
         roi_x = max(0, x - r - 10)
         h, w = final_frame.shape[:2]
-        roi = hsv[roi_y:min(h, y+r+10), roi_x:min(w, x+r+10)]
+        roi = hsv[roi_y : min(h, y + r + 10), roi_x : min(w, x + r + 10)]
 
         if roi.size > 0:
             lower_red1 = np.array([0, 100, 100])
@@ -1701,11 +1621,7 @@ class IdentifyUniqueFigureEvaluator(BaseEvaluator):
 
         return 0.6 * size_score + 0.4 * color_score
 
-    def _evaluate_scene_preservation(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_scene_preservation(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if original shapes are preserved."""
         # Count shapes in first frame
         first_shapes = self._count_shapes(first_frame)
@@ -1758,6 +1674,7 @@ class IdentifyUniqueFigureEvaluator(BaseEvaluator):
 
         # Check for vertex count outlier
         from collections import Counter
+
         vertex_counter = Counter(vertex_counts)
 
         for shape in shapes:
@@ -1832,10 +1749,10 @@ class CircleLargestNumericalValueEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'numerical_identification': 0.40,
-        'circle_position': 0.30,
-        'circle_style': 0.20,
-        'animation_quality': 0.10
+        "numerical_identification": 0.40,
+        "circle_position": 0.30,
+        "circle_style": 0.20,
+        "animation_quality": 0.10,
     }
 
     def _evaluate_task_specific(
@@ -1844,7 +1761,7 @@ class CircleLargestNumericalValueEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         if len(video_frames) < 2:
             return 0.0
@@ -1854,27 +1771,21 @@ class CircleLargestNumericalValueEvaluator(BaseEvaluator):
         final_frame = video_frames[-1]
 
         # 1. Numerical identification (40%)
-        scores['numerical_identification'] = self._evaluate_number_selection(
-            first_frame, final_frame
-        )
+        scores["numerical_identification"] = self._evaluate_number_selection(first_frame, final_frame)
 
         # 2. Circle position (30%)
-        scores['circle_position'] = self._evaluate_circle_position(final_frame)
+        scores["circle_position"] = self._evaluate_circle_position(final_frame)
 
         # 3. Circle style (20%)
-        scores['circle_style'] = self._evaluate_circle_style(final_frame)
+        scores["circle_style"] = self._evaluate_circle_style(final_frame)
 
         # 4. Animation quality (10%)
-        scores['animation_quality'] = self._evaluate_animation_quality(video_frames)
+        scores["animation_quality"] = self._evaluate_animation_quality(video_frames)
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
-    def _evaluate_number_selection(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_number_selection(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if the largest number is circled."""
         # Detect text regions (numbers) from first frame
         number_regions = self._detect_number_regions(first_frame)
@@ -1890,9 +1801,9 @@ class CircleLargestNumericalValueEvaluator(BaseEvaluator):
 
         # Find which number region is circled
         circled_region = None
-        min_dist = float('inf')
+        min_dist = float("inf")
         for region in number_regions:
-            dist = np.sqrt((region[0] - circle[0])**2 + (region[1] - circle[1])**2)
+            dist = np.sqrt((region[0] - circle[0]) ** 2 + (region[1] - circle[1]) ** 2)
             if dist < min_dist:
                 min_dist = dist
                 circled_region = region
@@ -1950,7 +1861,7 @@ class CircleLargestNumericalValueEvaluator(BaseEvaluator):
             return 0.5
 
         radii = []
-        for frame in video_frames[len(video_frames)//3:]:
+        for frame in video_frames[len(video_frames) // 3 :]:
             circle = self._detect_red_circle(frame)
             if circle:
                 radii.append(circle[2])
@@ -1959,7 +1870,7 @@ class CircleLargestNumericalValueEvaluator(BaseEvaluator):
             return 0.5
 
         # Check for smooth increase
-        smooth_count = sum(1 for i in range(1, len(radii)) if radii[i] >= radii[i-1] * 0.95)
+        smooth_count = sum(1 for i in range(1, len(radii)) if radii[i] >= radii[i - 1] * 0.95)
         smoothness = smooth_count / (len(radii) - 1)
 
         return smoothness
@@ -2031,10 +1942,10 @@ class MarkSecondLargestShapeEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'size_recognition': 0.40,
-        'marking_precision': 0.35,
-        'marking_quality': 0.15,
-        'scene_preservation': 0.10
+        "size_recognition": 0.40,
+        "marking_precision": 0.35,
+        "marking_quality": 0.15,
+        "scene_preservation": 0.10,
     }
 
     def _evaluate_task_specific(
@@ -2043,7 +1954,7 @@ class MarkSecondLargestShapeEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         if len(video_frames) < 2:
             return 0.0
@@ -2057,21 +1968,21 @@ class MarkSecondLargestShapeEvaluator(BaseEvaluator):
         if marking_count == 0:
             # No marking at all - task failed
             self._last_task_details = {
-                'size_recognition': 0.0,
-                'marking_precision': 0.0,
-                'marking_quality': 0.0,
-                'scene_preservation': 0.0,
-                'error': 'no_marking_found'
+                "size_recognition": 0.0,
+                "marking_precision": 0.0,
+                "marking_quality": 0.0,
+                "scene_preservation": 0.0,
+                "error": "no_marking_found",
             }
             return 0.0
         elif marking_count > 1:
             # Multiple markings - violation of "only one mark" rule
             self._last_task_details = {
-                'size_recognition': 0.0,
-                'marking_precision': 0.0,
-                'marking_quality': 0.0,
-                'scene_preservation': 0.0,
-                'error': f'multiple_markings_found: {marking_count}'
+                "size_recognition": 0.0,
+                "marking_precision": 0.0,
+                "marking_quality": 0.0,
+                "scene_preservation": 0.0,
+                "error": f"multiple_markings_found: {marking_count}",
             }
             return 0.0
 
@@ -2082,39 +1993,35 @@ class MarkSecondLargestShapeEvaluator(BaseEvaluator):
         if len(final_shapes_no_red) > len(first_shapes):
             # New objects generated - violation
             self._last_task_details = {
-                'size_recognition': 0.0,
-                'marking_precision': 0.0,
-                'marking_quality': 0.0,
-                'scene_preservation': 0.0,
-                'error': f'new_objects_generated: first={len(first_shapes)}, final={len(final_shapes_no_red)}'
+                "size_recognition": 0.0,
+                "marking_precision": 0.0,
+                "marking_quality": 0.0,
+                "scene_preservation": 0.0,
+                "error": f"new_objects_generated: first={len(first_shapes)}, final={len(final_shapes_no_red)}",
             }
             return 0.0
 
         # 1. Size recognition (40%) - CRITICAL: Is the CORRECT shape marked?
-        size_recognition_score = self._evaluate_size_recognition(
-            first_frame, final_frame
-        )
-        scores['size_recognition'] = size_recognition_score
+        size_recognition_score = self._evaluate_size_recognition(first_frame, final_frame)
+        scores["size_recognition"] = size_recognition_score
 
         # CRITICAL: If wrong shape is marked, other scores should be penalized
         correct_shape_marked = size_recognition_score > 0.5
 
         # 2. Marking precision (35%) - Only counts if correct shape is marked
         if correct_shape_marked:
-            scores['marking_precision'] = self._evaluate_marking_precision(final_frame)
+            scores["marking_precision"] = self._evaluate_marking_precision(final_frame)
         else:
-            scores['marking_precision'] = 0.0  # Wrong shape - no credit for marking
+            scores["marking_precision"] = 0.0  # Wrong shape - no credit for marking
 
         # 3. Marking quality (15%) - Only counts if correct shape is marked
         if correct_shape_marked:
-            scores['marking_quality'] = self._evaluate_marking_quality(final_frame)
+            scores["marking_quality"] = self._evaluate_marking_quality(final_frame)
         else:
-            scores['marking_quality'] = 0.0  # Wrong shape - no credit
+            scores["marking_quality"] = 0.0  # Wrong shape - no credit
 
         # 4. Scene preservation (10%)
-        scores['scene_preservation'] = self._evaluate_scene_preservation(
-            first_frame, final_frame
-        )
+        scores["scene_preservation"] = self._evaluate_scene_preservation(first_frame, final_frame)
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -2144,11 +2051,7 @@ class MarkSecondLargestShapeEvaluator(BaseEvaluator):
         frame_no_red[red_mask > 0] = [255, 255, 255]
         return self._detect_shapes_with_area(frame_no_red)
 
-    def _evaluate_size_recognition(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_size_recognition(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if second largest shape is correctly identified."""
         # Find shapes sorted by area
         shapes = self._detect_shapes_with_area(first_frame)
@@ -2172,8 +2075,9 @@ class MarkSecondLargestShapeEvaluator(BaseEvaluator):
             return 0.0  # STRICT: Can't determine marking position
 
         # Check if marking is on second largest
-        dist = np.sqrt((marking_center[0] - second_largest_center[0])**2 +
-                      (marking_center[1] - second_largest_center[1])**2)
+        dist = np.sqrt(
+            (marking_center[0] - second_largest_center[0]) ** 2 + (marking_center[1] - second_largest_center[1]) ** 2
+        )
 
         if dist < 40:
             return 1.0
@@ -2213,11 +2117,7 @@ class MarkSecondLargestShapeEvaluator(BaseEvaluator):
         else:
             return perimeter / 100
 
-    def _evaluate_scene_preservation(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray
-    ) -> float:
+    def _evaluate_scene_preservation(self, first_frame: np.ndarray, final_frame: np.ndarray) -> float:
         """Rule-based: Check if original shapes are preserved - NO NEW OBJECTS."""
         first_count = len(self._detect_shapes_with_area(first_frame))
 
@@ -2291,10 +2191,10 @@ class SelectLongestPolygonSideEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'longest_side_identification': 0.50,
-        'marking_position': 0.25,
-        'marking_uniqueness': 0.15,
-        'visual_quality': 0.10
+        "longest_side_identification": 0.50,
+        "marking_position": 0.25,
+        "marking_uniqueness": 0.15,
+        "visual_quality": 0.10,
     }
 
     def _evaluate_task_specific(
@@ -2303,7 +2203,7 @@ class SelectLongestPolygonSideEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         if len(video_frames) < 2:
             return 0.0
@@ -2313,27 +2213,24 @@ class SelectLongestPolygonSideEvaluator(BaseEvaluator):
         final_frame = video_frames[-1]
 
         # 1. Longest side identification (50%)
-        scores['longest_side_identification'] = self._evaluate_side_identification(
+        scores["longest_side_identification"] = self._evaluate_side_identification(
             first_frame, final_frame, gt_final_frame
         )
 
         # 2. Marking position (25%)
-        scores['marking_position'] = self._evaluate_marking_position(final_frame)
+        scores["marking_position"] = self._evaluate_marking_position(final_frame)
 
         # 3. Marking uniqueness (15%)
-        scores['marking_uniqueness'] = self._evaluate_marking_uniqueness(final_frame)
+        scores["marking_uniqueness"] = self._evaluate_marking_uniqueness(final_frame)
 
         # 4. Visual quality (10%)
-        scores['visual_quality'] = self._evaluate_visual_quality_marking(final_frame)
+        scores["visual_quality"] = self._evaluate_visual_quality_marking(final_frame)
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
     def _evaluate_side_identification(
-        self,
-        first_frame: np.ndarray,
-        final_frame: np.ndarray,
-        gt_final_frame: np.ndarray | None = None
+        self, first_frame: np.ndarray, final_frame: np.ndarray, gt_final_frame: np.ndarray | None = None
     ) -> float:
         """Rule-based: Check if the correct side is identified."""
         # Detect marking in final frame
@@ -2346,8 +2243,7 @@ class SelectLongestPolygonSideEvaluator(BaseEvaluator):
         if gt_final_frame is not None:
             gt_circle = self._detect_marking_circle(gt_final_frame)
             if gt_circle is not None:
-                dist = np.sqrt((circle[0] - gt_circle[0])**2 +
-                              (circle[1] - gt_circle[1])**2)
+                dist = np.sqrt((circle[0] - gt_circle[0]) ** 2 + (circle[1] - gt_circle[1]) ** 2)
                 if dist < 30:
                     return 1.0
                 elif dist < 60:
@@ -2364,8 +2260,7 @@ class SelectLongestPolygonSideEvaluator(BaseEvaluator):
             return 0.5  # Can't verify
 
         # Check if circle is near the longest edge midpoint
-        dist = np.sqrt((circle[0] - longest_edge_midpoint[0])**2 +
-                      (circle[1] - longest_edge_midpoint[1])**2)
+        dist = np.sqrt((circle[0] - longest_edge_midpoint[0]) ** 2 + (circle[1] - longest_edge_midpoint[1]) ** 2)
 
         if dist < 30:
             return 1.0
@@ -2445,7 +2340,7 @@ class SelectLongestPolygonSideEvaluator(BaseEvaluator):
             p1 = approx[i][0]
             p2 = approx[(i + 1) % len(approx)][0]
 
-            length = np.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)
+            length = np.sqrt((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2)
 
             if length > max_length:
                 max_length = length
@@ -2501,14 +2396,14 @@ class SelectLongestPolygonSideEvaluator(BaseEvaluator):
 
 # Export all evaluators
 OUT_OF_DOMAIN_50_EVALUATORS = {
-    'G-24_separate_objects_no_spin_data-generator': SeparateObjectsNoSpinEvaluator,
-    'G-47_multiple_keys_for_one_door_data-generator': MultipleKeysForOneDoorEvaluator,
-    'G-54_connecting_color_data-generator': ConnectingColorEvaluator,
-    'G-135_select_next_figure_small_large_alternating_sequence_data-generator': SelectNextFigureAlternatingEvaluator,
-    'G-136_locate_point_in_overlapping_area_data-generator': LocatePointInOverlappingAreaEvaluator,
-    'G-140_locate_topmost_unobscured_figure_data-generator': LocateTopmostFigureEvaluator,
-    'G-147_identify_unique_figure_in_uniform_set_data-generator': IdentifyUniqueFigureEvaluator,
-    'G-160_circle_largest_numerical_value_data-generator': CircleLargestNumericalValueEvaluator,
-    'G-161_mark_second_largest_shape_data-generator': MarkSecondLargestShapeEvaluator,
-    'G-167_select_longest_polygon_side_data-generator': SelectLongestPolygonSideEvaluator,
+    "G-24_separate_objects_no_spin_data-generator": SeparateObjectsNoSpinEvaluator,
+    "G-47_multiple_keys_for_one_door_data-generator": MultipleKeysForOneDoorEvaluator,
+    "G-54_connecting_color_data-generator": ConnectingColorEvaluator,
+    "G-135_select_next_figure_small_large_alternating_sequence_data-generator": SelectNextFigureAlternatingEvaluator,
+    "G-136_locate_point_in_overlapping_area_data-generator": LocatePointInOverlappingAreaEvaluator,
+    "G-140_locate_topmost_unobscured_figure_data-generator": LocateTopmostFigureEvaluator,
+    "G-147_identify_unique_figure_in_uniform_set_data-generator": IdentifyUniqueFigureEvaluator,
+    "G-160_circle_largest_numerical_value_data-generator": CircleLargestNumericalValueEvaluator,
+    "G-161_mark_second_largest_shape_data-generator": MarkSecondLargestShapeEvaluator,
+    "G-167_select_longest_polygon_side_data-generator": SelectLongestPolygonSideEvaluator,
 }

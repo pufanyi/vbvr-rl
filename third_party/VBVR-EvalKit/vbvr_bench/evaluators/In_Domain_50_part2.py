@@ -2,7 +2,6 @@
 Specific evaluators for In-Domain_50 tasks (Part 2).
 """
 
-
 import cv2
 import numpy as np
 
@@ -21,12 +20,7 @@ class ChartExtremeEvaluator(BaseEvaluator):
     - Chart fidelity (10%): Chart elements preserved
     """
 
-    TASK_WEIGHTS = {
-        'extreme_id': 0.40,
-        'marking': 0.35,
-        'visual': 0.15,
-        'fidelity': 0.10
-    }
+    TASK_WEIGHTS = {"extreme_id": 0.40, "marking": 0.35, "visual": 0.15, "fidelity": 0.10}
 
     def _evaluate_task_specific(
         self,
@@ -34,7 +28,7 @@ class ChartExtremeEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate chart extreme task."""
         scores = {}
@@ -55,19 +49,19 @@ class ChartExtremeEvaluator(BaseEvaluator):
 
         # 1. Extreme identification (40%): Check if red rectangle is in correct location
         extreme_score = self._evaluate_extreme_identification(gen_red_regions, gt_red_regions, last_frame, gt_last)
-        scores['extreme_id'] = extreme_score
+        scores["extreme_id"] = extreme_score
 
         # 2. Marking correctness (35%): Red rectangle position and completeness
         marking_score = self._evaluate_marking(gen_red_regions, gt_red_regions)
-        scores['marking'] = marking_score
+        scores["marking"] = marking_score
 
         # 3. Visual normality (15%): Border completeness
         visual_score = self._evaluate_visual_normality(last_frame, gen_red_regions)
-        scores['visual'] = visual_score
+        scores["visual"] = visual_score
 
         # 4. Chart fidelity (10%): Chart elements preserved
         fidelity_score = self._evaluate_chart_fidelity(last_frame, gt_last, gen_red_regions, gt_red_regions)
-        scores['fidelity'] = fidelity_score
+        scores["fidelity"] = fidelity_score
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -101,39 +95,42 @@ class ChartExtremeEvaluator(BaseEvaluator):
 
             # Get center
             M = cv2.moments(contour)
-            if M['m00'] > 0:
-                cx = int(M['m10'] / M['m00'])
-                cy = int(M['m01'] / M['m00'])
+            if M["m00"] > 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
             else:
                 cx, cy = x + w // 2, y + h // 2
 
-            regions.append({
-                'bbox': (x, y, w, h),
-                'center': (cx, cy),
-                'area': area,
-                'contour': contour,
-                'is_border': fill_ratio < 0.5  # Border has low fill ratio
-            })
+            regions.append(
+                {
+                    "bbox": (x, y, w, h),
+                    "center": (cx, cy),
+                    "area": area,
+                    "contour": contour,
+                    "is_border": fill_ratio < 0.5,  # Border has low fill ratio
+                }
+            )
 
         return regions
 
-    def _evaluate_extreme_identification(self, gen_regions: list[dict], gt_regions: list[dict],
-                                         gen_frame: np.ndarray, gt_frame: np.ndarray) -> float:
+    def _evaluate_extreme_identification(
+        self, gen_regions: list[dict], gt_regions: list[dict], gen_frame: np.ndarray, gt_frame: np.ndarray
+    ) -> float:
         """Check if the correct extreme element is marked."""
         if not gen_regions or not gt_regions:
             return 0.0  # STRICT: Must have marking in both
 
         # Find the main red marking in both
-        gen_main = max(gen_regions, key=lambda r: r['area'])
-        gt_main = max(gt_regions, key=lambda r: r['area'])
+        gen_main = max(gen_regions, key=lambda r: r["area"])
+        gt_main = max(gt_regions, key=lambda r: r["area"])
 
         # Compare centers
-        gen_center = gen_main['center']
-        gt_center = gt_main['center']
+        gen_center = gen_main["center"]
+        gt_center = gt_main["center"]
 
         # Calculate distance normalized by frame size
-        frame_diag = np.sqrt(gen_frame.shape[0]**2 + gen_frame.shape[1]**2)
-        distance = np.sqrt((gen_center[0] - gt_center[0])**2 + (gen_center[1] - gt_center[1])**2)
+        frame_diag = np.sqrt(gen_frame.shape[0] ** 2 + gen_frame.shape[1] ** 2)
+        distance = np.sqrt((gen_center[0] - gt_center[0]) ** 2 + (gen_center[1] - gt_center[1]) ** 2)
         normalized_dist = distance / frame_diag
 
         # STRICTER: Score based on distance
@@ -153,12 +150,12 @@ class ChartExtremeEvaluator(BaseEvaluator):
         if not gt_regions:
             return 0.0  # STRICT: No GT to compare
 
-        gen_main = max(gen_regions, key=lambda r: r['area'])
-        gt_main = max(gt_regions, key=lambda r: r['area'])
+        gen_main = max(gen_regions, key=lambda r: r["area"])
+        gt_main = max(gt_regions, key=lambda r: r["area"])
 
         # Compare bounding boxes using IoU
-        gen_bbox = gen_main['bbox']
-        gt_bbox = gt_main['bbox']
+        gen_bbox = gen_main["bbox"]
+        gt_bbox = gt_main["bbox"]
 
         # Calculate IoU
         x1 = max(gen_bbox[0], gt_bbox[0])
@@ -180,10 +177,10 @@ class ChartExtremeEvaluator(BaseEvaluator):
         if not red_regions:
             return 0.0
 
-        main_region = max(red_regions, key=lambda r: r['area'])
+        main_region = max(red_regions, key=lambda r: r["area"])
 
         # Check if it forms a complete rectangle (4 sides)
-        contour = main_region['contour']
+        contour = main_region["contour"]
         epsilon = 0.02 * cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(contour, epsilon, True)
 
@@ -195,17 +192,18 @@ class ChartExtremeEvaluator(BaseEvaluator):
         else:
             return 0.4
 
-    def _evaluate_chart_fidelity(self, gen_frame: np.ndarray, gt_frame: np.ndarray,
-                                  gen_regions: list[dict], gt_regions: list[dict]) -> float:
+    def _evaluate_chart_fidelity(
+        self, gen_frame: np.ndarray, gt_frame: np.ndarray, gen_regions: list[dict], gt_regions: list[dict]
+    ) -> float:
         """Evaluate if chart elements are preserved."""
         # Mask out red regions and compare the rest
         gen_mask = np.ones(gen_frame.shape[:2], dtype=np.uint8) * 255
         gt_mask = np.ones(gt_frame.shape[:2], dtype=np.uint8) * 255
 
         for region in gen_regions:
-            cv2.drawContours(gen_mask, [region['contour']], -1, 0, -1)
+            cv2.drawContours(gen_mask, [region["contour"]], -1, 0, -1)
         for region in gt_regions:
-            cv2.drawContours(gt_mask, [region['contour']], -1, 0, -1)
+            cv2.drawContours(gt_mask, [region["contour"]], -1, 0, -1)
 
         # Compare non-red regions
         combined_mask = gen_mask & gt_mask
@@ -234,9 +232,9 @@ class DirectedGraphNavigationEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'completion': 0.35,           # Agent reaches red endpoint
-        'circles_preserved': 0.50,    # Circle colors unchanged - MORE IMPORTANT
-        'path_quality': 0.15          # Follows graph structure
+        "completion": 0.35,  # Agent reaches red endpoint
+        "circles_preserved": 0.50,  # Circle colors unchanged - MORE IMPORTANT
+        "path_quality": 0.15,  # Follows graph structure
     }
 
     def _count_circle_colors(self, frame: np.ndarray) -> tuple[int, int]:
@@ -265,7 +263,7 @@ class DirectedGraphNavigationEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate directed graph navigation task.
 
@@ -298,32 +296,31 @@ class DirectedGraphNavigationEvaluator(BaseEvaluator):
 
         if total_change > 1.0:  # More than 100% increase
             # Circle colors changed significantly - task failed
-            scores['circles_preserved'] = 0.0
-            scores['completion'] = 0.0
-            scores['path_quality'] = 0.0
+            scores["circles_preserved"] = 0.0
+            scores["completion"] = 0.0
+            scores["path_quality"] = 0.0
             self._last_task_details = scores
-            self._last_task_details['circles_changed'] = True
+            self._last_task_details["circles_changed"] = True
             return 0.0
         else:
-            scores['circles_preserved'] = max(0, 1.0 - total_change)
+            scores["circles_preserved"] = max(0, 1.0 - total_change)
 
         # Detect nodes and agent
         nodes_first = self._detect_nodes(first_frame)
         gen_agent_final = self._detect_agent(last_frame)
 
         # 1. Completion: Check if agent reached red endpoint
-        if gen_agent_final is not None and nodes_first.get('end') is not None:
-            end_pos = nodes_first['end']
-            dist = np.sqrt((gen_agent_final[0] - end_pos[0])**2 +
-                          (gen_agent_final[1] - end_pos[1])**2)
+        if gen_agent_final is not None and nodes_first.get("end") is not None:
+            end_pos = nodes_first["end"]
+            dist = np.sqrt((gen_agent_final[0] - end_pos[0]) ** 2 + (gen_agent_final[1] - end_pos[1]) ** 2)
             if dist < 50:
-                scores['completion'] = 1.0
+                scores["completion"] = 1.0
             elif dist < 100:
-                scores['completion'] = 0.3  # STRICT: Not at endpoint
+                scores["completion"] = 0.3  # STRICT: Not at endpoint
             else:
-                scores['completion'] = 0.0  # STRICT: Failed to reach endpoint
+                scores["completion"] = 0.0  # STRICT: Failed to reach endpoint
         else:
-            scores['completion'] = 0.0
+            scores["completion"] = 0.0
 
         # 2. Path quality: Check if agent followed graph structure
         agent_positions = self._track_agent(video_frames)
@@ -331,13 +328,13 @@ class DirectedGraphNavigationEvaluator(BaseEvaluator):
             # Check for smooth movement (no teleporting)
             large_jumps = 0
             for i in range(1, len(agent_positions)):
-                dx = abs(agent_positions[i][0] - agent_positions[i-1][0])
-                dy = abs(agent_positions[i][1] - agent_positions[i-1][1])
+                dx = abs(agent_positions[i][0] - agent_positions[i - 1][0])
+                dy = abs(agent_positions[i][1] - agent_positions[i - 1][1])
                 if dx > 150 or dy > 150:
                     large_jumps += 1
-            scores['path_quality'] = max(0, 1.0 - large_jumps * 0.3)
+            scores["path_quality"] = max(0, 1.0 - large_jumps * 0.3)
         else:
-            scores['path_quality'] = 0.0
+            scores["path_quality"] = 0.0
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -362,9 +359,9 @@ class DirectedGraphNavigationEvaluator(BaseEvaluator):
         largest = max(contours, key=cv2.contourArea)
         M = cv2.moments(largest)
 
-        if M['m00'] > 0:
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
+        if M["m00"] > 0:
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
             return (cx, cy)
 
         return None
@@ -382,7 +379,7 @@ class DirectedGraphNavigationEvaluator(BaseEvaluator):
         """Detect graph nodes (green=start, red=end, white=intermediate)."""
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-        nodes = {'start': None, 'end': None, 'intermediate': []}
+        nodes = {"start": None, "end": None, "intermediate": []}
 
         # Green (start node)
         lower_green = np.array([35, 100, 100])
@@ -393,8 +390,8 @@ class DirectedGraphNavigationEvaluator(BaseEvaluator):
         for contour in contours:
             if cv2.contourArea(contour) > 200:
                 M = cv2.moments(contour)
-                if M['m00'] > 0:
-                    nodes['start'] = (int(M['m10'] / M['m00']), int(M['m01'] / M['m00']))
+                if M["m00"] > 0:
+                    nodes["start"] = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
                 break
 
         # Red (end node)
@@ -408,22 +405,22 @@ class DirectedGraphNavigationEvaluator(BaseEvaluator):
         for contour in contours:
             if cv2.contourArea(contour) > 200:
                 M = cv2.moments(contour)
-                if M['m00'] > 0:
-                    nodes['end'] = (int(M['m10'] / M['m00']), int(M['m01'] / M['m00']))
+                if M["m00"] > 0:
+                    nodes["end"] = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
                 break
 
         return nodes
 
     def _evaluate_path_length(self, agent_positions: list[tuple[int, int]], nodes: dict) -> float:
         """Evaluate if agent took shortest path."""
-        if not agent_positions or not nodes.get('end'):
+        if not agent_positions or not nodes.get("end"):
             return 0.0
 
         # Check if agent reached end node
         final_pos = agent_positions[-1]
-        end_node = nodes['end']
+        end_node = nodes["end"]
 
-        dist_to_end = np.sqrt((final_pos[0] - end_node[0])**2 + (final_pos[1] - end_node[1])**2)
+        dist_to_end = np.sqrt((final_pos[0] - end_node[0]) ** 2 + (final_pos[1] - end_node[1]) ** 2)
 
         # If agent reached end (within threshold)
         if dist_to_end < 50:
@@ -431,7 +428,7 @@ class DirectedGraphNavigationEvaluator(BaseEvaluator):
             steps = 0
             prev_pos = agent_positions[0]
             for pos in agent_positions[1:]:
-                dist = np.sqrt((pos[0] - prev_pos[0])**2 + (pos[1] - prev_pos[1])**2)
+                dist = np.sqrt((pos[0] - prev_pos[0]) ** 2 + (pos[1] - prev_pos[1]) ** 2)
                 if dist > 20:  # Significant movement
                     steps += 1
                     prev_pos = pos
@@ -460,18 +457,21 @@ class DirectedGraphNavigationEvaluator(BaseEvaluator):
         total_moves = 0
 
         for i in range(1, len(agent_positions)):
-            dx = agent_positions[i][0] - agent_positions[i-1][0]
-            dy = agent_positions[i][1] - agent_positions[i-1][1]
+            dx = agent_positions[i][0] - agent_positions[i - 1][0]
+            dy = agent_positions[i][1] - agent_positions[i - 1][1]
 
             if abs(dx) > 10 or abs(dy) > 10:  # Significant movement
                 total_moves += 1
                 # Generally forward progress (towards end)
-                if nodes.get('end') and nodes.get('start'):
+                if nodes.get("end") and nodes.get("start"):
                     # Check if moving towards end
-                    prev_dist = np.sqrt((agent_positions[i-1][0] - nodes['end'][0])**2 +
-                                       (agent_positions[i-1][1] - nodes['end'][1])**2)
-                    curr_dist = np.sqrt((agent_positions[i][0] - nodes['end'][0])**2 +
-                                       (agent_positions[i][1] - nodes['end'][1])**2)
+                    prev_dist = np.sqrt(
+                        (agent_positions[i - 1][0] - nodes["end"][0]) ** 2
+                        + (agent_positions[i - 1][1] - nodes["end"][1]) ** 2
+                    )
+                    curr_dist = np.sqrt(
+                        (agent_positions[i][0] - nodes["end"][0]) ** 2 + (agent_positions[i][1] - nodes["end"][1]) ** 2
+                    )
                     if curr_dist < prev_dist:
                         forward_moves += 1
 
@@ -487,8 +487,10 @@ class DirectedGraphNavigationEvaluator(BaseEvaluator):
         total_moves = 0
 
         for i in range(1, len(agent_positions)):
-            dist = np.sqrt((agent_positions[i][0] - agent_positions[i-1][0])**2 +
-                          (agent_positions[i][1] - agent_positions[i-1][1])**2)
+            dist = np.sqrt(
+                (agent_positions[i][0] - agent_positions[i - 1][0]) ** 2
+                + (agent_positions[i][1] - agent_positions[i - 1][1]) ** 2
+            )
 
             if dist > 5:  # Significant movement
                 total_moves += 1
@@ -526,9 +528,9 @@ class AttentionShiftEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'objects_preserved': 0.45,    # Two objects unchanged
-        'green_box_shifted': 0.40,    # Green box moved to other object
-        'box_fidelity': 0.15          # Green box maintained throughout
+        "objects_preserved": 0.45,  # Two objects unchanged
+        "green_box_shifted": 0.40,  # Green box moved to other object
+        "box_fidelity": 0.15,  # Green box maintained throughout
     }
 
     def _count_objects(self, frame: np.ndarray) -> int:
@@ -553,7 +555,7 @@ class AttentionShiftEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate attention shift task.
 
@@ -583,20 +585,20 @@ class AttentionShiftEvaluator(BaseEvaluator):
 
         if final_obj_count == 0:
             # No objects detected in final frame - complete failure
-            scores['objects_preserved'] = 0.0
-            scores['green_box_shifted'] = 0.0
-            scores['box_fidelity'] = 0.0
+            scores["objects_preserved"] = 0.0
+            scores["green_box_shifted"] = 0.0
+            scores["box_fidelity"] = 0.0
             self._last_task_details = scores
-            self._last_task_details['objects_disappeared'] = True
+            self._last_task_details["objects_disappeared"] = True
             return 0.0
 
         # Check if object count is preserved
         if final_obj_count >= first_obj_count:
-            scores['objects_preserved'] = 1.0
+            scores["objects_preserved"] = 1.0
         elif final_obj_count == first_obj_count - 1:
-            scores['objects_preserved'] = 0.5
+            scores["objects_preserved"] = 0.5
         else:
-            scores['objects_preserved'] = 0.0
+            scores["objects_preserved"] = 0.0
 
         # 2. Green box must be present and shifted
         gen_box = self._detect_green_box(last_frame)
@@ -604,30 +606,30 @@ class AttentionShiftEvaluator(BaseEvaluator):
 
         if gen_box is None:
             # No green box in final frame - failed
-            scores['green_box_shifted'] = 0.0
+            scores["green_box_shifted"] = 0.0
         elif gt_box is None:
-            scores['green_box_shifted'] = 0.0  # STRICT: No GT box to compare
+            scores["green_box_shifted"] = 0.0  # STRICT: No GT box to compare
         else:
             # Compare box centers
-            gen_center = gen_box['center']
-            gt_center = gt_box['center']
+            gen_center = gen_box["center"]
+            gt_center = gt_box["center"]
 
-            frame_diag = np.sqrt(last_frame.shape[0]**2 + last_frame.shape[1]**2)
-            distance = np.sqrt((gen_center[0] - gt_center[0])**2 + (gen_center[1] - gt_center[1])**2)
+            frame_diag = np.sqrt(last_frame.shape[0] ** 2 + last_frame.shape[1] ** 2)
+            distance = np.sqrt((gen_center[0] - gt_center[0]) ** 2 + (gen_center[1] - gt_center[1]) ** 2)
             normalized_dist = distance / frame_diag
 
             if normalized_dist < 0.05:
-                scores['green_box_shifted'] = 1.0
+                scores["green_box_shifted"] = 1.0
             elif normalized_dist < 0.10:
-                scores['green_box_shifted'] = 0.8
+                scores["green_box_shifted"] = 0.8
             elif normalized_dist < 0.20:
-                scores['green_box_shifted'] = 0.5
+                scores["green_box_shifted"] = 0.5
             else:
-                scores['green_box_shifted'] = 0.2
+                scores["green_box_shifted"] = 0.2
 
         # 3. Box fidelity: Green box maintained throughout
         box_fidelity_score = self._evaluate_box_fidelity(video_frames)
-        scores['box_fidelity'] = box_fidelity_score
+        scores["box_fidelity"] = box_fidelity_score
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -656,18 +658,13 @@ class AttentionShiftEvaluator(BaseEvaluator):
         x, y, w, h = cv2.boundingRect(largest)
         M = cv2.moments(largest)
 
-        if M['m00'] > 0:
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
+        if M["m00"] > 0:
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
         else:
             cx, cy = x + w // 2, y + h // 2
 
-        return {
-            'center': (cx, cy),
-            'bbox': (x, y, w, h),
-            'area': area,
-            'contour': largest
-        }
+        return {"center": (cx, cy), "bbox": (x, y, w, h), "area": area, "contour": largest}
 
     def _detect_objects_excluding_green(self, frame: np.ndarray) -> list[dict]:
         """Detect objects excluding green attention box."""
@@ -694,14 +691,10 @@ class AttentionShiftEvaluator(BaseEvaluator):
                 continue
 
             M = cv2.moments(contour)
-            if M['m00'] > 0:
-                cx = int(M['m10'] / M['m00'])
-                cy = int(M['m01'] / M['m00'])
-                objects.append({
-                    'center': (cx, cy),
-                    'area': area,
-                    'contour': contour
-                })
+            if M["m00"] > 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                objects.append({"center": (cx, cy), "area": area, "contour": contour})
 
         return objects
 
@@ -716,11 +709,11 @@ class AttentionShiftEvaluator(BaseEvaluator):
             return 0.5
 
         # Compare box centers
-        gen_center = gen_box['center']
-        gt_center = gt_box['center']
+        gen_center = gen_box["center"]
+        gt_center = gt_box["center"]
 
-        frame_diag = np.sqrt(gen_frame.shape[0]**2 + gen_frame.shape[1]**2)
-        distance = np.sqrt((gen_center[0] - gt_center[0])**2 + (gen_center[1] - gt_center[1])**2)
+        frame_diag = np.sqrt(gen_frame.shape[0] ** 2 + gen_frame.shape[1] ** 2)
+        distance = np.sqrt((gen_center[0] - gt_center[0]) ** 2 + (gen_center[1] - gt_center[1]) ** 2)
         normalized_dist = distance / frame_diag
 
         if normalized_dist < 0.05:
@@ -745,21 +738,21 @@ class AttentionShiftEvaluator(BaseEvaluator):
         # Track objects through video
         max_movement = 0
 
-        for frame in frames[::max(1, len(frames) // 10)]:  # Sample frames
+        for frame in frames[:: max(1, len(frames) // 10)]:  # Sample frames
             curr_objects = self._detect_objects_excluding_green(frame)
 
             for first_obj in first_objects:
                 # Find closest matching object
-                min_dist = float('inf')
+                min_dist = float("inf")
                 for curr_obj in curr_objects:
-                    dist = safe_distance(first_obj['center'], curr_obj['center'])
+                    dist = safe_distance(first_obj["center"], curr_obj["center"])
                     min_dist = min(min_dist, dist)
 
-                if min_dist < float('inf'):
+                if min_dist < float("inf"):
                     max_movement = max(max_movement, min_dist)
 
         # Score based on maximum movement
-        frame_diag = np.sqrt(frames[0].shape[0]**2 + frames[0].shape[1]**2)
+        frame_diag = np.sqrt(frames[0].shape[0] ** 2 + frames[0].shape[1] ** 2)
         normalized_movement = max_movement / frame_diag
 
         if normalized_movement < 0.03:
@@ -805,7 +798,7 @@ class AttentionShiftEvaluator(BaseEvaluator):
         for frame in frames:
             box = self._detect_green_box(frame)
             if box:
-                positions.append(box['center'])
+                positions.append(box["center"])
 
         if len(positions) < 3:
             return 0.5
@@ -813,8 +806,8 @@ class AttentionShiftEvaluator(BaseEvaluator):
         # Check for smooth movement (consistent velocity)
         velocities = []
         for i in range(1, len(positions)):
-            dx = positions[i][0] - positions[i-1][0]
-            dy = positions[i][1] - positions[i-1][1]
+            dx = positions[i][0] - positions[i - 1][0]
+            dy = positions[i][1] - positions[i - 1][1]
             velocities.append(np.sqrt(dx**2 + dy**2))
 
         if len(velocities) < 2:
@@ -844,9 +837,9 @@ class GridHighestCostEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'completion': 0.45,       # Pacman reaches red goal
-        'grid_preserved': 0.35,   # Grid colors unchanged
-        'movement': 0.20          # Step by step movement
+        "completion": 0.45,  # Pacman reaches red goal
+        "grid_preserved": 0.35,  # Grid colors unchanged
+        "movement": 0.20,  # Step by step movement
     }
 
     def _count_grid_colors(self, frame: np.ndarray) -> tuple[int, int]:
@@ -875,7 +868,7 @@ class GridHighestCostEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate grid highest cost task.
 
@@ -906,14 +899,14 @@ class GridHighestCostEvaluator(BaseEvaluator):
         total_change = abs(final_total - first_total) / max(first_total, 1)
 
         if total_change > 1.0:  # More than 100% increase
-            scores['grid_preserved'] = 0.0
-            scores['completion'] = 0.0
-            scores['movement'] = 0.0
+            scores["grid_preserved"] = 0.0
+            scores["completion"] = 0.0
+            scores["movement"] = 0.0
             self._last_task_details = scores
-            self._last_task_details['grid_changed'] = True
+            self._last_task_details["grid_changed"] = True
             return 0.0
         else:
-            scores['grid_preserved'] = max(0, 1.0 - total_change)
+            scores["grid_preserved"] = max(0, 1.0 - total_change)
 
         # Detect Pacman and red goal
         agent = self._detect_pacman(last_frame)
@@ -921,28 +914,28 @@ class GridHighestCostEvaluator(BaseEvaluator):
 
         # 1. Completion: Check if Pacman reached red goal
         if agent is not None and goal is not None:
-            dist = np.sqrt((agent[0] - goal[0])**2 + (agent[1] - goal[1])**2)
+            dist = np.sqrt((agent[0] - goal[0]) ** 2 + (agent[1] - goal[1]) ** 2)
             if dist < 50:
-                scores['completion'] = 1.0
+                scores["completion"] = 1.0
             elif dist < 100:
-                scores['completion'] = 0.5
+                scores["completion"] = 0.5
             else:
-                scores['completion'] = 0.1
+                scores["completion"] = 0.1
         else:
-            scores['completion'] = 0.0
+            scores["completion"] = 0.0
 
         # 2. Movement: Check for step-by-step movement
         agent_positions = self._track_pacman(video_frames)
         if len(agent_positions) >= 2:
             large_jumps = 0
             for i in range(1, len(agent_positions)):
-                dx = abs(agent_positions[i][0] - agent_positions[i-1][0])
-                dy = abs(agent_positions[i][1] - agent_positions[i-1][1])
+                dx = abs(agent_positions[i][0] - agent_positions[i - 1][0])
+                dy = abs(agent_positions[i][1] - agent_positions[i - 1][1])
                 if dx > 150 or dy > 150:
                     large_jumps += 1
-            scores['movement'] = max(0, 1.0 - large_jumps * 0.3)
+            scores["movement"] = max(0, 1.0 - large_jumps * 0.3)
         else:
-            scores['movement'] = 0.0
+            scores["movement"] = 0.0
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -960,9 +953,9 @@ class GridHighestCostEvaluator(BaseEvaluator):
             return None
         largest = max(contours, key=cv2.contourArea)
         M = cv2.moments(largest)
-        if M['m00'] == 0:
+        if M["m00"] == 0:
             return None
-        return (int(M['m10'] / M['m00']), int(M['m01'] / M['m00']))
+        return (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
 
     def _detect_pacman(self, frame: np.ndarray) -> tuple[int, int] | None:
         """Detect yellow Pac-Man agent."""
@@ -982,9 +975,9 @@ class GridHighestCostEvaluator(BaseEvaluator):
         largest = max(contours, key=cv2.contourArea)
         M = cv2.moments(largest)
 
-        if M['m00'] > 0:
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
+        if M["m00"] > 0:
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
             return (cx, cy)
 
         return None
@@ -1006,21 +999,15 @@ class GridHighestCostEvaluator(BaseEvaluator):
         cell_w = w // 4
         cell_h = h // 4
 
-        return {
-            'rows': 4,
-            'cols': 4,
-            'cell_width': cell_w,
-            'cell_height': cell_h
-        }
+        return {"rows": 4, "cols": 4, "cell_width": cell_w, "cell_height": cell_h}
 
     def _pos_to_cell(self, pos: tuple[int, int], grid_info: dict) -> tuple[int, int]:
         """Convert pixel position to grid cell."""
-        col = pos[0] // grid_info['cell_width']
-        row = pos[1] // grid_info['cell_height']
-        return (min(row, grid_info['rows'] - 1), min(col, grid_info['cols'] - 1))
+        col = pos[0] // grid_info["cell_width"]
+        row = pos[1] // grid_info["cell_height"]
+        return (min(row, grid_info["rows"] - 1), min(col, grid_info["cols"] - 1))
 
-    def _evaluate_path_cost(self, positions: list[tuple[int, int]], grid_info: dict,
-                            gt_frame: np.ndarray) -> float:
+    def _evaluate_path_cost(self, positions: list[tuple[int, int]], grid_info: dict, gt_frame: np.ndarray) -> float:
         """Evaluate if path has high cost."""
         if not positions:
             return 0.0
@@ -1033,7 +1020,7 @@ class GridHighestCostEvaluator(BaseEvaluator):
 
         # More cells visited generally means higher cost path (for max cost problem)
         # Optimal path should visit many high-value cells
-        max_possible_cells = grid_info['rows'] * grid_info['cols']
+        max_possible_cells = grid_info["rows"] * grid_info["cols"]
         coverage = len(cells_visited) / max_possible_cells
 
         # For highest cost path, we expect more cells to be visited
@@ -1055,8 +1042,8 @@ class GridHighestCostEvaluator(BaseEvaluator):
         total_moves = 0
 
         for i in range(1, len(positions)):
-            dx = abs(positions[i][0] - positions[i-1][0])
-            dy = abs(positions[i][1] - positions[i-1][1])
+            dx = abs(positions[i][0] - positions[i - 1][0])
+            dy = abs(positions[i][1] - positions[i - 1][1])
 
             if dx > 5 or dy > 5:  # Significant movement
                 total_moves += 1
@@ -1066,8 +1053,9 @@ class GridHighestCostEvaluator(BaseEvaluator):
 
         return legal_moves / max(1, total_moves)
 
-    def _evaluate_completeness(self, gen_frame: np.ndarray, gt_frame: np.ndarray,
-                               positions: list[tuple[int, int]]) -> float:
+    def _evaluate_completeness(
+        self, gen_frame: np.ndarray, gt_frame: np.ndarray, positions: list[tuple[int, int]]
+    ) -> float:
         """Evaluate if agent reached destination (bottom-right)."""
         if not positions:
             return 0.0
@@ -1078,7 +1066,7 @@ class GridHighestCostEvaluator(BaseEvaluator):
         # Destination is bottom-right corner
         dest = (w * 0.75, h * 0.75)  # Approximate center of bottom-right cell
 
-        dist = np.sqrt((final_pos[0] - dest[0])**2 + (final_pos[1] - dest[1])**2)
+        dist = np.sqrt((final_pos[0] - dest[0]) ** 2 + (final_pos[1] - dest[1]) ** 2)
         frame_diag = np.sqrt(h**2 + w**2)
         normalized_dist = dist / frame_diag
 
@@ -1122,12 +1110,7 @@ class UnderstandSceneStructureEvaluator(BaseEvaluator):
     - Scene fidelity (5%): Floorplan preserved
     """
 
-    TASK_WEIGHTS = {
-        'room_id': 0.50,
-        'marking': 0.30,
-        'visual': 0.15,
-        'fidelity': 0.05
-    }
+    TASK_WEIGHTS = {"room_id": 0.50, "marking": 0.30, "visual": 0.15, "fidelity": 0.05}
 
     def _evaluate_task_specific(
         self,
@@ -1135,7 +1118,7 @@ class UnderstandSceneStructureEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate scene structure task."""
         scores = {}
@@ -1156,19 +1139,19 @@ class UnderstandSceneStructureEvaluator(BaseEvaluator):
 
         # 1. Room identification (50%): Check if correct room is marked
         room_score = self._evaluate_room_identification(gen_green, gt_green, last_frame, gt_last)
-        scores['room_id'] = room_score
+        scores["room_id"] = room_score
 
         # 2. Marking accuracy (30%): Green box position
         marking_score = self._evaluate_marking_accuracy(gen_green, gt_green)
-        scores['marking'] = marking_score
+        scores["marking"] = marking_score
 
         # 3. Visual normality (15%): Border completeness
         visual_score = self._evaluate_visual_normality(gen_green)
-        scores['visual'] = visual_score
+        scores["visual"] = visual_score
 
         # 4. Scene fidelity (5%): Floorplan preserved
         fidelity_score = self._evaluate_scene_fidelity(last_frame, gt_last, gen_green, gt_green)
-        scores['fidelity'] = fidelity_score
+        scores["fidelity"] = fidelity_score
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -1196,21 +1179,17 @@ class UnderstandSceneStructureEvaluator(BaseEvaluator):
         x, y, w, h = cv2.boundingRect(largest)
         M = cv2.moments(largest)
 
-        if M['m00'] > 0:
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
+        if M["m00"] > 0:
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
         else:
             cx, cy = x + w // 2, y + h // 2
 
-        return {
-            'center': (cx, cy),
-            'bbox': (x, y, w, h),
-            'area': area,
-            'contour': largest
-        }
+        return {"center": (cx, cy), "bbox": (x, y, w, h), "area": area, "contour": largest}
 
-    def _evaluate_room_identification(self, gen_green: dict | None, gt_green: dict | None,
-                                      gen_frame: np.ndarray, gt_frame: np.ndarray) -> float:
+    def _evaluate_room_identification(
+        self, gen_green: dict | None, gt_green: dict | None, gen_frame: np.ndarray, gt_frame: np.ndarray
+    ) -> float:
         """Evaluate if correct room is identified."""
         if gen_green is None:
             return 0.0
@@ -1218,11 +1197,11 @@ class UnderstandSceneStructureEvaluator(BaseEvaluator):
             return 0.0  # STRICT: No GT to compare
 
         # Compare marked regions
-        gen_center = gen_green['center']
-        gt_center = gt_green['center']
+        gen_center = gen_green["center"]
+        gt_center = gt_green["center"]
 
-        frame_diag = np.sqrt(gen_frame.shape[0]**2 + gen_frame.shape[1]**2)
-        distance = np.sqrt((gen_center[0] - gt_center[0])**2 + (gen_center[1] - gt_center[1])**2)
+        frame_diag = np.sqrt(gen_frame.shape[0] ** 2 + gen_frame.shape[1] ** 2)
+        distance = np.sqrt((gen_center[0] - gt_center[0]) ** 2 + (gen_center[1] - gt_center[1]) ** 2)
         normalized_dist = distance / frame_diag
 
         # STRICTER: Score based on distance
@@ -1242,8 +1221,8 @@ class UnderstandSceneStructureEvaluator(BaseEvaluator):
         if gt_green is None:
             return 0.0  # STRICT: No GT to compare
 
-        gen_bbox = gen_green['bbox']
-        gt_bbox = gt_green['bbox']
+        gen_bbox = gen_green["bbox"]
+        gt_bbox = gt_green["bbox"]
 
         # Calculate IoU
         x1 = max(gen_bbox[0], gt_bbox[0])
@@ -1263,7 +1242,7 @@ class UnderstandSceneStructureEvaluator(BaseEvaluator):
         if gen_green is None:
             return 0.0
 
-        contour = gen_green['contour']
+        contour = gen_green["contour"]
         epsilon = 0.02 * cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(contour, epsilon, True)
 
@@ -1274,17 +1253,18 @@ class UnderstandSceneStructureEvaluator(BaseEvaluator):
         else:
             return 0.4
 
-    def _evaluate_scene_fidelity(self, gen_frame: np.ndarray, gt_frame: np.ndarray,
-                                  gen_green: dict | None, gt_green: dict | None) -> float:
+    def _evaluate_scene_fidelity(
+        self, gen_frame: np.ndarray, gt_frame: np.ndarray, gen_green: dict | None, gt_green: dict | None
+    ) -> float:
         """Evaluate if floorplan is preserved."""
         # Mask out green regions and compare
         gen_mask = np.ones(gen_frame.shape[:2], dtype=np.uint8) * 255
         gt_mask = np.ones(gt_frame.shape[:2], dtype=np.uint8) * 255
 
         if gen_green:
-            cv2.drawContours(gen_mask, [gen_green['contour']], -1, 0, -1)
+            cv2.drawContours(gen_mask, [gen_green["contour"]], -1, 0, -1)
         if gt_green:
-            cv2.drawContours(gt_mask, [gt_green['contour']], -1, 0, -1)
+            cv2.drawContours(gt_mask, [gt_green["contour"]], -1, 0, -1)
 
         combined_mask = gen_mask & gt_mask
 
@@ -1299,6 +1279,7 @@ class UnderstandSceneStructureEvaluator(BaseEvaluator):
 
         avg_diff = np.mean(masked_diff) / 255.0
         return max(0, 1.0 - avg_diff * 2)
+
 
 class KeyDoorMatchingEvaluator(BaseEvaluator):
     """
@@ -1323,10 +1304,10 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'agent_movement': 0.30,   # Critical: must physically move away from start
-        'key_collected': 0.35,    # Must reach key position AND key disappears
-        'door_reached': 0.25,     # Must reach door position after getting key
-        'sequence': 0.10
+        "agent_movement": 0.30,  # Critical: must physically move away from start
+        "key_collected": 0.35,  # Must reach key position AND key disappears
+        "door_reached": 0.25,  # Must reach door position after getting key
+        "sequence": 0.10,
     }
 
     def _evaluate_task_specific(
@@ -1335,7 +1316,7 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate key door matching task with strict movement tracking."""
         scores = {}
@@ -1351,10 +1332,12 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
 
         if len(agent_positions) < 2:
             self._last_task_details = {
-                'agent_movement': 0, 'key_collected': 0,
-                'door_reached': 0, 'sequence': 0,
-                'positions_found': len(agent_positions),
-                'error': 'not_enough_agent_positions'
+                "agent_movement": 0,
+                "key_collected": 0,
+                "door_reached": 0,
+                "sequence": 0,
+                "positions_found": len(agent_positions),
+                "error": "not_enough_agent_positions",
             }
             return 0.0
 
@@ -1365,31 +1348,31 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
         self._detect_doors(last_frame)
 
         # Store detection info for debugging
-        scores['num_first_keys'] = len(first_keys)
-        scores['num_first_doors'] = len(first_doors)
-        scores['num_last_keys'] = len(last_keys)
-        scores['num_positions'] = len(agent_positions)
+        scores["num_first_keys"] = len(first_keys)
+        scores["num_first_doors"] = len(first_doors)
+        scores["num_last_keys"] = len(last_keys)
+        scores["num_positions"] = len(agent_positions)
 
         # 1. CRITICAL: Agent movement (30%) - Agent must physically move
         movement_score, total_movement = self._evaluate_agent_movement(agent_positions)
-        scores['agent_movement'] = movement_score
-        scores['total_movement_distance'] = total_movement
+        scores["agent_movement"] = movement_score
+        scores["total_movement_distance"] = total_movement
 
         # If agent doesn't move, entire task fails
         if movement_score < 0.3:
-            scores['key_collected'] = 0.0
-            scores['door_reached'] = 0.0
-            scores['sequence'] = 0.0
+            scores["key_collected"] = 0.0
+            scores["door_reached"] = 0.0
+            scores["sequence"] = 0.0
             self._last_task_details = scores
-            self._last_task_details['failure_reason'] = 'agent_not_moving'
+            self._last_task_details["failure_reason"] = "agent_not_moving"
             return sum(scores.get(k, 0) * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS if k in scores)
 
         # 2. Key collection (35%): Agent must move TO key position AND key disappears
         key_collected, collected_color, key_visit_score = self._check_key_collected_with_visit(
             first_keys, last_keys, agent_positions, video_frames
         )
-        scores['key_collected'] = key_visit_score
-        scores['collected_key_color'] = collected_color
+        scores["key_collected"] = key_visit_score
+        scores["collected_key_color"] = collected_color
 
         # 3. Door reached (25%): Agent must move TO door position (after getting key)
         door_reached, door_color, door_visit_score = self._check_door_reached_with_visit(
@@ -1399,21 +1382,21 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
         # Door only counts if key was collected first AND colors match
         if door_reached and key_collected:
             if collected_color and door_color and collected_color == door_color:
-                scores['door_reached'] = door_visit_score  # Good: matching colors
+                scores["door_reached"] = door_visit_score  # Good: matching colors
             elif collected_color is None or door_color is None:
-                scores['door_reached'] = door_visit_score * 0.5  # Partial: can't verify color match
+                scores["door_reached"] = door_visit_score * 0.5  # Partial: can't verify color match
             else:
-                scores['door_reached'] = 0.0  # Wrong color key for door - FAIL
+                scores["door_reached"] = 0.0  # Wrong color key for door - FAIL
         elif door_reached and not key_collected:
-            scores['door_reached'] = 0.0  # Reached door without key - FAIL
+            scores["door_reached"] = 0.0  # Reached door without key - FAIL
         else:
-            scores['door_reached'] = 0.0
+            scores["door_reached"] = 0.0
 
-        scores['door_color'] = door_color
+        scores["door_color"] = door_color
 
         # 4. Sequence (10%): Key collected before door reached
         sequence_score = self._evaluate_sequence_with_tracking(video_frames, first_keys, first_doors, agent_positions)
-        scores['sequence'] = sequence_score if key_collected else 0.0
+        scores["sequence"] = sequence_score if key_collected else 0.0
 
         self._last_task_details = scores
         return sum(scores.get(k, 0) * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS if k in scores)
@@ -1445,7 +1428,7 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
         # Calculate total movement distance (for debugging)
         total_distance = 0.0
         for i in range(1, len(positions)):
-            dist = safe_distance(positions[i], positions[i-1])
+            dist = safe_distance(positions[i], positions[i - 1])
             total_distance += dist
 
         # Calculate displacement from start to end
@@ -1466,8 +1449,7 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
             return 0.0, total_distance  # No real movement
 
     def _check_key_collected_with_visit(
-        self, first_keys: list[dict], last_keys: list[dict],
-        positions: list[tuple[int, int]], frames: list[np.ndarray]
+        self, first_keys: list[dict], last_keys: list[dict], positions: list[tuple[int, int]], frames: list[np.ndarray]
     ) -> tuple[bool, str | None, float]:
         """
         STRICT CHECK: Key is ONLY collected if:
@@ -1486,11 +1468,11 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
 
         # For each key, check if agent ever reached it
         for key in first_keys:
-            key_pos = key['center']
-            key_color = key['color']
+            key_pos = key["center"]
+            key_color = key["color"]
 
             # Find minimum distance agent got to this key
-            min_dist_to_key = float('inf')
+            min_dist_to_key = float("inf")
             for _i, pos in enumerate(positions):
                 dist = safe_distance(pos, key_pos)
                 if dist < min_dist_to_key:
@@ -1506,8 +1488,8 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
                 # Now check if key disappeared
                 key_still_exists = False
                 for last_key in last_keys:
-                    if last_key['color'] == key_color:
-                        dist = safe_distance(last_key['center'], key_pos)
+                    if last_key["color"] == key_color:
+                        dist = safe_distance(last_key["center"], key_pos)
                         if dist < 50:  # Key still at same position
                             key_still_exists = True
                             break
@@ -1524,11 +1506,11 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
         # This should NOT give credit (agent didn't do the work)
         first_key_colors = {}
         for key in first_keys:
-            first_key_colors[key['color']] = first_key_colors.get(key['color'], 0) + 1
+            first_key_colors[key["color"]] = first_key_colors.get(key["color"], 0) + 1
 
         last_key_colors = {}
         for key in last_keys:
-            last_key_colors[key['color']] = last_key_colors.get(key['color'], 0) + 1
+            last_key_colors[key["color"]] = last_key_colors.get(key["color"], 0) + 1
 
         for color, count in first_key_colors.items():
             if last_key_colors.get(color, 0) < count:
@@ -1540,8 +1522,7 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
         return False, None, 0.0
 
     def _check_door_reached_with_visit(
-        self, doors: list[dict], positions: list[tuple[int, int]],
-        frames: list[np.ndarray], key_collected: bool
+        self, doors: list[dict], positions: list[tuple[int, int]], frames: list[np.ndarray], key_collected: bool
     ) -> tuple[bool, str | None, float]:
         """
         STRICT CHECK: Door is ONLY considered reached if:
@@ -1556,10 +1537,10 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
         start_pos = positions[0]
 
         best_door = None
-        best_dist = float('inf')
+        best_dist = float("inf")
 
         for door in doors:
-            door_pos = door['center']
+            door_pos = door["center"]
 
             # CRITICAL: Door must be at a different position than start
             door_dist_from_start = safe_distance(door_pos, start_pos)
@@ -1567,7 +1548,7 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
                 continue  # Door is at starting position - skip
 
             # Check if agent visited this door position (especially in later frames)
-            for pos in positions[-len(positions)//2:]:  # Check second half of trajectory
+            for pos in positions[-len(positions) // 2 :]:  # Check second half of trajectory
                 dist = safe_distance(pos, door_pos)
                 if dist < best_dist:
                     best_dist = dist
@@ -1578,7 +1559,7 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
 
         # CRITICAL: Agent must have actually moved toward the door
         # (best_dist should be small, meaning agent got close to door)
-        door_dist_from_start = safe_distance(best_door['center'], start_pos)
+        door_dist_from_start = safe_distance(best_door["center"], start_pos)
 
         # Agent must have traveled away from start to reach the door
         if door_dist_from_start < 50:
@@ -1586,18 +1567,16 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
 
         # Score based on how close agent got to door
         if best_dist < 40:
-            return True, best_door['color'], 1.0  # Very close to door
+            return True, best_door["color"], 1.0  # Very close to door
         elif best_dist < 70:
-            return True, best_door['color'], 0.7  # Reasonably close
+            return True, best_door["color"], 0.7  # Reasonably close
         elif best_dist < 100:
-            return True, best_door['color'], 0.4  # Somewhat close
+            return True, best_door["color"], 0.4  # Somewhat close
 
         return False, None, 0.0
 
     def _evaluate_sequence_with_tracking(
-        self, frames: list[np.ndarray],
-        keys: list[dict], doors: list[dict],
-        positions: list[tuple[int, int]]
+        self, frames: list[np.ndarray], keys: list[dict], doors: list[dict], positions: list[tuple[int, int]]
     ) -> float:
         """
         Evaluate if key was visited BEFORE door was visited.
@@ -1609,28 +1588,28 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
         # Find when agent got closest to each key
         key_visits = []
         for key in keys:
-            min_dist = float('inf')
+            min_dist = float("inf")
             visit_frame = -1
             for i, pos in enumerate(positions):
-                dist = safe_distance(pos, key['center'])
+                dist = safe_distance(pos, key["center"])
                 if dist < min_dist:
                     min_dist = dist
                     visit_frame = i
             if min_dist < 80:  # Consider visited if within 80 pixels
-                key_visits.append((key['color'], visit_frame, min_dist))
+                key_visits.append((key["color"], visit_frame, min_dist))
 
         # Find when agent got closest to each door
         door_visits = []
         for door in doors:
-            min_dist = float('inf')
+            min_dist = float("inf")
             visit_frame = -1
             for i, pos in enumerate(positions):
-                dist = safe_distance(pos, door['center'])
+                dist = safe_distance(pos, door["center"])
                 if dist < min_dist:
                     min_dist = dist
                     visit_frame = i
             if min_dist < 80:  # Consider visited if within 80 pixels
-                door_visits.append((door['color'], visit_frame, min_dist))
+                door_visits.append((door["color"], visit_frame, min_dist))
 
         if not key_visits or not door_visits:
             return 0.3  # Partial credit: some movement detected
@@ -1663,11 +1642,11 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
             if 100 < area < 4000:  # Small to medium size
                 perimeter = cv2.arcLength(c, True)
                 if perimeter > 0:
-                    circularity = 4 * np.pi * area / (perimeter ** 2)
+                    circularity = 4 * np.pi * area / (perimeter**2)
                     if circularity > 0.4:  # Roughly circular
                         M = cv2.moments(c)
-                        if M['m00'] > 0:
-                            return (int(M['m10'] / M['m00']), int(M['m01'] / M['m00']))
+                        if M["m00"] > 0:
+                            return (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
 
         # Fallback to yellow if green not found
         lower_yellow = np.array([20, 100, 100])
@@ -1681,11 +1660,11 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
             if 100 < area < 4000:
                 perimeter = cv2.arcLength(c, True)
                 if perimeter > 0:
-                    circularity = 4 * np.pi * area / (perimeter ** 2)
+                    circularity = 4 * np.pi * area / (perimeter**2)
                     if circularity > 0.4:
                         M = cv2.moments(c)
-                        if M['m00'] > 0:
-                            return (int(M['m10'] / M['m00']), int(M['m01'] / M['m00']))
+                        if M["m00"] > 0:
+                            return (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
 
         return None
 
@@ -1707,12 +1686,12 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
         color_ranges = {
-            'red': ([0, 100, 100], [10, 255, 255], [160, 100, 100], [180, 255, 255]),
-            'blue': ([100, 100, 100], [130, 255, 255], None, None),
-            'yellow': ([20, 100, 100], [35, 255, 255], None, None),
-            'purple': ([130, 100, 100], [160, 255, 255], None, None),
-            'cyan': ([85, 100, 100], [100, 255, 255], None, None),
-            'orange': ([10, 100, 100], [20, 255, 255], None, None),
+            "red": ([0, 100, 100], [10, 255, 255], [160, 100, 100], [180, 255, 255]),
+            "blue": ([100, 100, 100], [130, 255, 255], None, None),
+            "yellow": ([20, 100, 100], [35, 255, 255], None, None),
+            "purple": ([130, 100, 100], [160, 255, 255], None, None),
+            "cyan": ([85, 100, 100], [100, 255, 255], None, None),
+            "orange": ([10, 100, 100], [20, 255, 255], None, None),
         }
 
         for color_name, ranges in color_ranges.items():
@@ -1742,15 +1721,10 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
 
                 if 3 <= len(approx) <= 6:  # Diamond-like shapes
                     M = cv2.moments(contour)
-                    if M['m00'] > 0:
-                        cx = int(M['m10'] / M['m00'])
-                        cy = int(M['m01'] / M['m00'])
-                        keys.append({
-                            'color': color_name,
-                            'center': (cx, cy),
-                            'area': area,
-                            'fill_ratio': fill_ratio
-                        })
+                    if M["m00"] > 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+                        keys.append({"color": color_name, "center": (cx, cy), "area": area, "fill_ratio": fill_ratio})
 
         return keys
 
@@ -1763,12 +1737,12 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
         color_ranges = {
-            'red': ([0, 100, 100], [10, 255, 255], [160, 100, 100], [180, 255, 255]),
-            'blue': ([100, 100, 100], [130, 255, 255], None, None),
-            'yellow': ([20, 100, 100], [35, 255, 255], None, None),
-            'purple': ([130, 100, 100], [160, 255, 255], None, None),
-            'cyan': ([85, 100, 100], [100, 255, 255], None, None),
-            'orange': ([10, 100, 100], [20, 255, 255], None, None),
+            "red": ([0, 100, 100], [10, 255, 255], [160, 100, 100], [180, 255, 255]),
+            "blue": ([100, 100, 100], [130, 255, 255], None, None),
+            "yellow": ([20, 100, 100], [35, 255, 255], None, None),
+            "purple": ([130, 100, 100], [160, 255, 255], None, None),
+            "cyan": ([85, 100, 100], [100, 255, 255], None, None),
+            "orange": ([10, 100, 100], [20, 255, 255], None, None),
         }
 
         for color_name, ranges in color_ranges.items():
@@ -1798,17 +1772,13 @@ class KeyDoorMatchingEvaluator(BaseEvaluator):
 
                 if 3 <= len(approx) <= 6:  # Rectangular-like shapes
                     M = cv2.moments(contour)
-                    if M['m00'] > 0:
-                        cx = int(M['m10'] / M['m00'])
-                        cy = int(M['m01'] / M['m00'])
-                        doors.append({
-                            'color': color_name,
-                            'center': (cx, cy),
-                            'area': area,
-                            'fill_ratio': fill_ratio
-                        })
+                    if M["m00"] > 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+                        doors.append({"color": color_name, "center": (cx, cy), "area": area, "fill_ratio": fill_ratio})
 
         return doors
+
 
 class PredictNextColorEvaluator(BaseEvaluator):
     """
@@ -1821,12 +1791,7 @@ class PredictNextColorEvaluator(BaseEvaluator):
     - Task understanding (5%): Only fill position 5
     """
 
-    TASK_WEIGHTS = {
-        'pattern': 0.50,
-        'color': 0.30,
-        'visual': 0.15,
-        'understanding': 0.05
-    }
+    TASK_WEIGHTS = {"pattern": 0.50, "color": 0.30, "visual": 0.15, "understanding": 0.05}
 
     def _evaluate_task_specific(
         self,
@@ -1834,7 +1799,7 @@ class PredictNextColorEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate predict next color task."""
         scores = {}
@@ -1855,19 +1820,19 @@ class PredictNextColorEvaluator(BaseEvaluator):
 
         # 1. Pattern identification (50%): Check if answer matches GT pattern
         pattern_score = self._evaluate_pattern(gen_blocks, gt_blocks)
-        scores['pattern'] = pattern_score
+        scores["pattern"] = pattern_score
 
         # 2. Color accuracy (30%): Check 5th block color
         color_score = self._evaluate_color_accuracy(gen_blocks, gt_blocks)
-        scores['color'] = color_score
+        scores["color"] = color_score
 
         # 3. Visual presentation (15%): Block style consistency
         visual_score = self._evaluate_visual_presentation(gen_blocks)
-        scores['visual'] = visual_score
+        scores["visual"] = visual_score
 
         # 4. Task understanding (5%): Only 5th position filled
         understanding_score = self._evaluate_task_understanding(gen_blocks, gt_blocks)
-        scores['understanding'] = understanding_score
+        scores["understanding"] = understanding_score
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -1879,12 +1844,12 @@ class PredictNextColorEvaluator(BaseEvaluator):
 
         # Define color ranges
         color_ranges = {
-            'red': ([0, 100, 100], [10, 255, 255], [160, 100, 100], [180, 255, 255]),
-            'green': ([35, 100, 100], [85, 255, 255], None, None),
-            'blue': ([100, 100, 100], [130, 255, 255], None, None),
-            'yellow': ([20, 100, 100], [35, 255, 255], None, None),
-            'orange': ([10, 100, 100], [20, 255, 255], None, None),
-            'purple': ([130, 100, 100], [160, 255, 255], None, None),
+            "red": ([0, 100, 100], [10, 255, 255], [160, 100, 100], [180, 255, 255]),
+            "green": ([35, 100, 100], [85, 255, 255], None, None),
+            "blue": ([100, 100, 100], [130, 255, 255], None, None),
+            "yellow": ([20, 100, 100], [35, 255, 255], None, None),
+            "orange": ([10, 100, 100], [20, 255, 255], None, None),
+            "purple": ([130, 100, 100], [160, 255, 255], None, None),
         }
 
         for color_name, ranges in color_ranges.items():
@@ -1906,18 +1871,13 @@ class PredictNextColorEvaluator(BaseEvaluator):
                 aspect_ratio = w / h if h > 0 else 0
                 if 0.7 <= aspect_ratio <= 1.4:
                     M = cv2.moments(contour)
-                    if M['m00'] > 0:
-                        cx = int(M['m10'] / M['m00'])
-                        cy = int(M['m01'] / M['m00'])
-                        blocks.append({
-                            'color': color_name,
-                            'center': (cx, cy),
-                            'bbox': (x, y, w, h),
-                            'area': area
-                        })
+                    if M["m00"] > 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+                        blocks.append({"color": color_name, "center": (cx, cy), "bbox": (x, y, w, h), "area": area})
 
         # Sort by x position (left to right)
-        blocks.sort(key=lambda b: b['center'][0])
+        blocks.sort(key=lambda b: b["center"][0])
 
         return blocks
 
@@ -1933,7 +1893,7 @@ class PredictNextColorEvaluator(BaseEvaluator):
         if gen_5th is None or gt_5th is None:
             return 0.0
 
-        if gen_5th['color'] == gt_5th['color']:
+        if gen_5th["color"] == gt_5th["color"]:
             return 1.0
 
         return 0.0
@@ -1949,18 +1909,18 @@ class PredictNextColorEvaluator(BaseEvaluator):
         if gen_5th is None or gt_5th is None:
             return 0.0
 
-        if gen_5th['color'] == gt_5th['color']:
+        if gen_5th["color"] == gt_5th["color"]:
             return 1.0
 
         # Partial credit for similar colors
         similar_colors = {
-            ('red', 'orange'): 0.3,
-            ('orange', 'yellow'): 0.3,
-            ('blue', 'purple'): 0.3,
-            ('green', 'blue'): 0.2,
+            ("red", "orange"): 0.3,
+            ("orange", "yellow"): 0.3,
+            ("blue", "purple"): 0.3,
+            ("green", "blue"): 0.2,
         }
 
-        color_pair = tuple(sorted([gen_5th['color'], gt_5th['color']]))
+        color_pair = tuple(sorted([gen_5th["color"], gt_5th["color"]]))
         return similar_colors.get(color_pair, 0.0)
 
     def _evaluate_visual_presentation(self, gen_blocks: list[dict]) -> float:
@@ -1969,7 +1929,7 @@ class PredictNextColorEvaluator(BaseEvaluator):
             return 0.0
 
         # Check if all blocks have similar size
-        areas = [b['area'] for b in gen_blocks[:5]]
+        areas = [b["area"] for b in gen_blocks[:5]]
         mean_area = np.mean(areas)
         std_area = np.std(areas)
 
@@ -1987,7 +1947,7 @@ class PredictNextColorEvaluator(BaseEvaluator):
 
         matches = 0
         for i in range(4):
-            if gen_blocks[i]['color'] == gt_blocks[i]['color']:
+            if gen_blocks[i]["color"] == gt_blocks[i]["color"]:
                 matches += 1
 
         return matches / 4
@@ -2004,12 +1964,7 @@ class SelectNextFigureIncreasingEvaluator(BaseEvaluator):
     - Visual annotation quality (10%): Red circle proper
     """
 
-    TASK_WEIGHTS = {
-        'pattern': 0.40,
-        'shape_type': 0.30,
-        'selection': 0.20,
-        'annotation': 0.10
-    }
+    TASK_WEIGHTS = {"pattern": 0.40, "shape_type": 0.30, "selection": 0.20, "annotation": 0.10}
 
     def _evaluate_task_specific(
         self,
@@ -2017,7 +1972,7 @@ class SelectNextFigureIncreasingEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate select next figure increasing task."""
         scores = {}
@@ -2038,19 +1993,19 @@ class SelectNextFigureIncreasingEvaluator(BaseEvaluator):
 
         # 1. Pattern recognition (40%): Check if correct answer selected
         pattern_score = self._evaluate_pattern_recognition(gen_red, gt_red, last_frame, gt_last)
-        scores['pattern'] = pattern_score
+        scores["pattern"] = pattern_score
 
         # 2. Shape type matching (30%): Correct shape type
         shape_score = self._evaluate_shape_type(gen_red, gt_red, last_frame, gt_last)
-        scores['shape_type'] = shape_score
+        scores["shape_type"] = shape_score
 
         # 3. Selection accuracy (20%): Red circle position
         selection_score = self._evaluate_selection_accuracy(gen_red, gt_red)
-        scores['selection'] = selection_score
+        scores["selection"] = selection_score
 
         # 4. Annotation quality (10%): Red circle proper
         annotation_score = self._evaluate_annotation_quality(gen_red)
-        scores['annotation'] = annotation_score
+        scores["annotation"] = annotation_score
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -2079,25 +2034,21 @@ class SelectNextFigureIncreasingEvaluator(BaseEvaluator):
 
         # Check circularity
         perimeter = cv2.arcLength(largest, True)
-        circularity = 4 * np.pi * area / perimeter ** 2 if perimeter > 0 else 0
+        circularity = 4 * np.pi * area / perimeter**2 if perimeter > 0 else 0
 
         M = cv2.moments(largest)
-        if M['m00'] > 0:
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
+        if M["m00"] > 0:
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
         else:
             x, y, w, h = cv2.boundingRect(largest)
             cx, cy = x + w // 2, y + h // 2
 
-        return {
-            'center': (cx, cy),
-            'area': area,
-            'circularity': circularity,
-            'contour': largest
-        }
+        return {"center": (cx, cy), "area": area, "circularity": circularity, "contour": largest}
 
-    def _evaluate_pattern_recognition(self, gen_red: dict | None, gt_red: dict | None,
-                                       gen_frame: np.ndarray, gt_frame: np.ndarray) -> float:
+    def _evaluate_pattern_recognition(
+        self, gen_red: dict | None, gt_red: dict | None, gen_frame: np.ndarray, gt_frame: np.ndarray
+    ) -> float:
         """Evaluate if the increasing pattern was recognized."""
         if gen_red is None:
             return 0.0
@@ -2105,11 +2056,11 @@ class SelectNextFigureIncreasingEvaluator(BaseEvaluator):
             return 0.5
 
         # Compare marked positions
-        gen_center = gen_red['center']
-        gt_center = gt_red['center']
+        gen_center = gen_red["center"]
+        gt_center = gt_red["center"]
 
-        frame_diag = np.sqrt(gen_frame.shape[0]**2 + gen_frame.shape[1]**2)
-        distance = np.sqrt((gen_center[0] - gt_center[0])**2 + (gen_center[1] - gt_center[1])**2)
+        frame_diag = np.sqrt(gen_frame.shape[0] ** 2 + gen_frame.shape[1] ** 2)
+        distance = np.sqrt((gen_center[0] - gt_center[0]) ** 2 + (gen_center[1] - gt_center[1]) ** 2)
         normalized_dist = distance / frame_diag
 
         if normalized_dist < 0.05:
@@ -2121,15 +2072,16 @@ class SelectNextFigureIncreasingEvaluator(BaseEvaluator):
         else:
             return max(0.2, 1.0 - normalized_dist)
 
-    def _evaluate_shape_type(self, gen_red: dict | None, gt_red: dict | None,
-                             gen_frame: np.ndarray, gt_frame: np.ndarray) -> float:
+    def _evaluate_shape_type(
+        self, gen_red: dict | None, gt_red: dict | None, gen_frame: np.ndarray, gt_frame: np.ndarray
+    ) -> float:
         """Evaluate if correct shape type was selected."""
         if gen_red is None or gt_red is None:
             return 0.0 if gen_red is None else 0.5
 
         # Extract region inside red circle and compare
-        gen_center = gen_red['center']
-        gt_center = gt_red['center']
+        gen_center = gen_red["center"]
+        gt_center = gt_red["center"]
 
         # Get regions around centers
         radius = 40
@@ -2171,10 +2123,10 @@ class SelectNextFigureIncreasingEvaluator(BaseEvaluator):
         if gt_red is None:
             return 0.5
 
-        gen_center = gen_red['center']
-        gt_center = gt_red['center']
+        gen_center = gen_red["center"]
+        gt_center = gt_red["center"]
 
-        distance = np.sqrt((gen_center[0] - gt_center[0])**2 + (gen_center[1] - gt_center[1])**2)
+        distance = np.sqrt((gen_center[0] - gt_center[0]) ** 2 + (gen_center[1] - gt_center[1]) ** 2)
 
         if distance < 20:
             return 1.0
@@ -2191,7 +2143,7 @@ class SelectNextFigureIncreasingEvaluator(BaseEvaluator):
             return 0.0
 
         # Check circularity (should be close to 1 for a circle)
-        circularity = gen_red['circularity']
+        circularity = gen_red["circularity"]
 
         if circularity > 0.7:
             return 1.0
@@ -2201,6 +2153,7 @@ class SelectNextFigureIncreasingEvaluator(BaseEvaluator):
             return 0.4
         else:
             return 0.2
+
 
 class SelectNextFigureLargeSmallEvaluator(BaseEvaluator):
     """
@@ -2213,12 +2166,7 @@ class SelectNextFigureLargeSmallEvaluator(BaseEvaluator):
     - Visual annotation quality (10%): Red circle properly marks the selection
     """
 
-    TASK_WEIGHTS = {
-        'pattern': 0.40,
-        'shape_type': 0.30,
-        'size': 0.20,
-        'annotation': 0.10
-    }
+    TASK_WEIGHTS = {"pattern": 0.40, "shape_type": 0.30, "size": 0.20, "annotation": 0.10}
 
     def _detect_shapes_with_size(self, frame: np.ndarray) -> list[dict]:
         """Detect shapes and their sizes."""
@@ -2236,30 +2184,25 @@ class SelectNextFigureLargeSmallEvaluator(BaseEvaluator):
                 continue
 
             M = cv2.moments(cnt)
-            if M['m00'] == 0:
+            if M["m00"] == 0:
                 continue
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
 
             # Determine shape type
             approx = cv2.approxPolyDP(cnt, 0.04 * cv2.arcLength(cnt, True), True)
             vertices = len(approx)
 
             if vertices == 3:
-                shape_type = 'triangle'
+                shape_type = "triangle"
             elif vertices == 4:
-                shape_type = 'square'
+                shape_type = "square"
             elif vertices == 5:
-                shape_type = 'pentagon'
+                shape_type = "pentagon"
             else:
-                shape_type = 'circle'
+                shape_type = "circle"
 
-            shapes.append({
-                'type': shape_type,
-                'center': (cx, cy),
-                'area': area,
-                'vertices': vertices
-            })
+            shapes.append({"type": shape_type, "center": (cx, cy), "area": area, "vertices": vertices})
 
         return shapes
 
@@ -2289,10 +2232,10 @@ class SelectNextFigureLargeSmallEvaluator(BaseEvaluator):
 
             if circularity > 0.5:  # Reasonably circular
                 M = cv2.moments(cnt)
-                if M['m00'] == 0:
+                if M["m00"] == 0:
                     continue
-                cx = int(M['m10'] / M['m00'])
-                cy = int(M['m01'] / M['m00'])
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
                 return (cx, cy)
 
         return None
@@ -2313,9 +2256,9 @@ class SelectNextFigureLargeSmallEvaluator(BaseEvaluator):
                 continue
 
             M = cv2.moments(cnt)
-            if M['m00'] > 0:
-                cx = int(M['m10'] / M['m00'])
-                cy = int(M['m01'] / M['m00'])
+            if M["m00"] > 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
                 return (cx, cy)
 
         return None
@@ -2326,7 +2269,7 @@ class SelectNextFigureLargeSmallEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate select next figure large-small alternating task."""
         scores = {}
@@ -2360,74 +2303,73 @@ class SelectNextFigureLargeSmallEvaluator(BaseEvaluator):
 
         # 1. Pattern recognition: Check if marking is at correct position
         if gen_marking is not None and gt_marking is not None:
-            dist = np.sqrt((gen_marking[0] - gt_marking[0])**2 +
-                          (gen_marking[1] - gt_marking[1])**2)
-            scores['pattern'] = max(0, 1.0 - dist / 100.0)
+            dist = np.sqrt((gen_marking[0] - gt_marking[0]) ** 2 + (gen_marking[1] - gt_marking[1]) ** 2)
+            scores["pattern"] = max(0, 1.0 - dist / 100.0)
         elif gen_marking is not None:
-            scores['pattern'] = 0.2  # Detection failed
+            scores["pattern"] = 0.2  # Detection failed
         else:
-            scores['pattern'] = 0.0
+            scores["pattern"] = 0.0
 
         # 2. Shape type matching: Check if marked shape has correct type
         if gen_shapes and gt_shapes:
             # Find shape nearest to marking
             gen_marked_shape = None
             if gen_marking is not None:
-                min_dist = float('inf')
+                min_dist = float("inf")
                 for shape in gen_shapes:
-                    dist = np.sqrt((shape['center'][0] - gen_marking[0])**2 +
-                                  (shape['center'][1] - gen_marking[1])**2)
+                    dist = np.sqrt(
+                        (shape["center"][0] - gen_marking[0]) ** 2 + (shape["center"][1] - gen_marking[1]) ** 2
+                    )
                     if dist < min_dist:
                         min_dist = dist
                         gen_marked_shape = shape
 
             gt_marked_shape = None
             if gt_marking is not None:
-                min_dist = float('inf')
+                min_dist = float("inf")
                 for shape in gt_shapes:
-                    dist = np.sqrt((shape['center'][0] - gt_marking[0])**2 +
-                                  (shape['center'][1] - gt_marking[1])**2)
+                    dist = np.sqrt(
+                        (shape["center"][0] - gt_marking[0]) ** 2 + (shape["center"][1] - gt_marking[1]) ** 2
+                    )
                     if dist < min_dist:
                         min_dist = dist
                         gt_marked_shape = shape
 
             if gen_marked_shape is not None and gt_marked_shape is not None:
-                if gen_marked_shape['type'] == gt_marked_shape['type']:
-                    scores['shape_type'] = 1.0
+                if gen_marked_shape["type"] == gt_marked_shape["type"]:
+                    scores["shape_type"] = 1.0
                 else:
-                    scores['shape_type'] = 0.3
+                    scores["shape_type"] = 0.3
             else:
-                scores['shape_type'] = 0.2  # Detection failed
+                scores["shape_type"] = 0.2  # Detection failed
         else:
-            scores['shape_type'] = 0.2  # Detection failed
+            scores["shape_type"] = 0.2  # Detection failed
 
         # 3. Size judgment: Check if marked shape has correct size category
         if gen_shapes and gt_shapes and gen_marking is not None and gt_marking is not None:
             # Get size of marked shapes
             gen_marked_area = 0
             for shape in gen_shapes:
-                dist = np.sqrt((shape['center'][0] - gen_marking[0])**2 +
-                              (shape['center'][1] - gen_marking[1])**2)
+                dist = np.sqrt((shape["center"][0] - gen_marking[0]) ** 2 + (shape["center"][1] - gen_marking[1]) ** 2)
                 if dist < 100:
-                    gen_marked_area = shape['area']
+                    gen_marked_area = shape["area"]
                     break
 
             gt_marked_area = 0
             for shape in gt_shapes:
-                dist = np.sqrt((shape['center'][0] - gt_marking[0])**2 +
-                              (shape['center'][1] - gt_marking[1])**2)
+                dist = np.sqrt((shape["center"][0] - gt_marking[0]) ** 2 + (shape["center"][1] - gt_marking[1]) ** 2)
                 if dist < 100:
-                    gt_marked_area = shape['area']
+                    gt_marked_area = shape["area"]
                     break
 
             if gen_marked_area > 0 and gt_marked_area > 0:
                 # Compare relative sizes
                 area_ratio = min(gen_marked_area, gt_marked_area) / max(gen_marked_area, gt_marked_area)
-                scores['size'] = area_ratio
+                scores["size"] = area_ratio
             else:
-                scores['size'] = 0.2  # Detection failed
+                scores["size"] = 0.2  # Detection failed
         else:
-            scores['size'] = 0.2  # Detection failed
+            scores["size"] = 0.2  # Detection failed
 
         # 4. Annotation quality: Check red circle presence and quality
         if gen_marking is not None:
@@ -2445,12 +2387,13 @@ class SelectNextFigureLargeSmallEvaluator(BaseEvaluator):
             red_overlap = np.sum((red_mask_gen > 0) & (red_mask_gt > 0))
             red_union = np.sum((red_mask_gen > 0) | (red_mask_gt > 0))
 
-            scores['annotation'] = red_overlap / red_union if red_union > 0 else 0.5
+            scores["annotation"] = red_overlap / red_union if red_union > 0 else 0.5
         else:
-            scores['annotation'] = 0.0
+            scores["annotation"] = 0.0
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
+
 
 class SpotUniqueColorEvaluator(BaseEvaluator):
     """
@@ -2463,12 +2406,7 @@ class SpotUniqueColorEvaluator(BaseEvaluator):
     - Understanding accuracy (5%): Understand "unique" vs "repeated"
     """
 
-    TASK_WEIGHTS = {
-        'uniqueness': 0.50,
-        'localization': 0.30,
-        'annotation': 0.15,
-        'understanding': 0.05
-    }
+    TASK_WEIGHTS = {"uniqueness": 0.50, "localization": 0.30, "annotation": 0.15, "understanding": 0.05}
 
     def _detect_colored_shapes(self, frame: np.ndarray) -> list[dict]:
         """Detect colored shapes and their colors."""
@@ -2480,13 +2418,13 @@ class SpotUniqueColorEvaluator(BaseEvaluator):
         # to catch semi-transparent shapes
         # Note: ranges are non-overlapping to avoid duplicate detection
         color_ranges = {
-            'red': [([0, 50, 50], [5, 255, 255]), ([170, 50, 50], [180, 255, 255])],
-            'orange': [([5, 50, 50], [15, 255, 255])],
-            'yellow': [([15, 50, 50], [35, 255, 255])],
-            'green': [([35, 50, 50], [85, 255, 255])],
-            'cyan': [([85, 50, 50], [100, 255, 255])],
-            'blue': [([100, 50, 50], [130, 255, 255])],
-            'magenta': [([140, 50, 50], [170, 255, 255])],
+            "red": [([0, 50, 50], [5, 255, 255]), ([170, 50, 50], [180, 255, 255])],
+            "orange": [([5, 50, 50], [15, 255, 255])],
+            "yellow": [([15, 50, 50], [35, 255, 255])],
+            "green": [([35, 50, 50], [85, 255, 255])],
+            "cyan": [([85, 50, 50], [100, 255, 255])],
+            "blue": [([100, 50, 50], [130, 255, 255])],
+            "magenta": [([140, 50, 50], [170, 255, 255])],
         }
 
         for color_name, ranges in color_ranges.items():
@@ -2502,24 +2440,21 @@ class SpotUniqueColorEvaluator(BaseEvaluator):
                     continue
 
                 M = cv2.moments(cnt)
-                if M['m00'] == 0:
+                if M["m00"] == 0:
                     continue
-                cx = int(M['m10'] / M['m00'])
-                cy = int(M['m01'] / M['m00'])
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
 
-                raw_shapes.append({
-                    'color': color_name,
-                    'center': (cx, cy),
-                    'area': area
-                })
+                raw_shapes.append({"color": color_name, "center": (cx, cy), "area": area})
 
         # Remove duplicates (shapes with very similar centers detected as different colors)
         shapes = []
         for s in raw_shapes:
             is_dup = False
             for existing in shapes:
-                dist = np.sqrt((s['center'][0] - existing['center'][0])**2 +
-                              (s['center'][1] - existing['center'][1])**2)
+                dist = np.sqrt(
+                    (s["center"][0] - existing["center"][0]) ** 2 + (s["center"][1] - existing["center"][1]) ** 2
+                )
                 if dist < 50:  # Same shape detected twice
                     is_dup = True
                     break
@@ -2549,10 +2484,10 @@ class SpotUniqueColorEvaluator(BaseEvaluator):
                 continue
 
             M = cv2.moments(cnt)
-            if M['m00'] == 0:
+            if M["m00"] == 0:
                 continue
-            int(M['m10'] / M['m00'])
-            int(M['m01'] / M['m00'])
+            int(M["m10"] / M["m00"])
+            int(M["m01"] / M["m00"])
 
             # For outline markings, the center might be the center of the outlined shape
             # Get bounding rect to find the approximate center of the marked region
@@ -2567,7 +2502,7 @@ class SpotUniqueColorEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate spot unique color task."""
         scores = {}
@@ -2592,7 +2527,7 @@ class SpotUniqueColorEvaluator(BaseEvaluator):
         # 1. Color uniqueness: Find unique color and check if marked
         color_counts_gt = {}
         for shape in gt_shapes:
-            color_counts_gt[shape['color']] = color_counts_gt.get(shape['color'], 0) + 1
+            color_counts_gt[shape["color"]] = color_counts_gt.get(shape["color"], 0) + 1
 
         # Find unique colors (appearing once)
         unique_colors = [c for c, count in color_counts_gt.items() if count == 1]
@@ -2602,23 +2537,22 @@ class SpotUniqueColorEvaluator(BaseEvaluator):
             marked_unique = False
             for marking in gen_markings:
                 for shape in gen_shapes:
-                    dist = np.sqrt((marking[0] - shape['center'][0])**2 +
-                                  (marking[1] - shape['center'][1])**2)
+                    dist = np.sqrt((marking[0] - shape["center"][0]) ** 2 + (marking[1] - shape["center"][1]) ** 2)
                     # More lenient distance threshold
-                    if dist < 100 and shape['color'] in unique_colors:
+                    if dist < 100 and shape["color"] in unique_colors:
                         marked_unique = True
                         break
-            scores['uniqueness'] = 1.0 if marked_unique else 0.5
+            scores["uniqueness"] = 1.0 if marked_unique else 0.5
         else:
             # Rule-based fallback: check if any marking exists near any shape
-            scores['uniqueness'] = 0.3 if gen_markings else 0.0
+            scores["uniqueness"] = 0.3 if gen_markings else 0.0
 
         # 2. Localization: Compare marking positions with GT
         if gen_markings and gt_markings:
             matched = 0
             for gm in gen_markings:
                 for gtm in gt_markings:
-                    dist = np.sqrt((gm[0] - gtm[0])**2 + (gm[1] - gtm[1])**2)
+                    dist = np.sqrt((gm[0] - gtm[0]) ** 2 + (gm[1] - gtm[1]) ** 2)
                     # Very close match (GT vs GT case)
                     if dist < 15:
                         matched += 1
@@ -2626,10 +2560,10 @@ class SpotUniqueColorEvaluator(BaseEvaluator):
                     elif dist < 80:  # More lenient threshold
                         matched += 0.8
                         break
-            scores['localization'] = min(1.0, matched / max(len(gt_markings), 1))
+            scores["localization"] = min(1.0, matched / max(len(gt_markings), 1))
         else:
             # Rule-based: no GT markings means no unique color expected
-            scores['localization'] = 0.5 if not gt_markings else 0.0
+            scores["localization"] = 0.5 if not gt_markings else 0.0
 
         # 3. Annotation quality: Check outline presence using IoU
         gray_gen = cv2.cvtColor(last_frame, cv2.COLOR_BGR2GRAY)
@@ -2641,7 +2575,7 @@ class SpotUniqueColorEvaluator(BaseEvaluator):
         black_overlap = np.sum((black_mask_gen > 0) & (black_mask_gt > 0))
         black_union = np.sum((black_mask_gen > 0) | (black_mask_gt > 0))
 
-        scores['annotation'] = black_overlap / black_union if black_union > 0 else 0.5
+        scores["annotation"] = black_overlap / black_union if black_union > 0 else 0.5
 
         # 4. Understanding: Check if only unique shapes are marked
         if gen_markings and gen_shapes:
@@ -2649,34 +2583,33 @@ class SpotUniqueColorEvaluator(BaseEvaluator):
             total_marks = len(gen_markings)
             for marking in gen_markings:
                 for shape in gen_shapes:
-                    dist = np.sqrt((marking[0] - shape['center'][0])**2 +
-                                  (marking[1] - shape['center'][1])**2)
+                    dist = np.sqrt((marking[0] - shape["center"][0]) ** 2 + (marking[1] - shape["center"][1]) ** 2)
                     if dist < 100:  # More lenient threshold
                         color_counts_gen = {}
                         for s in gen_shapes:
-                            color_counts_gen[s['color']] = color_counts_gen.get(s['color'], 0) + 1
-                        if color_counts_gen.get(shape['color'], 0) == 1:
+                            color_counts_gen[s["color"]] = color_counts_gen.get(s["color"], 0) + 1
+                        if color_counts_gen.get(shape["color"], 0) == 1:
                             correct_marks += 1
                         break
-            scores['understanding'] = correct_marks / total_marks if total_marks > 0 else 0.8
+            scores["understanding"] = correct_marks / total_marks if total_marks > 0 else 0.8
         else:
             # Rule-based fallback
-            scores['understanding'] = 0.2  # Detection failed
+            scores["understanding"] = 0.2  # Detection failed
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
 
+
 # Mapping of task names to evaluators
 IN_DOMAIN_50_EVALUATORS_PART2 = {
-    'G-29_chart_extreme_with_data_data-generator': ChartExtremeEvaluator,
-    'G-31_directed_graph_navigation_data-generator': DirectedGraphNavigationEvaluator,
-    'G-39_attention_shift_different_data-generator': AttentionShiftEvaluator,
-    'G-41_grid_highest_cost_data-generator': GridHighestCostEvaluator,
-    'G-43_understand_scene_structure_data-generator': UnderstandSceneStructureEvaluator,
-    'G-45_key_door_matching_data-generator': KeyDoorMatchingEvaluator,
-    'G-51_predict_next_color_data-generator': PredictNextColorEvaluator,
-    'G-131_select_next_figure_increasing_size_sequence_data-generator': SelectNextFigureIncreasingEvaluator,
-    'G-134_select_next_figure_large_small_alternating_sequence_data-generator': SelectNextFigureLargeSmallEvaluator,
-    'G-138_spot_unique_non_repeated_color_data-generator': SpotUniqueColorEvaluator,
-
+    "G-29_chart_extreme_with_data_data-generator": ChartExtremeEvaluator,
+    "G-31_directed_graph_navigation_data-generator": DirectedGraphNavigationEvaluator,
+    "G-39_attention_shift_different_data-generator": AttentionShiftEvaluator,
+    "G-41_grid_highest_cost_data-generator": GridHighestCostEvaluator,
+    "G-43_understand_scene_structure_data-generator": UnderstandSceneStructureEvaluator,
+    "G-45_key_door_matching_data-generator": KeyDoorMatchingEvaluator,
+    "G-51_predict_next_color_data-generator": PredictNextColorEvaluator,
+    "G-131_select_next_figure_increasing_size_sequence_data-generator": SelectNextFigureIncreasingEvaluator,
+    "G-134_select_next_figure_large_small_alternating_sequence_data-generator": SelectNextFigureLargeSmallEvaluator,
+    "G-138_spot_unique_non_repeated_color_data-generator": SpotUniqueColorEvaluator,
 }

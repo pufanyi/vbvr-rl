@@ -2,7 +2,6 @@
 Specific evaluators for In-Domain_50 tasks (Part 1).
 """
 
-
 import cv2
 import numpy as np
 
@@ -21,12 +20,7 @@ class StableSortEvaluator(BaseEvaluator):
     - Layout accuracy (10%): Horizontal alignment (same y-coordinate)
     """
 
-    TASK_WEIGHTS = {
-        'classification': 0.30,
-        'order': 0.30,
-        'fidelity': 0.30,
-        'layout': 0.10
-    }
+    TASK_WEIGHTS = {"classification": 0.30, "order": 0.30, "fidelity": 0.30, "layout": 0.10}
 
     def _detect_shapes(self, frame: np.ndarray) -> list[dict]:
         """Detect colored shapes and return their properties."""
@@ -44,31 +38,33 @@ class StableSortEvaluator(BaseEvaluator):
                 continue
 
             M = cv2.moments(cnt)
-            if M['m00'] == 0:
+            if M["m00"] == 0:
                 continue
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
 
             # Determine shape type by vertex count
             approx = cv2.approxPolyDP(cnt, 0.04 * cv2.arcLength(cnt, True), True)
             vertices = len(approx)
 
             if vertices == 3:
-                shape_type = 'triangle'
+                shape_type = "triangle"
             elif vertices == 4:
-                shape_type = 'square'
+                shape_type = "square"
             else:
-                shape_type = 'circle'
+                shape_type = "circle"
 
             # Get dominant color at centroid region
-            color = frame[max(0, cy-5):cy+5, max(0, cx-5):cx+5].mean(axis=(0, 1))
+            color = frame[max(0, cy - 5) : cy + 5, max(0, cx - 5) : cx + 5].mean(axis=(0, 1))
 
-            shapes.append({
-                'type': shape_type,
-                'center': (cx, cy),
-                'area': area,
-                'color': tuple(color.astype(int).tolist()),
-            })
+            shapes.append(
+                {
+                    "type": shape_type,
+                    "center": (cx, cy),
+                    "area": area,
+                    "color": tuple(color.astype(int).tolist()),
+                }
+            )
 
         return shapes
 
@@ -83,7 +79,7 @@ class StableSortEvaluator(BaseEvaluator):
 
         groups = {}
         for shape in shapes:
-            color = shape['color']
+            color = shape["color"]
             matched = False
             for group_color, group_shapes in groups.items():
                 if self._color_distance(color, eval(group_color)) < threshold:
@@ -101,7 +97,7 @@ class StableSortEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate stable sort task with rule-based logic."""
         if len(video_frames) < 2:
@@ -123,23 +119,23 @@ class StableSortEvaluator(BaseEvaluator):
 
         if len(final_shapes) >= 6 and len(final_groups) >= 2:
             # Check if shapes of same color are adjacent (grouped)
-            final_sorted = sorted(final_shapes, key=lambda s: s['center'][0])
+            final_sorted = sorted(final_shapes, key=lambda s: s["center"][0])
 
             # Count color transitions (fewer = better grouping)
             transitions = 0
             for i in range(1, len(final_sorted)):
-                if self._color_distance(final_sorted[i]['color'], final_sorted[i-1]['color']) > 50:
+                if self._color_distance(final_sorted[i]["color"], final_sorted[i - 1]["color"]) > 50:
                     transitions += 1
 
             # Ideal: 1 transition for 2 groups
             expected_transitions = len(final_groups) - 1
             if transitions <= expected_transitions:
-                scores['classification'] = 1.0
+                scores["classification"] = 1.0
             else:
-                scores['classification'] = max(0, 1.0 - (transitions - expected_transitions) * 0.3)
+                scores["classification"] = max(0, 1.0 - (transitions - expected_transitions) * 0.3)
         else:
             # Wrong number of shapes
-            scores['classification'] = max(0, len(final_shapes) / 6.0) * 0.5
+            scores["classification"] = max(0, len(final_shapes) / 6.0) * 0.5
 
         # 2. Order (30%): Check if each group is sorted small to large (left to right)
         order_score = 0.0
@@ -148,9 +144,9 @@ class StableSortEvaluator(BaseEvaluator):
             for group_shapes in final_groups.values():
                 if len(group_shapes) >= 2:
                     # Sort by x-position
-                    sorted_by_x = sorted(group_shapes, key=lambda s: s['center'][0])
+                    sorted_by_x = sorted(group_shapes, key=lambda s: s["center"][0])
                     # Check if sizes increase left to right
-                    sizes = [s['area'] for s in sorted_by_x]
+                    sizes = [s["area"] for s in sorted_by_x]
 
                     # Count correctly ordered pairs
                     correct_pairs = sum(1 for i in range(len(sizes) - 1) if sizes[i] < sizes[i + 1])
@@ -158,7 +154,7 @@ class StableSortEvaluator(BaseEvaluator):
                     group_scores.append(correct_pairs / total_pairs if total_pairs > 0 else 1.0)
 
             order_score = np.mean(group_scores) if group_scores else 0.5
-        scores['order'] = order_score
+        scores["order"] = order_score
 
         # 3. Fidelity (30%): Check if shapes are preserved from initial frame
         fidelity_score = 0.0
@@ -167,18 +163,14 @@ class StableSortEvaluator(BaseEvaluator):
             count_match = max(0, 1.0 - abs(len(initial_shapes) - len(final_shapes)) / max(len(initial_shapes), 1))
 
             # Check size preservation (total area should be similar)
-            initial_total_area = sum(s['area'] for s in initial_shapes)
-            final_total_area = sum(s['area'] for s in final_shapes)
+            initial_total_area = sum(s["area"] for s in initial_shapes)
+            final_total_area = sum(s["area"] for s in final_shapes)
             max_total_area = max(initial_total_area, final_total_area)
-            area_ratio = (
-                min(initial_total_area, final_total_area) / max_total_area
-                if max_total_area > 0
-                else 0
-            )
+            area_ratio = min(initial_total_area, final_total_area) / max_total_area if max_total_area > 0 else 0
 
             # Check shape type preservation
-            initial_types = sorted([s['type'] for s in initial_shapes])
-            final_types = sorted([s['type'] for s in final_shapes])
+            initial_types = sorted([s["type"] for s in initial_shapes])
+            final_types = sorted([s["type"] for s in final_shapes])
             type_match = sum(1 for a, b in zip(initial_types, final_types, strict=False) if a == b) / max(
                 len(initial_types),
                 len(final_types),
@@ -186,18 +178,19 @@ class StableSortEvaluator(BaseEvaluator):
             )
 
             fidelity_score = 0.4 * count_match + 0.3 * area_ratio + 0.3 * type_match
-        scores['fidelity'] = fidelity_score
+        scores["fidelity"] = fidelity_score
 
         # 4. Layout (10%): Check horizontal alignment
         layout_score = 0.0
         if final_shapes:
-            y_coords = [s['center'][1] for s in final_shapes]
+            y_coords = [s["center"][1] for s in final_shapes]
             y_variance = np.var(y_coords)
             # Good alignment: variance < 100 pixels
             layout_score = max(0, 1.0 - y_variance / 5000.0)
-        scores['layout'] = layout_score
+        scores["layout"] = layout_score
 
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
+
 
 class MultiObjectPlacementEvaluator(BaseEvaluator):
     """
@@ -211,13 +204,7 @@ class MultiObjectPlacementEvaluator(BaseEvaluator):
     - Star invariance (10%): Star markers remain stationary
     """
 
-    TASK_WEIGHTS = {
-        'color_matching': 0.30,
-        'alignment': 0.25,
-        'path': 0.20,
-        'fidelity': 0.15,
-        'star_invariance': 0.10
-    }
+    TASK_WEIGHTS = {"color_matching": 0.30, "alignment": 0.25, "path": 0.20, "fidelity": 0.15, "star_invariance": 0.10}
 
     def _detect_colored_objects(self, frame: np.ndarray) -> list[dict]:
         """Detect colored objects (shapes) in the frame."""
@@ -226,10 +213,10 @@ class MultiObjectPlacementEvaluator(BaseEvaluator):
 
         # Define color ranges for common colors
         color_ranges = {
-            'red': [([0, 100, 100], [10, 255, 255]), ([160, 100, 100], [180, 255, 255])],
-            'blue': [([100, 100, 100], [130, 255, 255])],
-            'green': [([35, 100, 100], [85, 255, 255])],
-            'yellow': [([20, 100, 100], [35, 255, 255])],
+            "red": [([0, 100, 100], [10, 255, 255]), ([160, 100, 100], [180, 255, 255])],
+            "blue": [([100, 100, 100], [130, 255, 255])],
+            "green": [([35, 100, 100], [85, 255, 255])],
+            "yellow": [([20, 100, 100], [35, 255, 255])],
         }
 
         for color_name, ranges in color_ranges.items():
@@ -243,11 +230,11 @@ class MultiObjectPlacementEvaluator(BaseEvaluator):
                 if area < 300:
                     continue
                 M = cv2.moments(cnt)
-                if M['m00'] == 0:
+                if M["m00"] == 0:
                     continue
-                cx = int(M['m10'] / M['m00'])
-                cy = int(M['m01'] / M['m00'])
-                objects.append({'color': color_name, 'center': (cx, cy), 'area': area})
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                objects.append({"color": color_name, "center": (cx, cy), "area": area})
 
         return objects
 
@@ -258,10 +245,10 @@ class MultiObjectPlacementEvaluator(BaseEvaluator):
 
         stars = []
         color_ranges = {
-            'red': [([0, 100, 100], [10, 255, 255]), ([160, 100, 100], [180, 255, 255])],
-            'blue': [([100, 100, 100], [130, 255, 255])],
-            'green': [([35, 100, 100], [85, 255, 255])],
-            'yellow': [([20, 100, 100], [35, 255, 255])],
+            "red": [([0, 100, 100], [10, 255, 255]), ([160, 100, 100], [180, 255, 255])],
+            "blue": [([100, 100, 100], [130, 255, 255])],
+            "green": [([35, 100, 100], [85, 255, 255])],
+            "yellow": [([20, 100, 100], [35, 255, 255])],
         }
 
         for color_name, ranges in color_ranges.items():
@@ -280,11 +267,11 @@ class MultiObjectPlacementEvaluator(BaseEvaluator):
                 approx = cv2.approxPolyDP(cnt, 0.02 * cv2.arcLength(cnt, True), True)
                 if len(approx) >= 8:  # Star has many vertices
                     M = cv2.moments(cnt)
-                    if M['m00'] == 0:
+                    if M["m00"] == 0:
                         continue
-                    cx = int(M['m10'] / M['m00'])
-                    cy = int(M['m01'] / M['m00'])
-                    stars.append({'color': color_name, 'center': (cx, cy), 'area': area})
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
+                    stars.append({"color": color_name, "center": (cx, cy), "area": area})
 
         return stars
 
@@ -294,7 +281,7 @@ class MultiObjectPlacementEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate multi-object placement task."""
         if len(video_frames) < 2 or gt_final_frame is None:
@@ -313,59 +300,59 @@ class MultiObjectPlacementEvaluator(BaseEvaluator):
             matched = 0
             for gen_obj in gen_objects:
                 for gt_obj in gt_objects:
-                    if gen_obj['color'] == gt_obj['color']:
-                        dist = safe_distance(gen_obj['center'], gt_obj['center'])
+                    if gen_obj["color"] == gt_obj["color"]:
+                        dist = safe_distance(gen_obj["center"], gt_obj["center"])
                         if dist < 30:  # Within 30 pixels
                             matched += 1
                             break
-            scores['color_matching'] = matched / max(len(gt_objects), 1)
+            scores["color_matching"] = matched / max(len(gt_objects), 1)
         else:
-            scores['color_matching'] = 0.2  # Detection failed
+            scores["color_matching"] = 0.2  # Detection failed
 
         # 2. Alignment precision: Compare object positions with GT
         if gen_objects and gt_objects:
             total_dist = 0
             count = 0
             for gen_obj in gen_objects:
-                min_dist = float('inf')
+                min_dist = float("inf")
                 for gt_obj in gt_objects:
-                    if gen_obj['color'] == gt_obj['color']:
-                        dist = safe_distance(gen_obj['center'], gt_obj['center'])
+                    if gen_obj["color"] == gt_obj["color"]:
+                        dist = safe_distance(gen_obj["center"], gt_obj["center"])
                         min_dist = min(min_dist, dist)
-                if min_dist < float('inf'):
+                if min_dist < float("inf"):
                     total_dist += min_dist
                     count += 1
             avg_dist = total_dist / count if count > 0 else 100
-            scores['alignment'] = max(0, 1.0 - avg_dist / 50.0)
+            scores["alignment"] = max(0, 1.0 - avg_dist / 50.0)
         else:
-            scores['alignment'] = 0.2  # Detection failed
+            scores["alignment"] = 0.2  # Detection failed
 
         # 3. Path optimality: Analyze motion smoothness
         if len(video_frames) > 2:
             motion_scores = []
             for i in range(1, min(len(video_frames), 10)):
-                diff = cv2.absdiff(video_frames[i], video_frames[i-1])
+                diff = cv2.absdiff(video_frames[i], video_frames[i - 1])
                 motion = np.mean(diff)
                 motion_scores.append(motion)
             # Smooth motion should have consistent changes
             if motion_scores:
                 variance = np.var(motion_scores)
-                scores['path'] = max(0, 1.0 - variance / 1000.0)
+                scores["path"] = max(0, 1.0 - variance / 1000.0)
             else:
-                scores['path'] = 0.2  # Detection failed
+                scores["path"] = 0.2  # Detection failed
         else:
-            scores['path'] = 0.2  # Detection failed
+            scores["path"] = 0.2  # Detection failed
 
         # 4. Fidelity: Check object count and area preservation
         first_objects = self._detect_colored_objects(first_frame)
         if first_objects and gen_objects:
             count_ratio = min(len(gen_objects), len(first_objects)) / max(len(gen_objects), len(first_objects), 1)
-            first_area = sum(o['area'] for o in first_objects)
-            gen_area = sum(o['area'] for o in gen_objects)
+            first_area = sum(o["area"] for o in first_objects)
+            gen_area = sum(o["area"] for o in gen_objects)
             area_ratio = min(first_area, gen_area) / max(first_area, gen_area, 1)
-            scores['fidelity'] = 0.5 * count_ratio + 0.5 * area_ratio
+            scores["fidelity"] = 0.5 * count_ratio + 0.5 * area_ratio
         else:
-            scores['fidelity'] = 0.2  # Detection failed
+            scores["fidelity"] = 0.2  # Detection failed
 
         # 5. Star invariance: Check if star positions are preserved
         first_stars = self._detect_star_markers(first_frame)
@@ -374,16 +361,17 @@ class MultiObjectPlacementEvaluator(BaseEvaluator):
             preserved = 0
             for fs in first_stars:
                 for ls in final_stars:
-                    if fs['color'] == ls['color']:
-                        dist = safe_distance(fs['center'], ls['center'])
+                    if fs["color"] == ls["color"]:
+                        dist = safe_distance(fs["center"], ls["center"])
                         if dist < 20:
                             preserved += 1
                             break
-            scores['star_invariance'] = preserved / max(len(first_stars), 1)
+            scores["star_invariance"] = preserved / max(len(first_stars), 1)
         else:
-            scores['star_invariance'] = 0.3  # No stars detected, assume OK
+            scores["star_invariance"] = 0.3  # No stars detected, assume OK
 
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
+
 
 class TrackObjectMovementEvaluator(BaseEvaluator):
     """
@@ -399,11 +387,11 @@ class TrackObjectMovementEvaluator(BaseEvaluator):
 
     # CRITICAL: Alignment is the main success criterion - object must reach red star
     TASK_WEIGHTS = {
-        'tracking': 0.10,
-        'horizontal': 0.10,
-        'alignment': 0.60,  # Main criterion - must align with red star
-        'identification': 0.10,
-        'fidelity': 0.10
+        "tracking": 0.10,
+        "horizontal": 0.10,
+        "alignment": 0.60,  # Main criterion - must align with red star
+        "identification": 0.10,
+        "fidelity": 0.10,
     }
 
     def _detect_green_border(self, frame: np.ndarray) -> tuple[int, int] | None:
@@ -420,10 +408,10 @@ class TrackObjectMovementEvaluator(BaseEvaluator):
         # Find largest green contour (the border)
         largest = max(contours, key=cv2.contourArea)
         M = cv2.moments(largest)
-        if M['m00'] == 0:
+        if M["m00"] == 0:
             return None
-        cx = int(M['m10'] / M['m00'])
-        cy = int(M['m01'] / M['m00'])
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
         return (cx, cy)
 
     def _detect_red_star(self, frame: np.ndarray) -> tuple[int, int] | None:
@@ -447,10 +435,10 @@ class TrackObjectMovementEvaluator(BaseEvaluator):
             approx = cv2.approxPolyDP(cnt, 0.02 * cv2.arcLength(cnt, True), True)
             if len(approx) >= 8:  # Star has many vertices
                 M = cv2.moments(cnt)
-                if M['m00'] == 0:
+                if M["m00"] == 0:
                     continue
-                cx = int(M['m10'] / M['m00'])
-                cy = int(M['m01'] / M['m00'])
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
                 return (cx, cy)
         return None
 
@@ -460,7 +448,7 @@ class TrackObjectMovementEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate object tracking task."""
         if len(video_frames) < 2 or gt_final_frame is None:
@@ -478,7 +466,7 @@ class TrackObjectMovementEvaluator(BaseEvaluator):
                 tracking_scores.append(1.0)
             else:
                 tracking_scores.append(0.0)
-        scores['tracking'] = np.mean(tracking_scores) if tracking_scores else 0.5
+        scores["tracking"] = np.mean(tracking_scores) if tracking_scores else 0.5
 
         # 2. Horizontal movement: Track green border y-coordinate stability
         y_positions = []
@@ -490,9 +478,9 @@ class TrackObjectMovementEvaluator(BaseEvaluator):
         if len(y_positions) >= 2:
             y_variance = np.var(y_positions)
             # Good horizontal movement: y variance < 100 pixels
-            scores['horizontal'] = max(0, 1.0 - y_variance / 500.0)
+            scores["horizontal"] = max(0, 1.0 - y_variance / 500.0)
         else:
-            scores['horizontal'] = 0.2  # Detection failed
+            scores["horizontal"] = 0.2  # Detection failed
 
         # 3. Alignment precision: Check if green border aligns with red star at the END
         final_border = self._detect_green_border(last_frame)
@@ -504,41 +492,42 @@ class TrackObjectMovementEvaluator(BaseEvaluator):
             x_diff = abs(final_border[0] - red_star[0])
             # Strict alignment: must be within 30 pixels
             if x_diff < 30:
-                scores['alignment'] = 1.0
+                scores["alignment"] = 1.0
             elif x_diff < 60:
-                scores['alignment'] = 0.5
+                scores["alignment"] = 0.5
             else:
-                scores['alignment'] = 0.0  # Not aligned - STRICT failure
+                scores["alignment"] = 0.0  # Not aligned - STRICT failure
         elif gt_border is not None and final_border is not None:
             x_diff = abs(final_border[0] - gt_border[0])
-            scores['alignment'] = max(0, 1.0 - x_diff / 50.0)
+            scores["alignment"] = max(0, 1.0 - x_diff / 50.0)
         else:
-            scores['alignment'] = 0.0  # Detection failed - STRICT
+            scores["alignment"] = 0.0  # Detection failed - STRICT
 
         # 4. Marker identification: Check if red star and green border are detected
         has_red_star = red_star is not None
         has_green_border = self._detect_green_border(first_frame) is not None
 
         if not has_red_star or not has_green_border:
-            scores['identification'] = 0.0  # Must have both markers
+            scores["identification"] = 0.0  # Must have both markers
         else:
-            scores['identification'] = 1.0
+            scores["identification"] = 1.0
 
         # 5. Fidelity: Check if movement was in a straight line (y stays constant)
         if len(y_positions) >= 3:
             # Check y variance - should be very low for straight horizontal movement
             y_variance = np.var(y_positions)
             if y_variance < 50:  # Very straight line
-                scores['fidelity'] = 1.0
+                scores["fidelity"] = 1.0
             elif y_variance < 200:
-                scores['fidelity'] = 0.5
+                scores["fidelity"] = 0.5
             else:
-                scores['fidelity'] = 0.0  # Not a straight line
+                scores["fidelity"] = 0.0  # Not a straight line
         else:
-            scores['fidelity'] = 0.0
+            scores["fidelity"] = 0.0
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
+
 
 class IdentifyObjectsInRegionEvaluator(BaseEvaluator):
     """
@@ -551,12 +540,7 @@ class IdentifyObjectsInRegionEvaluator(BaseEvaluator):
     - Border quality (15%): Green border complete and proper
     """
 
-    TASK_WEIGHTS = {
-        'region': 0.30,
-        'shape': 0.30,
-        'completeness': 0.25,
-        'border_quality': 0.15
-    }
+    TASK_WEIGHTS = {"region": 0.30, "shape": 0.30, "completeness": 0.25, "border_quality": 0.15}
 
     def _detect_green_borders(self, frame: np.ndarray) -> list[tuple[int, int]]:
         """Detect green border markings and return their centers."""
@@ -573,10 +557,10 @@ class IdentifyObjectsInRegionEvaluator(BaseEvaluator):
             if area < 100:
                 continue
             M = cv2.moments(cnt)
-            if M['m00'] == 0:
+            if M["m00"] == 0:
                 continue
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
             centers.append((cx, cy))
 
         return centers
@@ -587,7 +571,7 @@ class IdentifyObjectsInRegionEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate identify objects in region task."""
         if len(video_frames) < 1 or gt_final_frame is None:
@@ -606,20 +590,20 @@ class IdentifyObjectsInRegionEvaluator(BaseEvaluator):
             matched = 0
             for gb in gen_borders:
                 for gtb in gt_borders:
-                    dist = np.sqrt((gb[0] - gtb[0])**2 + (gb[1] - gtb[1])**2)
+                    dist = np.sqrt((gb[0] - gtb[0]) ** 2 + (gb[1] - gtb[1]) ** 2)
                     if dist < 50:
                         matched += 1
                         break
-            scores['region'] = matched / max(len(gt_borders), 1)
+            scores["region"] = matched / max(len(gt_borders), 1)
         else:
-            scores['region'] = 0.5 if not gt_borders else 0.0
+            scores["region"] = 0.5 if not gt_borders else 0.0
 
         # 2. Shape identification: Compare number of marked objects
         if gt_borders:
             count_diff = abs(len(gen_borders) - len(gt_borders))
-            scores['shape'] = max(0, 1.0 - count_diff * 0.3)
+            scores["shape"] = max(0, 1.0 - count_diff * 0.3)
         else:
-            scores['shape'] = 0.2  # Detection failed
+            scores["shape"] = 0.2  # Detection failed
 
         # 3. Completeness: Check precision and recall
         if gen_borders and gt_borders:
@@ -627,7 +611,7 @@ class IdentifyObjectsInRegionEvaluator(BaseEvaluator):
             precision_matches = 0
             for gb in gen_borders:
                 for gtb in gt_borders:
-                    dist = np.sqrt((gb[0] - gtb[0])**2 + (gb[1] - gtb[1])**2)
+                    dist = np.sqrt((gb[0] - gtb[0]) ** 2 + (gb[1] - gtb[1]) ** 2)
                     if dist < 50:
                         precision_matches += 1
                         break
@@ -637,15 +621,15 @@ class IdentifyObjectsInRegionEvaluator(BaseEvaluator):
             recall_matches = 0
             for gtb in gt_borders:
                 for gb in gen_borders:
-                    dist = np.sqrt((gb[0] - gtb[0])**2 + (gb[1] - gtb[1])**2)
+                    dist = np.sqrt((gb[0] - gtb[0]) ** 2 + (gb[1] - gtb[1]) ** 2)
                     if dist < 50:
                         recall_matches += 1
                         break
             recall = recall_matches / len(gt_borders) if gt_borders else 0
 
-            scores['completeness'] = 0.5 * precision + 0.5 * recall
+            scores["completeness"] = 0.5 * precision + 0.5 * recall
         else:
-            scores['completeness'] = 0.5 if not gt_borders else 0.0
+            scores["completeness"] = 0.5 if not gt_borders else 0.0
 
         # 4. Border quality: Check green pixel coverage
         hsv_gen = cv2.cvtColor(last_frame, cv2.COLOR_BGR2HSV)
@@ -661,9 +645,10 @@ class IdentifyObjectsInRegionEvaluator(BaseEvaluator):
         green_union = np.sum((green_mask_gen > 0) | (green_mask_gt > 0))
 
         green_iou = green_overlap / green_union if green_union > 0 else 0.5
-        scores['border_quality'] = green_iou
+        scores["border_quality"] = green_iou
 
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
+
 
 class GridNumberSequenceEvaluator(BaseEvaluator):
     """
@@ -676,12 +661,7 @@ class GridNumberSequenceEvaluator(BaseEvaluator):
     - Completeness (10%): Agent reaches red endpoint after all numbers
     """
 
-    TASK_WEIGHTS = {
-        'sequence': 0.35,
-        'path_optimal': 0.35,
-        'movement': 0.20,
-        'completeness': 0.10
-    }
+    TASK_WEIGHTS = {"sequence": 0.35, "path_optimal": 0.35, "movement": 0.20, "completeness": 0.10}
 
     def _detect_agent(self, frame: np.ndarray) -> tuple[int, int] | None:
         """Detect orange circular agent."""
@@ -696,10 +676,10 @@ class GridNumberSequenceEvaluator(BaseEvaluator):
 
         largest = max(contours, key=cv2.contourArea)
         M = cv2.moments(largest)
-        if M['m00'] == 0:
+        if M["m00"] == 0:
             return None
-        cx = int(M['m10'] / M['m00'])
-        cy = int(M['m01'] / M['m00'])
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
         return (cx, cy)
 
     def _detect_endpoint(self, frame: np.ndarray) -> tuple[int, int] | None:
@@ -717,10 +697,10 @@ class GridNumberSequenceEvaluator(BaseEvaluator):
 
         largest = max(contours, key=cv2.contourArea)
         M = cv2.moments(largest)
-        if M['m00'] == 0:
+        if M["m00"] == 0:
             return None
-        cx = int(M['m10'] / M['m00'])
-        cy = int(M['m01'] / M['m00'])
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
         return (cx, cy)
 
     def _evaluate_task_specific(
@@ -729,7 +709,7 @@ class GridNumberSequenceEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate grid number sequence task."""
         if len(video_frames) < 1 or gt_final_frame is None:
@@ -756,52 +736,61 @@ class GridNumberSequenceEvaluator(BaseEvaluator):
             # Compare final positions
             final_gen = agent_positions[-1]
             final_gt = gt_agent_positions[-1]
-            dist = np.sqrt((final_gen[0] - final_gt[0])**2 + (final_gen[1] - final_gt[1])**2)
-            scores['sequence'] = max(0, 1.0 - dist / 100.0)
+            dist = np.sqrt((final_gen[0] - final_gt[0]) ** 2 + (final_gen[1] - final_gt[1]) ** 2)
+            scores["sequence"] = max(0, 1.0 - dist / 100.0)
         else:
-            scores['sequence'] = 0.1  # Detection failed
+            scores["sequence"] = 0.1  # Detection failed
 
         # 2. Path optimality: Compare path length
         if len(agent_positions) >= 2 and len(gt_agent_positions) >= 2:
-            gen_path_len = sum(np.sqrt((agent_positions[i][0] - agent_positions[i-1][0])**2 +
-                                       (agent_positions[i][1] - agent_positions[i-1][1])**2)
-                              for i in range(1, len(agent_positions)))
-            gt_path_len = sum(np.sqrt((gt_agent_positions[i][0] - gt_agent_positions[i-1][0])**2 +
-                                      (gt_agent_positions[i][1] - gt_agent_positions[i-1][1])**2)
-                             for i in range(1, len(gt_agent_positions)))
+            gen_path_len = sum(
+                np.sqrt(
+                    (agent_positions[i][0] - agent_positions[i - 1][0]) ** 2
+                    + (agent_positions[i][1] - agent_positions[i - 1][1]) ** 2
+                )
+                for i in range(1, len(agent_positions))
+            )
+            gt_path_len = sum(
+                np.sqrt(
+                    (gt_agent_positions[i][0] - gt_agent_positions[i - 1][0]) ** 2
+                    + (gt_agent_positions[i][1] - gt_agent_positions[i - 1][1]) ** 2
+                )
+                for i in range(1, len(gt_agent_positions))
+            )
 
             if gt_path_len > 0:
                 ratio = min(gen_path_len, gt_path_len) / max(gen_path_len, gt_path_len)
-                scores['path_optimal'] = ratio
+                scores["path_optimal"] = ratio
             else:
-                scores['path_optimal'] = 0.1  # Detection failed
+                scores["path_optimal"] = 0.1  # Detection failed
         else:
-            scores['path_optimal'] = 0.1  # Detection failed
+            scores["path_optimal"] = 0.1  # Detection failed
 
         # 3. Movement rules: Check for diagonal movements
         if len(agent_positions) >= 2:
             diagonal_count = 0
             for i in range(1, len(agent_positions)):
-                dx = abs(agent_positions[i][0] - agent_positions[i-1][0])
-                dy = abs(agent_positions[i][1] - agent_positions[i-1][1])
+                dx = abs(agent_positions[i][0] - agent_positions[i - 1][0])
+                dy = abs(agent_positions[i][1] - agent_positions[i - 1][1])
                 # Diagonal if both dx and dy are significant
                 if dx > 10 and dy > 10:
                     diagonal_count += 1
-            scores['movement'] = max(0, 1.0 - diagonal_count * 0.2)
+            scores["movement"] = max(0, 1.0 - diagonal_count * 0.2)
         else:
-            scores['movement'] = 0.1  # Detection failed
+            scores["movement"] = 0.1  # Detection failed
 
         # 4. Completeness: Check if agent reaches endpoint
         endpoint = self._detect_endpoint(last_frame)
         final_agent = self._detect_agent(last_frame)
 
         if endpoint is not None and final_agent is not None:
-            dist = np.sqrt((endpoint[0] - final_agent[0])**2 + (endpoint[1] - final_agent[1])**2)
-            scores['completeness'] = 1.0 if dist < 50 else max(0, 1.0 - dist / 100.0)
+            dist = np.sqrt((endpoint[0] - final_agent[0]) ** 2 + (endpoint[1] - final_agent[1]) ** 2)
+            scores["completeness"] = 1.0 if dist < 50 else max(0, 1.0 - dist / 100.0)
         else:
-            scores['completeness'] = 0.1  # Detection failed
+            scores["completeness"] = 0.1  # Detection failed
 
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
+
 
 class GridAvoidObstaclesEvaluator(BaseEvaluator):
     """
@@ -815,10 +804,10 @@ class GridAvoidObstaclesEvaluator(BaseEvaluator):
     """
 
     TASK_WEIGHTS = {
-        'completion': 0.45,       # Agent reaches red endpoint
-        'grid_preserved': 0.30,   # Grid colors unchanged
-        'avoidance': 0.15,        # No collision with obstacles
-        'movement': 0.10          # Step by step movement
+        "completion": 0.45,  # Agent reaches red endpoint
+        "grid_preserved": 0.30,  # Grid colors unchanged
+        "avoidance": 0.15,  # No collision with obstacles
+        "movement": 0.10,  # Step by step movement
     }
 
     def _detect_agent(self, frame: np.ndarray) -> tuple[int, int] | None:
@@ -834,10 +823,10 @@ class GridAvoidObstaclesEvaluator(BaseEvaluator):
 
         largest = max(contours, key=cv2.contourArea)
         M = cv2.moments(largest)
-        if M['m00'] == 0:
+        if M["m00"] == 0:
             return None
-        cx = int(M['m10'] / M['m00'])
-        cy = int(M['m01'] / M['m00'])
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
         return (cx, cy)
 
     def _detect_obstacles(self, frame: np.ndarray) -> list[tuple[int, int]]:
@@ -854,10 +843,10 @@ class GridAvoidObstaclesEvaluator(BaseEvaluator):
             if area < 100 or area > 5000:
                 continue
             M = cv2.moments(cnt)
-            if M['m00'] == 0:
+            if M["m00"] == 0:
                 continue
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
             obstacles.append((cx, cy))
 
         return obstacles
@@ -877,10 +866,10 @@ class GridAvoidObstaclesEvaluator(BaseEvaluator):
 
         largest = max(contours, key=cv2.contourArea)
         M = cv2.moments(largest)
-        if M['m00'] == 0:
+        if M["m00"] == 0:
             return None
-        cx = int(M['m10'] / M['m00'])
-        cy = int(M['m01'] / M['m00'])
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
         return (cx, cy)
 
     def _get_grid_cell_colors(self, frame: np.ndarray, grid_size: int = 10) -> dict[tuple[int, int], str]:
@@ -900,7 +889,7 @@ class GridAvoidObstaclesEvaluator(BaseEvaluator):
                 x2 = (col + 1) * cell_w - 10
 
                 if y2 <= y1 or x2 <= x1:
-                    cell_colors[(row, col)] = 'white'
+                    cell_colors[(row, col)] = "white"
                     continue
 
                 cell_hsv = hsv[y1:y2, x1:x2]
@@ -913,18 +902,18 @@ class GridAvoidObstaclesEvaluator(BaseEvaluator):
                     dom_hue = np.median(hue[sat_mask])
                     # Classify color
                     if 100 <= dom_hue <= 130:
-                        color = 'blue'
+                        color = "blue"
                     elif dom_hue <= 10 or dom_hue >= 160:
-                        color = 'red'
+                        color = "red"
                     elif 20 <= dom_hue <= 35:
-                        color = 'yellow'
+                        color = "yellow"
                     elif 35 <= dom_hue <= 85:
-                        color = 'green'
+                        color = "green"
                     else:
-                        color = 'other'
+                        color = "other"
                     cell_colors[(row, col)] = color
                 else:
-                    cell_colors[(row, col)] = 'white'
+                    cell_colors[(row, col)] = "white"
 
         return cell_colors
 
@@ -934,7 +923,7 @@ class GridAvoidObstaclesEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate grid obstacle avoidance task.
 
@@ -962,40 +951,40 @@ class GridAvoidObstaclesEvaluator(BaseEvaluator):
 
         for key in first_colors:
             first_color = first_colors[key]
-            final_color = final_colors.get(key, 'white')
+            final_color = final_colors.get(key, "white")
 
             # Count all colored cells
-            if first_color in ['blue', 'red']:
+            if first_color in ["blue", "red"]:
                 total_grid_cells += 1
                 # Blue/red cells should remain blue/red (or be covered by yellow agent)
-                if first_color != final_color and final_color != 'yellow':
+                if first_color != final_color and final_color != "yellow":
                     changed_cells += 1
 
             # Check if a cell that was white/yellow now has a different grid color
             # (This could happen if grid structure changed)
-            if first_color in ['white', 'yellow'] and final_color in ['blue', 'red']:
+            if first_color in ["white", "yellow"] and final_color in ["blue", "red"]:
                 # This is OK if it's the start cell being revealed
                 pass  # Allow this
 
         # Also check total number of blue+red cells
-        first_br_count = sum(1 for c in first_colors.values() if c in ['blue', 'red'])
-        final_br_count = sum(1 for c in final_colors.values() if c in ['blue', 'red'])
+        first_br_count = sum(1 for c in first_colors.values() if c in ["blue", "red"])
+        final_br_count = sum(1 for c in final_colors.values() if c in ["blue", "red"])
 
         # If significantly more blue/red cells appeared, grid changed
         if final_br_count > first_br_count + 2:  # Allow up to 2 new cells (start revealed + tolerance)
-            changed_cells += (final_br_count - first_br_count - 2)
+            changed_cells += final_br_count - first_br_count - 2
 
         # Grid preservation score - STRICTER
         if changed_cells > 0:
-            scores['grid_preserved'] = 0.0
-            scores['completion'] = 0.0
-            scores['avoidance'] = 0.0
-            scores['movement'] = 0.0
+            scores["grid_preserved"] = 0.0
+            scores["completion"] = 0.0
+            scores["avoidance"] = 0.0
+            scores["movement"] = 0.0
             self._last_task_details = scores
-            self._last_task_details['cells_changed'] = changed_cells
+            self._last_task_details["cells_changed"] = changed_cells
             return 0.0
         else:
-            scores['grid_preserved'] = 1.0
+            scores["grid_preserved"] = 1.0
 
         # Detect obstacles in first frame
         obstacles = self._detect_obstacles(first_frame)
@@ -1012,45 +1001,46 @@ class GridAvoidObstaclesEvaluator(BaseEvaluator):
         final_agent = self._detect_agent(last_frame)
 
         if endpoint is not None and final_agent is not None:
-            dist = np.sqrt((endpoint[0] - final_agent[0])**2 + (endpoint[1] - final_agent[1])**2)
+            dist = np.sqrt((endpoint[0] - final_agent[0]) ** 2 + (endpoint[1] - final_agent[1]) ** 2)
             # Stricter threshold - must be within 40 pixels
             if dist < 40:
-                scores['completion'] = 1.0
+                scores["completion"] = 1.0
             elif dist < 80:
-                scores['completion'] = 0.3  # STRICT: Close but not at endpoint
+                scores["completion"] = 0.3  # STRICT: Close but not at endpoint
             else:
-                scores['completion'] = 0.0  # STRICT: Failed to reach endpoint
+                scores["completion"] = 0.0  # STRICT: Failed to reach endpoint
         else:
-            scores['completion'] = 0.0
+            scores["completion"] = 0.0
 
         # 2. Obstacle avoidance
         if agent_positions and obstacles:
             collision_count = 0
             for pos in agent_positions:
                 for obs in obstacles:
-                    dist = np.sqrt((pos[0] - obs[0])**2 + (pos[1] - obs[1])**2)
+                    dist = np.sqrt((pos[0] - obs[0]) ** 2 + (pos[1] - obs[1]) ** 2)
                     if dist < 30:
                         collision_count += 1
                         break
-            scores['avoidance'] = max(0, 1.0 - collision_count / len(agent_positions))
+            scores["avoidance"] = max(0, 1.0 - collision_count / len(agent_positions))
         else:
-            scores['avoidance'] = 0.0
+            scores["avoidance"] = 0.0
 
         # 3. Movement: Check for step-by-step movement
         if len(agent_positions) >= 2:
             # Check if agent moves step by step (not teleporting)
             large_jumps = 0
             for i in range(1, len(agent_positions)):
-                dx = abs(agent_positions[i][0] - agent_positions[i-1][0])
-                dy = abs(agent_positions[i][1] - agent_positions[i-1][1])
+                dx = abs(agent_positions[i][0] - agent_positions[i - 1][0])
+                dy = abs(agent_positions[i][1] - agent_positions[i - 1][1])
                 if dx > 100 or dy > 100:  # Too large a jump
                     large_jumps += 1
-            scores['movement'] = max(0, 1.0 - large_jumps * 0.3)
+            scores["movement"] = max(0, 1.0 - large_jumps * 0.3)
         else:
-            scores['movement'] = 0.0
+            scores["movement"] = 0.0
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
+
 
 class GridGoThroughBlockEvaluator(BaseEvaluator):
     """
@@ -1063,12 +1053,7 @@ class GridGoThroughBlockEvaluator(BaseEvaluator):
     - Movement rules (10%): Only up/down/left/right movement
     """
 
-    TASK_WEIGHTS = {
-        'block_visit': 0.40,
-        'path_optimal': 0.30,
-        'completion': 0.20,
-        'movement': 0.10
-    }
+    TASK_WEIGHTS = {"block_visit": 0.40, "path_optimal": 0.30, "completion": 0.20, "movement": 0.10}
 
     def _detect_agent(self, frame: np.ndarray) -> tuple[int, int] | None:
         """Detect orange circular agent."""
@@ -1083,10 +1068,10 @@ class GridGoThroughBlockEvaluator(BaseEvaluator):
 
         largest = max(contours, key=cv2.contourArea)
         M = cv2.moments(largest)
-        if M['m00'] == 0:
+        if M["m00"] == 0:
             return None
-        cx = int(M['m10'] / M['m00'])
-        cy = int(M['m01'] / M['m00'])
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
         return (cx, cy)
 
     def _detect_blue_blocks(self, frame: np.ndarray) -> list[tuple[int, int]]:
@@ -1104,10 +1089,10 @@ class GridGoThroughBlockEvaluator(BaseEvaluator):
             if area < 200:
                 continue
             M = cv2.moments(cnt)
-            if M['m00'] == 0:
+            if M["m00"] == 0:
                 continue
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
             blocks.append((cx, cy))
 
         return blocks
@@ -1127,10 +1112,10 @@ class GridGoThroughBlockEvaluator(BaseEvaluator):
 
         largest = max(contours, key=cv2.contourArea)
         M = cv2.moments(largest)
-        if M['m00'] == 0:
+        if M["m00"] == 0:
             return None
-        cx = int(M['m10'] / M['m00'])
-        cy = int(M['m01'] / M['m00'])
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
         return (cx, cy)
 
     def _evaluate_task_specific(
@@ -1139,7 +1124,7 @@ class GridGoThroughBlockEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate grid go through block task."""
         if len(video_frames) < 1 or gt_final_frame is None:
@@ -1164,12 +1149,12 @@ class GridGoThroughBlockEvaluator(BaseEvaluator):
             visited_blocks = set()
             for pos in agent_positions:
                 for i, block in enumerate(blue_blocks):
-                    dist = np.sqrt((pos[0] - block[0])**2 + (pos[1] - block[1])**2)
+                    dist = np.sqrt((pos[0] - block[0]) ** 2 + (pos[1] - block[1]) ** 2)
                     if dist < 40:
                         visited_blocks.add(i)
-            scores['block_visit'] = len(visited_blocks) / max(len(blue_blocks), 1)
+            scores["block_visit"] = len(visited_blocks) / max(len(blue_blocks), 1)
         else:
-            scores['block_visit'] = 0.2  # Detection failed
+            scores["block_visit"] = 0.2  # Detection failed
 
         # 2. Path optimality: Compare path length with GT
         gt_agent_positions = []
@@ -1179,44 +1164,53 @@ class GridGoThroughBlockEvaluator(BaseEvaluator):
                 gt_agent_positions.append(pos)
 
         if len(agent_positions) >= 2 and len(gt_agent_positions) >= 2:
-            gen_path_len = sum(np.sqrt((agent_positions[i][0] - agent_positions[i-1][0])**2 +
-                                       (agent_positions[i][1] - agent_positions[i-1][1])**2)
-                              for i in range(1, len(agent_positions)))
-            gt_path_len = sum(np.sqrt((gt_agent_positions[i][0] - gt_agent_positions[i-1][0])**2 +
-                                      (gt_agent_positions[i][1] - gt_agent_positions[i-1][1])**2)
-                             for i in range(1, len(gt_agent_positions)))
+            gen_path_len = sum(
+                np.sqrt(
+                    (agent_positions[i][0] - agent_positions[i - 1][0]) ** 2
+                    + (agent_positions[i][1] - agent_positions[i - 1][1]) ** 2
+                )
+                for i in range(1, len(agent_positions))
+            )
+            gt_path_len = sum(
+                np.sqrt(
+                    (gt_agent_positions[i][0] - gt_agent_positions[i - 1][0]) ** 2
+                    + (gt_agent_positions[i][1] - gt_agent_positions[i - 1][1]) ** 2
+                )
+                for i in range(1, len(gt_agent_positions))
+            )
 
             if gt_path_len > 0:
                 ratio = min(gen_path_len, gt_path_len) / max(gen_path_len, gt_path_len)
-                scores['path_optimal'] = ratio
+                scores["path_optimal"] = ratio
             else:
-                scores['path_optimal'] = 0.2  # Detection failed
+                scores["path_optimal"] = 0.2  # Detection failed
         else:
-            scores['path_optimal'] = 0.2  # Detection failed
+            scores["path_optimal"] = 0.2  # Detection failed
 
         # 3. Completion: Check if agent reaches endpoint
         endpoint = self._detect_endpoint(last_frame)
         final_agent = self._detect_agent(last_frame)
 
         if endpoint is not None and final_agent is not None:
-            dist = np.sqrt((endpoint[0] - final_agent[0])**2 + (endpoint[1] - final_agent[1])**2)
-            scores['completion'] = 1.0 if dist < 50 else max(0, 1.0 - dist / 100.0)
+            dist = np.sqrt((endpoint[0] - final_agent[0]) ** 2 + (endpoint[1] - final_agent[1]) ** 2)
+            scores["completion"] = 1.0 if dist < 50 else max(0, 1.0 - dist / 100.0)
         else:
-            scores['completion'] = 0.2  # Detection failed
+            scores["completion"] = 0.2  # Detection failed
 
         # 4. Movement rules: Check for diagonal movements
         if len(agent_positions) >= 2:
             diagonal_count = 0
             for i in range(1, len(agent_positions)):
-                dx = abs(agent_positions[i][0] - agent_positions[i-1][0])
-                dy = abs(agent_positions[i][1] - agent_positions[i-1][1])
+                dx = abs(agent_positions[i][0] - agent_positions[i - 1][0])
+                dy = abs(agent_positions[i][1] - agent_positions[i - 1][1])
                 if dx > 10 and dy > 10:
                     diagonal_count += 1
-            scores['movement'] = max(0, 1.0 - diagonal_count * 0.2)
+            scores["movement"] = max(0, 1.0 - diagonal_count * 0.2)
         else:
-            scores['movement'] = 0.2  # Detection failed
+            scores["movement"] = 0.2  # Detection failed
 
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
+
 
 class GridShortestPathEvaluator(BaseEvaluator):
     """
@@ -1229,12 +1223,7 @@ class GridShortestPathEvaluator(BaseEvaluator):
     - Visual fidelity (10%): Agent appearance preserved
     """
 
-    TASK_WEIGHTS = {
-        'path_optimal': 0.50,
-        'completion': 0.25,
-        'movement': 0.15,
-        'fidelity': 0.10
-    }
+    TASK_WEIGHTS = {"path_optimal": 0.50, "completion": 0.25, "movement": 0.15, "fidelity": 0.10}
 
     def _detect_agent(self, frame: np.ndarray) -> tuple[int, int] | None:
         """Detect colored circular agent."""
@@ -1245,7 +1234,7 @@ class GridShortestPathEvaluator(BaseEvaluator):
             (np.array([150, 50, 50]), np.array([180, 255, 255])),  # Pink (most common agent color)
             (np.array([120, 50, 50]), np.array([160, 255, 255])),  # Purple
             (np.array([10, 100, 100]), np.array([25, 255, 255])),  # Orange
-            (np.array([0, 100, 100]), np.array([10, 255, 255])),   # Red
+            (np.array([0, 100, 100]), np.array([10, 255, 255])),  # Red
         ]:
             mask = cv2.inRange(hsv, lower, upper)
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1261,10 +1250,10 @@ class GridShortestPathEvaluator(BaseEvaluator):
                 circularity = 4 * np.pi * area / (perimeter * perimeter)
                 if circularity > 0.6:  # Reasonably circular
                     M = cv2.moments(cnt)
-                    if M['m00'] == 0:
+                    if M["m00"] == 0:
                         continue
-                    cx = int(M['m10'] / M['m00'])
-                    cy = int(M['m01'] / M['m00'])
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
                     return (cx, cy)
 
         return None
@@ -1276,7 +1265,7 @@ class GridShortestPathEvaluator(BaseEvaluator):
         # Try multiple colors for endpoint
         for lower, upper in [
             (np.array([150, 50, 50]), np.array([180, 255, 255])),  # Pink
-            (np.array([0, 100, 100]), np.array([10, 255, 255])),   # Red
+            (np.array([0, 100, 100]), np.array([10, 255, 255])),  # Red
         ]:
             mask = cv2.inRange(hsv, lower, upper)
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1286,10 +1275,10 @@ class GridShortestPathEvaluator(BaseEvaluator):
                 if area < 500:
                     continue
                 M = cv2.moments(cnt)
-                if M['m00'] == 0:
+                if M["m00"] == 0:
                     continue
-                cx = int(M['m10'] / M['m00'])
-                cy = int(M['m01'] / M['m00'])
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
                 return (cx, cy)
 
         return None
@@ -1300,7 +1289,7 @@ class GridShortestPathEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate grid shortest path task."""
         if len(video_frames) < 1 or gt_final_frame is None:
@@ -1325,21 +1314,29 @@ class GridShortestPathEvaluator(BaseEvaluator):
 
         # 1. Path optimality: Compare path length with GT
         if len(agent_positions) >= 2 and len(gt_agent_positions) >= 2:
-            gen_path_len = sum(np.sqrt((agent_positions[i][0] - agent_positions[i-1][0])**2 +
-                                       (agent_positions[i][1] - agent_positions[i-1][1])**2)
-                              for i in range(1, len(agent_positions)))
-            gt_path_len = sum(np.sqrt((gt_agent_positions[i][0] - gt_agent_positions[i-1][0])**2 +
-                                      (gt_agent_positions[i][1] - gt_agent_positions[i-1][1])**2)
-                             for i in range(1, len(gt_agent_positions)))
+            gen_path_len = sum(
+                np.sqrt(
+                    (agent_positions[i][0] - agent_positions[i - 1][0]) ** 2
+                    + (agent_positions[i][1] - agent_positions[i - 1][1]) ** 2
+                )
+                for i in range(1, len(agent_positions))
+            )
+            gt_path_len = sum(
+                np.sqrt(
+                    (gt_agent_positions[i][0] - gt_agent_positions[i - 1][0]) ** 2
+                    + (gt_agent_positions[i][1] - gt_agent_positions[i - 1][1]) ** 2
+                )
+                for i in range(1, len(gt_agent_positions))
+            )
 
             if gt_path_len > 0:
                 # Allow some tolerance for path length
                 ratio = min(gen_path_len, gt_path_len) / max(gen_path_len, gt_path_len)
-                scores['path_optimal'] = ratio
+                scores["path_optimal"] = ratio
             else:
-                scores['path_optimal'] = 0.2  # Detection failed
+                scores["path_optimal"] = 0.2  # Detection failed
         else:
-            scores['path_optimal'] = 0.2  # Detection failed
+            scores["path_optimal"] = 0.2  # Detection failed
 
         # 2. Completion: Check if agent reaches endpoint
         endpoint = self._detect_endpoint(last_frame)
@@ -1348,43 +1345,42 @@ class GridShortestPathEvaluator(BaseEvaluator):
         gt_final_agent = self._detect_agent(gt_final_frame)
 
         if final_agent is not None and gt_final_agent is not None:
-            dist = np.sqrt((final_agent[0] - gt_final_agent[0])**2 +
-                          (final_agent[1] - gt_final_agent[1])**2)
-            scores['completion'] = max(0, 1.0 - dist / 50.0)
+            dist = np.sqrt((final_agent[0] - gt_final_agent[0]) ** 2 + (final_agent[1] - gt_final_agent[1]) ** 2)
+            scores["completion"] = max(0, 1.0 - dist / 50.0)
         elif endpoint is not None and final_agent is not None:
-            dist = np.sqrt((endpoint[0] - final_agent[0])**2 + (endpoint[1] - final_agent[1])**2)
-            scores['completion'] = 1.0 if dist < 50 else max(0, 1.0 - dist / 100.0)
+            dist = np.sqrt((endpoint[0] - final_agent[0]) ** 2 + (endpoint[1] - final_agent[1]) ** 2)
+            scores["completion"] = 1.0 if dist < 50 else max(0, 1.0 - dist / 100.0)
         elif len(agent_positions) >= 2 and len(gt_agent_positions) >= 2:
             # If agent detection fails in final frame, use last known position
             # This handles cases where agent merges with endpoint
             gen_last_pos = agent_positions[-1]
             gt_last_pos = gt_agent_positions[-1]
-            dist = np.sqrt((gen_last_pos[0] - gt_last_pos[0])**2 +
-                          (gen_last_pos[1] - gt_last_pos[1])**2)
-            scores['completion'] = max(0, 1.0 - dist / 100.0)
+            dist = np.sqrt((gen_last_pos[0] - gt_last_pos[0]) ** 2 + (gen_last_pos[1] - gt_last_pos[1]) ** 2)
+            scores["completion"] = max(0, 1.0 - dist / 100.0)
         else:
-            scores['completion'] = 0.2  # Detection failed
+            scores["completion"] = 0.2  # Detection failed
 
         # 3. Movement rules: Check for diagonal movements
         if len(agent_positions) >= 2:
             diagonal_count = 0
             for i in range(1, len(agent_positions)):
-                dx = abs(agent_positions[i][0] - agent_positions[i-1][0])
-                dy = abs(agent_positions[i][1] - agent_positions[i-1][1])
+                dx = abs(agent_positions[i][0] - agent_positions[i - 1][0])
+                dy = abs(agent_positions[i][1] - agent_positions[i - 1][1])
                 if dx > 10 and dy > 10:
                     diagonal_count += 1
-            scores['movement'] = max(0, 1.0 - diagonal_count * 0.2)
+            scores["movement"] = max(0, 1.0 - diagonal_count * 0.2)
         else:
-            scores['movement'] = 0.2  # Detection failed
+            scores["movement"] = 0.2  # Detection failed
 
         # 4. Fidelity: Compare agent appearance (use any detected agent through video)
         if final_agent is not None or len(agent_positions) > 0:
-            scores['fidelity'] = 1.0
+            scores["fidelity"] = 1.0
         else:
-            scores['fidelity'] = 0.2  # Detection failed
+            scores["fidelity"] = 0.2  # Detection failed
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
+
 
 class MultipleOcclusionsVerticalEvaluator(BaseEvaluator):
     """
@@ -1397,12 +1393,7 @@ class MultipleOcclusionsVerticalEvaluator(BaseEvaluator):
     - Visual consistency (15%): Objects maintain position and attributes
     """
 
-    TASK_WEIGHTS = {
-        'occlusion': 0.35,
-        'permanence': 0.30,
-        'motion': 0.20,
-        'consistency': 0.15
-    }
+    TASK_WEIGHTS = {"occlusion": 0.35, "permanence": 0.30, "motion": 0.20, "consistency": 0.15}
 
     def _detect_mask(self, frame: np.ndarray) -> tuple[int, int, int, int] | None:
         """Detect dark rectangular mask."""
@@ -1442,10 +1433,10 @@ class MultipleOcclusionsVerticalEvaluator(BaseEvaluator):
             if area < 200:
                 continue
             M = cv2.moments(cnt)
-            if M['m00'] == 0:
+            if M["m00"] == 0:
                 continue
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
             objects.append((cx, cy))
 
         return objects
@@ -1456,7 +1447,7 @@ class MultipleOcclusionsVerticalEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate multiple occlusions task."""
         if len(video_frames) < 2 or gt_final_frame is None:
@@ -1483,33 +1474,33 @@ class MultipleOcclusionsVerticalEvaluator(BaseEvaluator):
                 occlusion_detected = True
                 break
 
-        scores['occlusion'] = 1.0 if occlusion_detected else 0.0
+        scores["occlusion"] = 1.0 if occlusion_detected else 0.0
 
         # 2. Object permanence: Objects should reappear at original positions in final frame
         if initial_objects and final_objects:
             reappeared = 0
             for io in initial_objects:
                 for fo in final_objects:
-                    dist = np.sqrt((io[0] - fo[0])**2 + (io[1] - fo[1])**2)
+                    dist = np.sqrt((io[0] - fo[0]) ** 2 + (io[1] - fo[1]) ** 2)
                     if dist < 50:  # Same position (with tolerance)
                         reappeared += 1
                         break
 
-            scores['permanence'] = reappeared / len(initial_objects)
+            scores["permanence"] = reappeared / len(initial_objects)
         else:
-            scores['permanence'] = 0.0 if initial_objects else 0.5
+            scores["permanence"] = 0.0 if initial_objects else 0.5
 
         # 3. Motion correctness: Compare final frame with GT final
         if last_frame.shape == gt_final_frame.shape:
             diff = np.abs(last_frame.astype(float) - gt_final_frame.astype(float)).mean()
             if diff < 20:
-                scores['motion'] = 1.0
+                scores["motion"] = 1.0
             elif diff < 40:
-                scores['motion'] = 0.5
+                scores["motion"] = 0.5
             else:
-                scores['motion'] = 0.0
+                scores["motion"] = 0.0
         else:
-            scores['motion'] = 0.0
+            scores["motion"] = 0.0
 
         # 4. Visual consistency: Final frame should match GT final frame (objects at same positions)
         if final_objects and gt_final_objects:
@@ -1520,18 +1511,19 @@ class MultipleOcclusionsVerticalEvaluator(BaseEvaluator):
             position_matches = 0
             for gto in gt_final_objects:
                 for fo in final_objects:
-                    dist = np.sqrt((gto[0] - fo[0])**2 + (gto[1] - fo[1])**2)
+                    dist = np.sqrt((gto[0] - fo[0]) ** 2 + (gto[1] - fo[1]) ** 2)
                     if dist < 50:
                         position_matches += 1
                         break
 
             position_score = position_matches / max(len(gt_final_objects), 1)
-            scores['consistency'] = 0.5 * (1.0 if count_match else 0.0) + 0.5 * position_score
+            scores["consistency"] = 0.5 * (1.0 if count_match else 0.0) + 0.5 * position_score
         else:
-            scores['consistency'] = 0.0 if gt_final_objects else 0.5
+            scores["consistency"] = 0.0 if gt_final_objects else 0.5
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
+
 
 class SeparateObjectsSpinningEvaluator(BaseEvaluator):
     """
@@ -1544,12 +1536,7 @@ class SeparateObjectsSpinningEvaluator(BaseEvaluator):
     - Visual fidelity (10%): Shape, color, size preserved
     """
 
-    TASK_WEIGHTS = {
-        'rotation': 0.40,
-        'alignment': 0.30,
-        'order': 0.20,
-        'fidelity': 0.10
-    }
+    TASK_WEIGHTS = {"rotation": 0.40, "alignment": 0.30, "order": 0.20, "fidelity": 0.10}
 
     def _evaluate_task_specific(
         self,
@@ -1557,7 +1544,7 @@ class SeparateObjectsSpinningEvaluator(BaseEvaluator):
         gt_frames: list[np.ndarray],
         gt_first_frame: np.ndarray | None,
         gt_final_frame: np.ndarray | None,
-        eval_info: dict
+        eval_info: dict,
     ) -> float:
         """Evaluate separate objects spinning task."""
         scores = {}
@@ -1576,19 +1563,19 @@ class SeparateObjectsSpinningEvaluator(BaseEvaluator):
 
         # 1. Rotation correctness (40%): Check if objects reached correct orientation
         rotation_score = self._evaluate_rotation(last_objects, gt_objects)
-        scores['rotation'] = rotation_score
+        scores["rotation"] = rotation_score
 
         # 2. Alignment precision (30%): Check if objects align with target outlines
         alignment_score = self._evaluate_alignment(last_frame, gt_last)
-        scores['alignment'] = alignment_score
+        scores["alignment"] = alignment_score
 
         # 3. Operation order (20%): Check if rotation happens before translation
         order_score = self._evaluate_operation_order(video_frames, first_objects)
-        scores['order'] = order_score
+        scores["order"] = order_score
 
         # 4. Visual fidelity (10%): Check if shape, color, size preserved
         fidelity_score = self._evaluate_fidelity(first_objects, last_objects)
-        scores['fidelity'] = fidelity_score
+        scores["fidelity"] = fidelity_score
 
         self._last_task_details = scores
         return sum(scores[k] * self.TASK_WEIGHTS[k] for k in self.TASK_WEIGHTS)
@@ -1600,12 +1587,12 @@ class SeparateObjectsSpinningEvaluator(BaseEvaluator):
 
         # Define color ranges for common object colors
         color_ranges = {
-            'red': ([0, 100, 100], [10, 255, 255], [160, 100, 100], [180, 255, 255]),
-            'green': ([35, 100, 100], [85, 255, 255], None, None),
-            'blue': ([100, 100, 100], [130, 255, 255], None, None),
-            'yellow': ([20, 100, 100], [35, 255, 255], None, None),
-            'orange': ([10, 100, 100], [20, 255, 255], None, None),
-            'purple': ([130, 100, 100], [160, 255, 255], None, None),
+            "red": ([0, 100, 100], [10, 255, 255], [160, 100, 100], [180, 255, 255]),
+            "green": ([35, 100, 100], [85, 255, 255], None, None),
+            "blue": ([100, 100, 100], [130, 255, 255], None, None),
+            "yellow": ([20, 100, 100], [35, 255, 255], None, None),
+            "orange": ([10, 100, 100], [20, 255, 255], None, None),
+            "purple": ([130, 100, 100], [160, 255, 255], None, None),
         }
 
         for color_name, ranges in color_ranges.items():
@@ -1624,26 +1611,28 @@ class SeparateObjectsSpinningEvaluator(BaseEvaluator):
 
                 # Get moments and orientation
                 M = cv2.moments(contour)
-                if M['m00'] == 0:
+                if M["m00"] == 0:
                     continue
 
-                cx = int(M['m10'] / M['m00'])
-                cy = int(M['m01'] / M['m00'])
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
 
                 # Calculate orientation using moments
-                angle = 0.5 * np.arctan2(2 * M['mu11'], M['mu20'] - M['mu02']) if M['mu20'] - M['mu02'] != 0 else 0
+                angle = 0.5 * np.arctan2(2 * M["mu11"], M["mu20"] - M["mu02"]) if M["mu20"] - M["mu02"] != 0 else 0
 
                 # Get bounding box
                 rect = cv2.minAreaRect(contour)
 
-                objects.append({
-                    'color': color_name,
-                    'center': (cx, cy),
-                    'area': area,
-                    'angle': np.degrees(angle),
-                    'contour': contour,
-                    'rect': rect
-                })
+                objects.append(
+                    {
+                        "color": color_name,
+                        "center": (cx, cy),
+                        "area": area,
+                        "angle": np.degrees(angle),
+                        "contour": contour,
+                        "rect": rect,
+                    }
+                )
 
         return objects
 
@@ -1658,11 +1647,11 @@ class SeparateObjectsSpinningEvaluator(BaseEvaluator):
         for gt_obj in gt_objects:
             # Find matching object by color and approximate position
             best_match = None
-            best_dist = float('inf')
+            best_dist = float("inf")
 
             for obj in last_objects:
-                if obj['color'] == gt_obj['color']:
-                    dist = safe_distance(obj['center'], gt_obj['center'])
+                if obj["color"] == gt_obj["color"]:
+                    dist = safe_distance(obj["center"], gt_obj["center"])
                     if dist < best_dist:
                         best_dist = dist
                         best_match = obj
@@ -1670,7 +1659,7 @@ class SeparateObjectsSpinningEvaluator(BaseEvaluator):
             if best_match:
                 matched += 1
                 # Compare angles (accounting for symmetry)
-                angle_diff = abs(best_match['angle'] - gt_obj['angle'])
+                angle_diff = abs(best_match["angle"] - gt_obj["angle"])
                 angle_diff = min(angle_diff, 180 - angle_diff)  # Handle symmetry
 
                 # Score based on angle error: <5° = 1.0, 5-10° = 0.8, 10-20° = 0.6, >20° = 0.4
@@ -1748,18 +1737,18 @@ class SeparateObjectsSpinningEvaluator(BaseEvaluator):
             # Match objects and track changes
             for prev_obj in prev_objects:
                 best_match = None
-                best_dist = float('inf')
+                best_dist = float("inf")
 
                 for obj in curr_objects:
-                    if obj['color'] == prev_obj['color']:
-                        dist = safe_distance(obj['center'], prev_obj['center'])
+                    if obj["color"] == prev_obj["color"]:
+                        dist = safe_distance(obj["center"], prev_obj["center"])
                         if dist < best_dist:
                             best_dist = dist
                             best_match = obj
 
                 if best_match:
                     position_changes.append(best_dist)
-                    angle_diff = abs(best_match['angle'] - prev_obj['angle'])
+                    angle_diff = abs(best_match["angle"] - prev_obj["angle"])
                     angle_changes.append(min(angle_diff, 180 - angle_diff))
 
             prev_objects = curr_objects
@@ -1798,25 +1787,26 @@ class SeparateObjectsSpinningEvaluator(BaseEvaluator):
         for first_obj in first_objects:
             # Find matching object by color
             for last_obj in last_objects:
-                if first_obj['color'] == last_obj['color']:
+                if first_obj["color"] == last_obj["color"]:
                     # Check area preservation (within 20%)
-                    area_ratio = last_obj['area'] / max(1, first_obj['area'])
+                    area_ratio = last_obj["area"] / max(1, first_obj["area"])
                     if 0.8 <= area_ratio <= 1.2:
                         preserved_count += 1
                     break
 
         return preserved_count / max(1, total)
 
+
 # Mapping of task names to evaluators
 IN_DOMAIN_50_EVALUATORS = {
-    'G-3_stable_sort_data-generator': StableSortEvaluator,
-    'G-5_multi_object_placement_data-generator': MultiObjectPlacementEvaluator,
-    'G-8_track_object_movement_data-generator': TrackObjectMovementEvaluator,
-    'G-9_identify_objects_in_region_data-generator': IdentifyObjectsInRegionEvaluator,
-    'G-13_grid_number_sequence_data-generator': GridNumberSequenceEvaluator,
-    'G-15_grid_avoid_obstacles_data-generator': GridAvoidObstaclesEvaluator,
-    'G-16_grid_go_through_block_data-generator': GridGoThroughBlockEvaluator,
-    'G-18_grid_shortest_path_data-generator': GridShortestPathEvaluator,
-    'G-21_multiple_occlusions_vertical_data-generator': MultipleOcclusionsVerticalEvaluator,
-    'G-25_seperate_object_spinning_data-generator': SeparateObjectsSpinningEvaluator,
+    "G-3_stable_sort_data-generator": StableSortEvaluator,
+    "G-5_multi_object_placement_data-generator": MultiObjectPlacementEvaluator,
+    "G-8_track_object_movement_data-generator": TrackObjectMovementEvaluator,
+    "G-9_identify_objects_in_region_data-generator": IdentifyObjectsInRegionEvaluator,
+    "G-13_grid_number_sequence_data-generator": GridNumberSequenceEvaluator,
+    "G-15_grid_avoid_obstacles_data-generator": GridAvoidObstaclesEvaluator,
+    "G-16_grid_go_through_block_data-generator": GridGoThroughBlockEvaluator,
+    "G-18_grid_shortest_path_data-generator": GridShortestPathEvaluator,
+    "G-21_multiple_occlusions_vertical_data-generator": MultipleOcclusionsVerticalEvaluator,
+    "G-25_seperate_object_spinning_data-generator": SeparateObjectsSpinningEvaluator,
 }
