@@ -53,7 +53,7 @@ if not set -q RANK; or test -z "$RANK"
     exit 1
 end
 
-. .venv/bin/activate.fish
+source (dirname (status filename))/../activate_venv.fish
 
 torchrun \
     --nnodes=$WORLD_SIZE \

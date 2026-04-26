@@ -1,4 +1,6 @@
-. .venv/bin/activate.fish
+#!/usr/bin/env fish
+
+source (dirname (status filename))/activate_venv.fish
 
 set -x PYTHONPATH (pwd)
 

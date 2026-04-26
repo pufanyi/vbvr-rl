@@ -7,6 +7,8 @@
 # Edit the variables below to configure the run, then:
 #   fish scripts/eval/eval_sft_maze.fish
 
+source (dirname (status filename))/../activate_venv.fish
+
 # ── Configuration ────────────────────────────────────────────────────
 set CHECKPOINTS \
     storage/checkpoints/dancegrpo_maze_bfs/checkpoint-400
@@ -75,13 +77,13 @@ echo "Scheduler:      "(test -n "$SCHEDULER" && echo $SCHEDULER || echo "default
 echo "---"
 
 if test $NUM_GPUS -gt 1
-    uv run torchrun --nproc_per_node=$NUM_GPUS -m src.cli.eval_maze \
+    torchrun --nproc_per_node=$NUM_GPUS -m src.cli.eval_maze \
         --eval_json $EVAL_JSONS \
         --output_dir $OUTPUT_DIR \
         --checkpoint $CHECKPOINTS \
         --use_ema $EXTRA_ARGS
 else
-    uv run python -m src.cli.eval_maze \
+    python -m src.cli.eval_maze \
         --eval_json $EVAL_JSONS \
         --output_dir $OUTPUT_DIR \
         --checkpoint $CHECKPOINTS \

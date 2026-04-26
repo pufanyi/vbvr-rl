@@ -12,6 +12,8 @@
 # Run from repo root:
 #   fish scripts/eval/eval_vbvr_wan22_full.fish
 
+source (dirname (status filename))/../activate_venv.fish
+
 # ── Configuration ────────────────────────────────────────────────────
 set MODEL_OUTPUTS \
     storage/eval_out/vbvr_wan22_full/videos
@@ -41,7 +43,7 @@ for MODEL_OUT in $MODEL_OUTPUTS
     echo "==============================================================="
 
     if test -n "$SOURCE_SPLIT"; and test -d $ABS_MODEL_OUT/$SOURCE_SPLIT
-        uv run python scripts/eval/vbvr_restructure_to_evalkit.py \
+        python -m src.eval.vbvr_restructure_to_evalkit \
             --model_out    $ABS_MODEL_OUT \
             --source_split $SOURCE_SPLIT
         or begin
@@ -50,7 +52,7 @@ for MODEL_OUT in $MODEL_OUTPUTS
         end
     end
 
-    uv run python scripts/eval/vbvr_run_evaluation_parallel.py \
+    python -m src.eval.vbvr_run_evaluation_parallel \
         --model_path  $ABS_MODEL_OUT \
         --gt_base     $GT_BASE \
         --output_dir  $SCORE_DIR \

@@ -10,7 +10,7 @@ set -q OUTPUT_DIR;         or set -gx OUTPUT_DIR         data/vbvr/latents/webda
 set -q SAMPLES_PER_SHARD;  or set -gx SAMPLES_PER_SHARD  1000
 set -q SEED;               or set -gx SEED               42
 
-. .venv/bin/activate.fish
+source (dirname (status filename))/../activate_venv.fish
 
 python -m src.precompute.build_webdataset \
     --prompt_embeds_dir $PROMPT_EMBEDS_DIR \

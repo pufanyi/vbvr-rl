@@ -251,7 +251,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
         if device is None:
             device = torch.device("cpu")
         t_values = torch.linspace(1.0, 0.0, num_sampling_steps + 1, device=device, dtype=torch.float32)
-        shift = 5.0
+        shift = self.model.flow_shift
         sigmas = shift * t_values / (1.0 + (shift - 1.0) * t_values)
         timesteps = (sigmas[:-1] * self.model.num_train_timesteps).cpu().tolist()
         high_flags = [timestep >= self.model.boundary_timestep for timestep in timesteps]

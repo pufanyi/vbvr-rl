@@ -1,7 +1,7 @@
 """Wan2.2 I2V training entry point.
 
 Usage:
-    torchrun --nproc_per_node=2 -m src.cli.train_i2v --config configs/train_i2v.yaml
+    .venv/bin/torchrun --nproc_per_node=2 -m src.cli.train_i2v --config configs/train_i2v.yaml
 """
 
 import argparse

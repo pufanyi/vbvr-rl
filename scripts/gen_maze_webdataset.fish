@@ -19,8 +19,9 @@
 # Output directory is consumed by `latent_webdataset_dir:` in the training
 # YAML (same contract as VBVRLatentDataset).
 
+source (dirname (status filename))/activate_venv.fish
+
 set -x PYTHONPATH (pwd) $PYTHONPATH
-set -x UV_NO_SYNC 1
 
 set -l n_gpus (nvidia-smi -L | wc -l)
 if test $n_gpus -lt 1
@@ -35,7 +36,7 @@ set -q MASTER_PORT; or set MASTER_PORT 29500
 
 echo "[gen_maze_webdataset] nnodes=$NNODES node_rank=$NODE_RANK nproc_per_node=$NPROC master=$MASTER_ADDR:$MASTER_PORT"
 
-uv run torchrun \
+torchrun \
     --nnodes=$NNODES \
     --nproc_per_node=$NPROC \
     --node_rank=$NODE_RANK \

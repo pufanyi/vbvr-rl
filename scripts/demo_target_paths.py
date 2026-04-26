@@ -5,8 +5,8 @@ approaches. In all cases the model starts from noise, initially heads
 toward v1, then redirects toward v2 — without ever reaching v1.
 
 Usage:
-    uv run python scripts/demo_target_paths.py          # tau=0.5
-    uv run python scripts/demo_target_paths.py --tau 0.3
+    .venv/bin/python scripts/demo_target_paths.py          # tau=0.5
+    .venv/bin/python scripts/demo_target_paths.py --tau 0.3
 """
 
 import argparse

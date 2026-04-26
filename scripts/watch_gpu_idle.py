@@ -6,12 +6,12 @@ Default behavior:
   - require all GPUs to stay below 10% utilization
   - require 30 consecutive minutes of low utilization
   - then launch:
-      torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_sft_maze.yaml
+      .venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_sft_maze.yaml
 
 Examples:
-  python scripts/watch_gpu_idle.py
-  python scripts/watch_gpu_idle.py --dry-run
-  python scripts/watch_gpu_idle.py --command "echo triggered"
+  .venv/bin/python scripts/watch_gpu_idle.py
+  .venv/bin/python scripts/watch_gpu_idle.py --dry-run
+  .venv/bin/python scripts/watch_gpu_idle.py --command "echo triggered"
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-DEFAULT_COMMAND = "torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_sft_maze.yaml"
+DEFAULT_COMMAND = ".venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_sft_maze.yaml"
 
 
 def timestamp() -> str:

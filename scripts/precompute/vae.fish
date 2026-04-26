@@ -23,7 +23,7 @@ set -q OUTPUT_DIR;   or set -gx OUTPUT_DIR   data/vbvr/latents/vae_latents
 set -q BATCH_SIZE;   or set -gx BATCH_SIZE   40
 set -q NUM_FRAMES;   or set -gx NUM_FRAMES   81
 
-. .venv/bin/activate.fish
+source (dirname (status filename))/../activate_venv.fish
 
 torchrun \
     --nnodes=$NNODES --nproc_per_node=$NPROC_PER_NODE \

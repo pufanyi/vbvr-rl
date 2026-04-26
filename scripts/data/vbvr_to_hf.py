@@ -8,7 +8,7 @@ Deps:
     uv add huggingface_hub
 
 Usage:
-    uv run python scripts/data/vbvr_to_hf.py \\
+    .venv/bin/python scripts/data/vbvr_to_hf.py \\
         --tar_dir data/vbvr/VBVR-Bench-wds \\
         --repo_id pufanyi/VBVR-Bench
 """

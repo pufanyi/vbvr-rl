@@ -22,7 +22,7 @@ set -q MODEL_PATH; or set -gx MODEL_PATH storage/models/Wan2.2-I2V-A14B-Diffuser
 set -q OUTPUT_DIR;  or set -gx OUTPUT_DIR  data/vbvr/latents/prompt_embeds
 set -q BATCH_SIZE;  or set -gx BATCH_SIZE  2048
 
-. .venv/bin/activate.fish
+source (dirname (status filename))/../activate_venv.fish
 
 torchrun \
     --nnodes=$NNODES --nproc_per_node=$NPROC_PER_NODE \

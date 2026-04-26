@@ -22,6 +22,7 @@ sidecars and applied to the pipeline before weight load.
 
 from __future__ import annotations
 
+import gc
 import json
 from pathlib import Path
 
@@ -256,6 +257,8 @@ def load_dcp_into_pipeline(pipe, checkpoint_path: str, use_ema: bool = False) ->
                 weights, source_tag = extract_init_weights(flat, name, prefer="raw")
             except RuntimeError as e:
                 logger.debug("No {} data in {}: {}", name, dcp_path, e)
+                del flat
+                gc.collect()
                 continue
         remapped = remap_for_current_model(weights, model)
         missing, unexpected = model.load_state_dict(remapped, strict=False)
@@ -267,6 +270,8 @@ def load_dcp_into_pipeline(pipe, checkpoint_path: str, use_ema: bool = False) ->
             len(missing),
             len(unexpected),
         )
+        del flat, weights, remapped
+        gc.collect()
 
 
 def _detect_layout(checkpoint_path: str) -> dict[str, str]:
@@ -304,12 +309,13 @@ def apply_lora_adapters_from_checkpoint(pipe, checkpoint_path: str) -> bool:
 
     p = Path(checkpoint_path)
     targets = [
-        ("transformer", p / "high" / "lora" / "transformer"),
-        ("transformer_2", p / "low" / "lora" / "transformer_2"),
+        ("transformer", [p / "high" / "lora" / "transformer", p / "lora" / "transformer"]),
+        ("transformer_2", [p / "low" / "lora" / "transformer_2", p / "lora" / "transformer_2"]),
     ]
     found = False
-    for name, adapter_dir in targets:
-        if not (adapter_dir / "adapter_config.json").exists():
+    for name, adapter_dirs in targets:
+        adapter_dir = next((d for d in adapter_dirs if (d / "adapter_config.json").exists()), None)
+        if adapter_dir is None:
             continue
         found = True
         model = getattr(pipe, name, None)
@@ -560,7 +566,7 @@ def _lora_to_plain_error() -> ValueError:
     return ValueError(
         "Cannot init a full-FT model from a LoRA-trained checkpoint — the LoRA "
         "delta must be merged into base weights first. Recipe:\n"
-        "  1. uv run python scripts/convert_dcp_to_lora.py \\\n"
+        "  1. .venv/bin/python -m src.cli.convert_dcp_to_lora \\\n"
         "         --config <original_train_config.yaml> \\\n"
         "         --checkpoint <ckpt_path> \\\n"
         "         --output <adapter_out>\n"

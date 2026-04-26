@@ -59,6 +59,10 @@ class TrainConfig(BaseModel):
     fsdp: bool = True  # False = no sharding, manual gradient all-reduce (faster for LoRA / small models)
     param_dtype: Literal["bfloat16", "float32"] = "bfloat16"
     reduce_dtype: Literal["float32", "bfloat16"] = "float32"
+    transformer_load_dtype: Literal["auto", "bfloat16", "float32"] = "auto"
+    # auto: full fine-tuning loads trainable transformers in fp32 for fp32 Adam states;
+    # LoRA keeps the frozen base in bf16 unless explicitly overridden.
+    prompt_dropout: float = 0.0  # whole-prompt dropout for CFG/unconditional branch training
 
     # Liger Kernel (fused Triton kernels)
     use_liger_kernel: bool = False
@@ -94,6 +98,13 @@ class TrainConfig(BaseModel):
     expert_parallel_data_mode: Literal["duplicate", "split"] = "duplicate"
     # duplicate: each expert group iterates a full copy of the dataset (old SFT behavior)
     # split: shard data across all ranks so expert-parallel uses full global throughput
+
+    @field_validator("prompt_dropout")
+    @classmethod
+    def _validate_prompt_dropout(cls, v: float):
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"prompt_dropout must be in [0, 1], got {v}")
+        return v
 
 
 class SFTConfig(TrainConfig):

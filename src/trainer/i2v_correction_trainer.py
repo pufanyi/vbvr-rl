@@ -180,7 +180,12 @@ class I2VCorrectionTrainer(BaseTrainer):
         # ---- FM loss (forward + backward) ----
         # Only the last backward of this micro-step syncs gradients.
         self._set_requires_gradient_sync(is_last_micro_step and not do_correction)
-        loss_fm = self.model.compute_loss(video_latents, condition, prompt_embeds)
+        loss_fm = self.model.compute_loss(
+            video_latents,
+            condition,
+            prompt_embeds,
+            prompt_dropout=cfg.prompt_dropout,
+        )
         (loss_fm / accum).backward()
         loss_fm_val = loss_fm.detach()
         del loss_fm
@@ -286,7 +291,7 @@ class I2VCorrectionTrainer(BaseTrainer):
                         if hasattr(self.dataloader.dataset, "__len__"):
                             batches = len(self.dataloader)
                         elif cfg.dataset_size is not None:
-                            dp = self.dp_size if self.expert_parallel else self.world_size
+                            dp = self.dp_size if self._expert_parallel_duplicates_data(cfg) else self.world_size
                             batches = cfg.dataset_size // (dp * cfg.batch_size)
                         else:
                             batches = None

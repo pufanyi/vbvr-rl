@@ -1,3 +1,7 @@
+#!/usr/bin/env fish
+
+source (dirname (status filename))/../activate_venv.fish
+
 python -m src.cli.infer_i2v \
   --use_ema \
   --checkpoint storage/checkpoints/cube_more_1step_w_text/checkpoint-7000 \

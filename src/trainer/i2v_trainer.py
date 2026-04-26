@@ -158,7 +158,7 @@ class I2VTrainer(BaseTrainer):
                         if hasattr(self.dataloader.dataset, "__len__"):
                             batches = len(self.dataloader)
                         elif cfg.dataset_size is not None:
-                            dp = self.dp_size if self.expert_parallel else self.world_size
+                            dp = self.dp_size if self._expert_parallel_duplicates_data(cfg) else self.world_size
                             batches = cfg.dataset_size // (dp * cfg.batch_size)
                         else:
                             batches = None
@@ -229,4 +229,4 @@ class I2VTrainer(BaseTrainer):
             image = to_model_pixels(batch["image"], self.device)
             video_latents = self.model.encode_video(video)
             condition = self.model.prepare_condition(image, video.shape[2], video.shape[-2], video.shape[-1])
-        return self.model.compute_loss(video_latents, condition, prompt_embeds)
+        return self.model.compute_loss(video_latents, condition, prompt_embeds, prompt_dropout=self.cfg.prompt_dropout)

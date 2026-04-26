@@ -34,7 +34,7 @@ end
 set -l project_root (realpath (dirname (status filename))/../..)
 cd $project_root
 
-. .venv/bin/activate.fish
+source (dirname (status filename))/../activate_venv.fish
 
 echo "Launching training with $nproc GPUs..."
 LOGURU_LEVEL=DEBUG torchrun --nproc_per_node=$nproc -m src.cli.train_i2v_correction $train_args

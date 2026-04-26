@@ -1,14 +1,14 @@
 """Precompute VAE latents and T5 embeddings, saving results to parquet.
 
 Single-GPU:
-    uv run python scripts/precompute_latents.py \
+    .venv/bin/python scripts/precompute_latents.py \
         --input data/train_maze_bfs_sft.json \
         --model_path storage/models/Wan2.2-I2V-A14B-Diffusers \
         --output_dir /path/to/output \
         --batch_size 4
 
 Multi-GPU (8 GPUs):
-    uv run torchrun --nproc_per_node=8 scripts/precompute_latents.py \
+    .venv/bin/torchrun --nproc_per_node=8 scripts/precompute_latents.py \
         --input data/train_maze_bfs_sft.json \
         --model_path storage/models/Wan2.2-I2V-A14B-Diffusers \
         --output_dir /path/to/output \
