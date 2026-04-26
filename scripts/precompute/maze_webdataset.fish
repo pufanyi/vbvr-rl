@@ -2,7 +2,7 @@
 # Generate a synthetic maze WebDataset with precomputed Wan2.2 latents.
 #
 # Single node (auto-detects GPU count):
-#   ./scripts/gen_maze_webdataset.fish --num_samples 20000
+#   ./scripts/precompute/maze_webdataset.fish --num_samples 20000
 #
 # Multi-node: set NNODES, NODE_RANK, MASTER_ADDR, MASTER_PORT and run the
 # script on every node. Each node uses all local GPUs via NPROC (default
@@ -11,15 +11,15 @@
 #
 #   # on rank-0 node:
 #   env NNODES=2 NODE_RANK=0 MASTER_ADDR=node0.internal MASTER_PORT=29500 \
-#       ./scripts/gen_maze_webdataset.fish --num_samples 20000
+#       ./scripts/precompute/maze_webdataset.fish --num_samples 20000
 #   # on rank-1 node (same MASTER_ADDR / MASTER_PORT):
 #   env NNODES=2 NODE_RANK=1 MASTER_ADDR=node0.internal MASTER_PORT=29500 \
-#       ./scripts/gen_maze_webdataset.fish --num_samples 20000
+#       ./scripts/precompute/maze_webdataset.fish --num_samples 20000
 #
 # Output directory is consumed by `latent_webdataset_dir:` in the training
 # YAML (same contract as VBVRLatentDataset).
 
-source (dirname (status filename))/activate_venv.fish
+source (dirname (status filename))/../lib/env.fish
 
 set -x PYTHONPATH (pwd) $PYTHONPATH
 

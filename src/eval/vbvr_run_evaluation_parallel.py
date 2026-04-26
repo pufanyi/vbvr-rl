@@ -7,7 +7,7 @@ cores instead of being a single tqdm for-loop.
 
 Output JSON is byte-compatible with run_evaluation.py.
 
-Usage (called by scripts/eval/eval_vbvr_rule.fish):
+Usage (called by scripts/eval/vbvr_rule_score.fish):
     .venv/bin/python -m src.eval.vbvr_run_evaluation_parallel \
         --model_path /abs/path/model_out \
         --gt_base    /abs/path/VBVR-Bench \

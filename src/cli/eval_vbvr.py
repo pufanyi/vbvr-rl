@@ -9,7 +9,7 @@ Multi-GPU data-parallel (one VLM copy per rank, per-rank JSONL shards):
         --model_output storage/eval_out/vbvr/sft_maze_checkpoint-2000
 
 Videos must already exist at <model_output>/{Open_60,Hidden_40}/<task>/<idx>.mp4
-— generate them with ``src.cli.eval_i2v`` (see ``scripts/eval/eval_vbvr.fish``).
+— generate them with ``src.cli.eval_i2v`` (see ``scripts/eval/vbvr_generate_score.fish``).
 """
 
 from __future__ import annotations

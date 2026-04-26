@@ -1,14 +1,14 @@
 """Upload the precomputed VBVR-Bench WebDataset to HuggingFace.
 
 Expects ``--tar_dir`` to contain ``shard-*.tar`` shards produced by
-``scripts/eval/pre_compute_vbvr_bench.fish``. Uploads them under ``tars/`` in
+``scripts/precompute/vbvr_bench_webdataset.fish``. Uploads them under ``tars/`` in
 the target repo and writes a README card describing the format.
 
 Deps:
     uv add huggingface_hub
 
 Usage:
-    .venv/bin/python scripts/data/vbvr_to_hf.py \\
+    .venv/bin/python scripts/data/vbvr_upload_hf.py \\
         --tar_dir data/vbvr/VBVR-Bench-wds \\
         --repo_id pufanyi/VBVR-Bench
 """

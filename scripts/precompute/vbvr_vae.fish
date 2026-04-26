@@ -3,7 +3,7 @@
 # Launch: 2 nodes x 8 GPUs (16 GPUs total)
 #
 # Usage:
-#   MASTER_ADDR=<ip> RANK=<0|1> fish scripts/precompute/vae.fish
+#   MASTER_ADDR=<ip> RANK=<0|1> fish scripts/precompute/vbvr_vae.fish
 
 set -gx NNODES 2
 set -gx NPROC_PER_NODE 8
@@ -23,7 +23,7 @@ set -q OUTPUT_DIR;   or set -gx OUTPUT_DIR   data/vbvr/latents/vae_latents
 set -q BATCH_SIZE;   or set -gx BATCH_SIZE   40
 set -q NUM_FRAMES;   or set -gx NUM_FRAMES   81
 
-source (dirname (status filename))/../activate_venv.fish
+source (dirname (status filename))/../lib/env.fish
 
 torchrun \
     --nnodes=$NNODES --nproc_per_node=$NPROC_PER_NODE \

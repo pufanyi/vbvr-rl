@@ -7,9 +7,9 @@
 #   2. Generate videos with src.cli.eval_i2v (multi-GPU).
 #   3. Score generated videos immediately. Default is rule-based VBVR-EvalKit.
 #
-#   fish scripts/eval/eval_vbvr.fish
+#   fish scripts/eval/vbvr_generate_score.fish
 
-source (dirname (status filename))/../activate_venv.fish
+source (dirname (status filename))/../lib/env.fish
 
 # ── Configuration ────────────────────────────────────────────────────
 set CHECKPOINTS \

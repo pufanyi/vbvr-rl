@@ -5,9 +5,9 @@
 # then each DCP checkpoint is loaded and evaluated in turn.
 #
 # Edit the variables below to configure the run, then:
-#   fish scripts/eval/eval_sft_maze.fish
+#   fish scripts/eval/maze_sft.fish
 
-source (dirname (status filename))/../activate_venv.fish
+source (dirname (status filename))/../lib/env.fish
 
 # ── Configuration ────────────────────────────────────────────────────
 set CHECKPOINTS \

@@ -15,12 +15,12 @@
 # Per-model results land in $MODEL_OUT/score/.
 #
 # Run from repo root:
-#   fish scripts/eval/eval_vbvr_rule.fish
+#   fish scripts/eval/vbvr_rule_score.fish
 #
 # Runtime overrides, useful on memory-constrained eval nodes:
-#   NUM_GPUS=4 INFER_NUM_FRAMES=49 fish scripts/eval/eval_vbvr_rule.fish
+#   NUM_GPUS=4 INFER_NUM_FRAMES=49 fish scripts/eval/vbvr_rule_score.fish
 
-source (dirname (status filename))/../activate_venv.fish
+source (dirname (status filename))/../lib/env.fish
 
 set -e RANK
 set -e WORLD_SIZE

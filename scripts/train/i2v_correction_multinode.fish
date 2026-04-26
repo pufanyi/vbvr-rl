@@ -53,7 +53,7 @@ if not set -q RANK; or test -z "$RANK"
     exit 1
 end
 
-source (dirname (status filename))/../activate_venv.fish
+source (dirname (status filename))/../lib/env.fish
 
 set -x PYTORCH_CUDA_ALLOC_CONF expandable_segments:True
 set -x NCCL_DEBUG INFO

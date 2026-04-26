@@ -1,6 +1,6 @@
 #!/usr/bin/env fish
 
-source (dirname (status filename))/../activate_venv.fish
+source (dirname (status filename))/../lib/env.fish
 
 python -m src.cli.infer_i2v \
   --use_ema \

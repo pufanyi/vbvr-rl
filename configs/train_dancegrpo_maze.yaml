@@ -1,7 +1,7 @@
 trainer: dancegrpo
 model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
 
-# Precomputed maze latents (produced by scripts/gen_maze_webdataset.fish).
+# Precomputed maze latents (produced by scripts/precompute/maze_webdataset.fish).
 # Same contract as VBVRLatentDataset — each sample's safetensors carries
 # prompt_embeds / latents / condition plus maze_* tensors the reward reads.
 latent_webdataset_dir: data/maze_synth/latents/webdataset

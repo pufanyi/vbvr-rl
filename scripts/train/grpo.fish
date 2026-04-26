@@ -40,7 +40,7 @@ end
 set -l project_root (realpath (dirname (status filename))/../..)
 cd $project_root
 
-source (dirname (status filename))/../activate_venv.fish
+source (dirname (status filename))/../lib/env.fish
 
 echo "Launching Flow-GRPO training with $nproc GPUs..."
 

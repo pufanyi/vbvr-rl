@@ -5,8 +5,8 @@ approaches. In all cases the model starts from noise, initially heads
 toward v1, then redirects toward v2 — without ever reaching v1.
 
 Usage:
-    .venv/bin/python scripts/demo_target_paths.py          # tau=0.5
-    .venv/bin/python scripts/demo_target_paths.py --tau 0.3
+    .venv/bin/python scripts/dev/demo_target_paths.py          # tau=0.5
+    .venv/bin/python scripts/dev/demo_target_paths.py --tau 0.3
 """
 
 import argparse
@@ -88,7 +88,7 @@ def target_quadratic(sigma: np.ndarray, tau: float, noise: float, v1: float, v2:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tau", type=float, default=0.5)
-    parser.add_argument("--output", type=str, default="scripts/demo_target_paths.png")
+    parser.add_argument("--output", type=str, default="docs/assets/target_paths/demo_target_paths.png")
     args = parser.parse_args()
 
     tau = args.tau

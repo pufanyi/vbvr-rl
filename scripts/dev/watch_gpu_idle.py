@@ -9,9 +9,9 @@ Default behavior:
       .venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_sft_maze.yaml
 
 Examples:
-  .venv/bin/python scripts/watch_gpu_idle.py
-  .venv/bin/python scripts/watch_gpu_idle.py --dry-run
-  .venv/bin/python scripts/watch_gpu_idle.py --command "echo triggered"
+  .venv/bin/python scripts/dev/watch_gpu_idle.py
+  .venv/bin/python scripts/dev/watch_gpu_idle.py --dry-run
+  .venv/bin/python scripts/dev/watch_gpu_idle.py --command "echo triggered"
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--workdir",
-        default=str(Path(__file__).resolve().parents[1]),
+        default=str(Path(__file__).resolve().parents[2]),
         help="Working directory used when launching the command. Default: repository root.",
     )
     parser.add_argument(

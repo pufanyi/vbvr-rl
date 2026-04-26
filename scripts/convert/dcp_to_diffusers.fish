@@ -10,14 +10,14 @@
 # model_index.json.
 #
 # Run from repo root:
-#   fish scripts/convert_dcp_to_diffusers.fish
+#   fish scripts/convert/dcp_to_diffusers.fish
 #
 # Useful overrides:
-#   DRY_RUN=1 fish scripts/convert_dcp_to_diffusers.fish
-#   OVERWRITE=1 fish scripts/convert_dcp_to_diffusers.fish
-#   DEVICE=cuda:0 fish scripts/convert_dcp_to_diffusers.fish
+#   DRY_RUN=1 fish scripts/convert/dcp_to_diffusers.fish
+#   OVERWRITE=1 fish scripts/convert/dcp_to_diffusers.fish
+#   DEVICE=cuda:0 fish scripts/convert/dcp_to_diffusers.fish
 
-source (dirname (status filename))/activate_venv.fish
+source (dirname (status filename))/../lib/env.fish
 
 # -- Configuration -----------------------------------------------------
 set -q CHECKPOINT_ROOT[1]; or set CHECKPOINT_ROOT storage/checkpoints

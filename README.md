@@ -9,6 +9,11 @@ Wan2.2 Image-to-Video fine-tuning with FSDP2 + Distributed Checkpoint.
 uv sync
 ```
 
+## Scripts
+
+Operational launchers are grouped by purpose under `scripts/`; see
+`scripts/README.md` for the current layout and common entrypoints.
+
 ## Data Format
 
 JSON (or YAML) array, one entry per video:

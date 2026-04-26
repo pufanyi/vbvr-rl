@@ -3,7 +3,7 @@
 # Launch: 2 nodes x 8 GPUs (16 GPUs total)
 #
 # Usage:
-#   MASTER_ADDR=<ip> RANK=<0|1> fish scripts/precompute/t5.fish
+#   MASTER_ADDR=<ip> RANK=<0|1> fish scripts/precompute/vbvr_t5.fish
 
 set -gx NNODES 2
 set -gx NPROC_PER_NODE 8
@@ -22,7 +22,7 @@ set -q MODEL_PATH; or set -gx MODEL_PATH storage/models/Wan2.2-I2V-A14B-Diffuser
 set -q OUTPUT_DIR;  or set -gx OUTPUT_DIR  data/vbvr/latents/prompt_embeds
 set -q BATCH_SIZE;  or set -gx BATCH_SIZE  2048
 
-source (dirname (status filename))/../activate_venv.fish
+source (dirname (status filename))/../lib/env.fish
 
 torchrun \
     --nnodes=$NNODES --nproc_per_node=$NPROC_PER_NODE \
