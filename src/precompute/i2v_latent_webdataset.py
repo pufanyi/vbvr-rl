@@ -9,7 +9,7 @@ This turns a regular parquet-backed dataset (the same format used by
     {key}.json         - prompt, tar, index_in_tar, seq_len
 
 Example:
-    uv run torchrun --nproc_per_node=8 \
+    .venv/bin/torchrun --nproc_per_node=8 \
         -m src.precompute.i2v_latent_webdataset \
         --config configs/train_sft_maze.yaml \
         --output_dir data/maze/latents/webdataset \

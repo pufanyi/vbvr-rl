@@ -745,7 +745,9 @@ class HighlightHorizontalLinesEvaluator(BaseEvaluator):
         gt_lines = self._detect_horizontal_lines(gt_last)
 
         # Count expected horizontal lines (lines with y1 = y2)
-        expected_horizontal_count = len([l for l in gt_lines if abs(l['start'][1] - l['end'][1]) < 10])
+        expected_horizontal_count = len(
+            [line for line in gt_lines if abs(line['start'][1] - line['end'][1]) < 10]
+        )
 
         # 1. Identification: Check if markings are on horizontal lines (40%)
         # Rule: Must correctly identify horizontal lines (y1 = y2) vs vertical (x1 = x2)

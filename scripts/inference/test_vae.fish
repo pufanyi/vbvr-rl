@@ -1,3 +1,7 @@
+#!/usr/bin/env fish
+
+source (dirname (status filename))/../lib/env.fish
+
 CUDA_VISIBLE_DEVICES=1 python -m src.cli.test_vae \
   --video /mnt/umm/users/pufanyi/workspace/cube/dataset/1_step_frames/00000.mp4 \
   --max_area 184320 \

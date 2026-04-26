@@ -12,7 +12,7 @@ index.parquet columns:
   shard_id, local_idx, seq_len, prompt, tar, index_in_tar
 
 Usage:
-    uv run python -m src.precompute.pack_prompt_embeds \
+    .venv/bin/python -m src.precompute.pack_prompt_embeds \
         --input_dir  data/vbvr/latents/prompt_embeds \
         --output_dir data/vbvr/latents/prompt_embeds_packed
 """

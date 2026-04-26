@@ -194,7 +194,10 @@ class ControlPanelEvaluator(BaseEvaluator):
 
         # Compare dial positions
         if gt_controls['dials'] and final_controls['dials']:
-            dial_match = min(len(final_controls['dials']), len(gt_controls['dials'])) / max(len(gt_controls['dials']), 1)
+            dial_match = min(len(final_controls['dials']), len(gt_controls['dials'])) / max(
+                len(gt_controls['dials']),
+                1,
+            )
             scores.append(dial_match)
 
         return np.mean(scores) if scores else 0.5
@@ -315,10 +318,7 @@ class RavenMatrixEvaluator(BaseEvaluator):
             scores['error'] = 'other_cells_changed'
 
         # 2. Check if answer cell (2,2) is correct (40%)
-        if gt_final_frame is not None:
-            answer_score = self._evaluate_answer_cell(final_frame, gt_final_frame)
-        else:
-            answer_score = 0.5  # Can't evaluate without GT
+        answer_score = self._evaluate_answer_cell(final_frame, gt_final_frame) if gt_final_frame is not None else 0.5
         scores['answer_correct'] = answer_score
 
         # 3. Check if answer cell has content (15%)
@@ -1733,7 +1733,10 @@ class AnimalSizeSortingEvaluator(BaseEvaluator):
             return 0.0  # STRICT: Different number of animals
 
         # Check size preservation
-        size_diffs = [abs(f - l) / max(f, 1) for f, l in zip(first_sizes, final_sizes, strict=False)]
+        size_diffs = [
+            abs(first_size - final_size) / max(first_size, 1)
+            for first_size, final_size in zip(first_sizes, final_sizes, strict=False)
+        ]
         return 1.0 - min(1.0, np.mean(size_diffs))
 
     def _evaluate_completeness(self, first: np.ndarray, final: np.ndarray) -> float:

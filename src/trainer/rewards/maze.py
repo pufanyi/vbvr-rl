@@ -147,7 +147,7 @@ class MazeReward(BaseReward):
         if missing:
             raise RuntimeError(
                 f"MazeReward missing maze metadata tensor(s): {missing}. "
-                "Re-run scripts/gen_maze_webdataset.fish with the latest "
+                "Re-run scripts/precompute/maze_webdataset.fish with the latest "
                 "src/precompute/maze_webdataset.py (it now ships maze_cell_px "
                 "and maze_image_hw alongside the other reward tensors)."
             )

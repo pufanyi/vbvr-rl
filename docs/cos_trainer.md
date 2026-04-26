@@ -119,7 +119,7 @@ Both videos are encoded to the same latent space via the frozen VAE. They must d
 ### Training
 
 ```bash
-torchrun --nproc_per_node=8 -m src.cli.train_cos --config configs/train_cos.yaml
+.venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_cos --config configs/train_cos.yaml
 ```
 
 ### Configuration
@@ -159,7 +159,7 @@ wandb_project: wan-cos
 Inference uses the **standard ODE solver** with no modifications. The learned velocity field naturally guides the trajectory through the search-like intermediate region:
 
 ```bash
-python -m src.cli.infer_i2v \
+.venv/bin/python -m src.cli.infer_i2v \
     --image maze.jpg \
     --prompt "A ball navigates through a maze." \
     --output result.mp4

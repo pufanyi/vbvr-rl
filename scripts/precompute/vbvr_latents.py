@@ -6,7 +6,7 @@ the VAE and prompts through T5, and writes parquet files compatible with
 LatentDataset.
 
 Single-GPU:
-    uv run python scripts/precompute_vbvr_latents.py \
+    .venv/bin/python scripts/precompute/vbvr_latents.py \
         --metadata data/vbvr/VBVR-Dataset/data/metadata.parquet \
         --tar_dir data/vbvr/VBVR-Dataset/tars \
         --model_path storage/models/Wan2.2-I2V-A14B-Diffusers \
@@ -14,7 +14,7 @@ Single-GPU:
         --batch_size 4
 
 Single-node multi-GPU (8 GPUs on 1 machine):
-    uv run torchrun --nproc_per_node=8 scripts/precompute_vbvr_latents.py \
+    .venv/bin/torchrun --nproc_per_node=8 scripts/precompute/vbvr_latents.py \
         --metadata data/vbvr/VBVR-Dataset/data/metadata.parquet \
         --tar_dir data/vbvr/VBVR-Dataset/tars \
         --model_path storage/models/Wan2.2-I2V-A14B-Diffusers \
@@ -24,11 +24,11 @@ Single-node multi-GPU (8 GPUs on 1 machine):
 Multi-node multi-GPU (e.g. 8 nodes x 2 GPUs = 16 GPUs total):
     # Run on EVERY node (torchrun launches --nproc_per_node processes per node).
     # --output_dir must be on shared storage (NFS/GPFS/Lustre) visible to all nodes.
-    uv run torchrun \
+    .venv/bin/torchrun \
         --nnodes=$WORLD_SIZE --nproc_per_node=1 \
         --node_rank=$RANK \
         --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \
-        scripts/precompute_vbvr_latents.py \
+        scripts/precompute/vbvr_latents.py \
         --metadata data/vbvr/VBVR-Dataset/data/metadata.parquet \
         --tar_dir data/vbvr/VBVR-Dataset/tars \
         --model_path storage/models/Wan2.2-I2V-A14B-Diffusers \
@@ -37,11 +37,11 @@ Multi-node multi-GPU (e.g. 8 nodes x 2 GPUs = 16 GPUs total):
 
     With SLURM (srun launches one process per GPU automatically):
     srun --nodes=8 --ntasks-per-node=2 --gpus-per-node=2 \
-        uv run torchrun \
+        .venv/bin/torchrun \
         --nnodes=$SLURM_NNODES --nproc_per_node=2 \
         --rdzv_id=$SLURM_JOB_ID --rdzv_backend=c10d \
         --rdzv_endpoint=$MASTER_ADDR:29500 \
-        scripts/precompute_vbvr_latents.py \
+        scripts/precompute/vbvr_latents.py \
         --metadata data/vbvr/VBVR-Dataset/data/metadata.parquet \
         --tar_dir data/vbvr/VBVR-Dataset/tars \
         --model_path storage/models/Wan2.2-I2V-A14B-Diffusers \
@@ -68,6 +68,7 @@ import argparse
 import io
 import json
 import os
+import sys
 import tarfile
 import tempfile
 from pathlib import Path
@@ -79,6 +80,8 @@ from loguru import logger
 from PIL import Image
 from safetensors.torch import save_file
 from tqdm import tqdm
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 # ---------------------------------------------------------------------------
 # Distributed helpers

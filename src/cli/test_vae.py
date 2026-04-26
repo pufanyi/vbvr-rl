@@ -4,7 +4,7 @@ Loads a video, encodes it with the Wan2.2 VAE, decodes it back,
 and saves the reconstructed video for visual comparison.
 
 Usage:
-    python -m src.cli.test_vae --video path/to/video.mp4
+    .venv/bin/python -m src.cli.test_vae --video path/to/video.mp4
 """
 
 import argparse

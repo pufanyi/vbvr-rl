@@ -36,7 +36,10 @@ setup(
     name='vbvr-bench',
     version='0.1.0',
     author='VBVR-Bench Team',
-    description='A rule-based evaluation toolkit for assessing video generation models on 100 visual reasoning tasks. Each task is evaluated by a dedicated rule-based evaluator.',
+    description=(
+        'A rule-based evaluation toolkit for assessing video generation models on 100 visual reasoning tasks. '
+        'Each task is evaluated by a dedicated rule-based evaluator.'
+    ),
     long_description=long_description,
     long_description_content_type='text/markdown',
     url='https://github.com/Video-Reason/VBVR-Bench',

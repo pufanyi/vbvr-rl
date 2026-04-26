@@ -9,6 +9,11 @@ Wan2.2 Image-to-Video fine-tuning with FSDP2 + Distributed Checkpoint.
 uv sync
 ```
 
+## Scripts
+
+Operational launchers are grouped by purpose under `scripts/`; see
+`scripts/README.md` for the current layout and common entrypoints.
+
 ## Data Format
 
 JSON (or YAML) array, one entry per video:
@@ -33,13 +38,13 @@ Paths can be absolute or relative to the JSON file's directory.
 
 ```bash
 # Full fine-tuning, 8 GPUs
-torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_i2v.yaml
+.venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_i2v.yaml
 
 # LoRA fine-tuning
-torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_i2v_lora.yaml
+.venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_i2v_lora.yaml
 
 # CLI overrides (any config field)
-torchrun --nproc_per_node=8 -m src.cli.train_i2v \
+.venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v \
     --config configs/train_i2v.yaml \
     --learning_rate 2e-5 \
     --num_epochs 3
@@ -98,7 +103,7 @@ All fields with defaults — override in YAML or via CLI flags.
 ## Inference
 
 ```bash
-python -m src.cli.infer_i2v \
+.venv/bin/python -m src.cli.infer_i2v \
     --image path/to/image.jpg \
     --prompt "A robotic arm manipulates a Rubik cube." \
     --output output.mp4

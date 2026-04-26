@@ -7,7 +7,7 @@ in the layout that ``pipe.load_lora_weights(...)`` expects.
 
 Usage::
 
-    uv run python scripts/convert_dcp_to_lora.py \\
+    .venv/bin/python -m src.cli.convert_dcp_to_lora \\
         --config   configs/train_xxx.yaml \\
         --checkpoint storage/checkpoints/run/checkpoint-200 \\
         --output     storage/lora_exports/run/checkpoint-200
@@ -27,23 +27,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import tempfile
 from pathlib import Path
 
-# Make ``src.*`` importable when invoked as `python scripts/convert_dcp_to_lora.py`
-# (the project does not install ``src`` as a package).
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import torch
+import yaml
+from loguru import logger
+from peft import LoraConfig
+from safetensors.torch import save_file
+from torch.distributed.checkpoint.format_utils import dcp_to_torch_save
 
-import torch  # noqa: E402
-import yaml  # noqa: E402
-from loguru import logger  # noqa: E402
-from peft import LoraConfig  # noqa: E402
-from safetensors.torch import save_file  # noqa: E402
-from torch.distributed.checkpoint.format_utils import dcp_to_torch_save  # noqa: E402
-
-from src.models.wan_i2v import LoRATrainConfig  # noqa: E402
-from src.trainer.config import TrainConfig  # noqa: E402
+from src.models.wan_i2v import LoRATrainConfig
+from src.trainer.config import TrainConfig
 
 
 def parse_args() -> argparse.Namespace:

@@ -224,17 +224,25 @@ class BaseTrainer(CheckpointRuntimeMixin):
             if cfg.lora_rank > 0
             else None
         )
+        transformer_dtype = self._resolve_transformer_dtype(cfg)
+        gradient_checkpointing_autocast_dtype = self._resolve_gradient_checkpointing_autocast_dtype(
+            cfg,
+            transformer_dtype,
+        )
         use_precomputed = cfg.latent_webdataset_dir is not None
         load_vae = not use_precomputed
         load_text_encoder = not use_precomputed or cfg.train_text_encoder
         logger.info(
-            "Loading model from {} (lora_rank={}, experts={}{}, load_vae={}, load_text_encoder={}) ...",
+            "Loading model from {} (lora_rank={}, experts={}{}, load_vae={}, load_text_encoder={}, "
+            "transformer_dtype={}, checkpoint_autocast={}) ...",
             cfg.model_path,
             cfg.lora_rank,
             train_experts,
             f", expert_group={self.expert_group}" if self.expert_parallel else "",
             load_vae,
             load_text_encoder,
+            transformer_dtype,
+            gradient_checkpointing_autocast_dtype,
         )
         model = WanI2VForTraining(
             cfg.model_path,
@@ -244,6 +252,8 @@ class BaseTrainer(CheckpointRuntimeMixin):
             gradient_checkpointing=cfg.gradient_checkpointing,
             load_vae=load_vae,
             load_text_encoder=load_text_encoder,
+            transformer_dtype=transformer_dtype,
+            gradient_checkpointing_autocast_dtype=gradient_checkpointing_autocast_dtype,
         )
         if cfg.use_liger_kernel:
             count = 0
@@ -256,6 +266,24 @@ class BaseTrainer(CheckpointRuntimeMixin):
         if model.vae is not None:
             model.vae.to(self.device)
         return model
+
+    def _resolve_transformer_dtype(self, cfg: TrainConfig) -> torch.dtype:
+        if cfg.transformer_load_dtype == "float32":
+            return torch.float32
+        if cfg.transformer_load_dtype == "bfloat16":
+            return torch.bfloat16
+        return torch.float32 if cfg.lora_rank == 0 else torch.bfloat16
+
+    def _resolve_gradient_checkpointing_autocast_dtype(
+        self,
+        cfg: TrainConfig,
+        transformer_dtype: torch.dtype,
+    ) -> torch.dtype | None:
+        if not cfg.gradient_checkpointing:
+            return None
+        if cfg.param_dtype == "bfloat16" and transformer_dtype == torch.float32:
+            return torch.bfloat16
+        return None
 
     # ------------------------------------------------------------------
     # FSDP2
@@ -445,11 +473,27 @@ class BaseTrainer(CheckpointRuntimeMixin):
         if cfg.latent_webdataset_dir is not None:
             # Compute per-rank epoch length so every rank produces the same
             # number of batches — prevents FSDP/NCCL deadlocks at epoch end.
+            if self._expert_parallel_duplicates_data(cfg):
+                data_rank = self.dp_rank
+                data_world_size = self.dp_size
+            else:
+                data_rank = self.rank
+                data_world_size = self.world_size
+            data_seed = (
+                self._get_expert_parallel_sampler_seed(cfg)
+                if self._expert_parallel_duplicates_data(cfg)
+                else cfg.seed
+            )
             epoch_length = None
             if cfg.dataset_size is not None:
-                dp = self.dp_size if self.expert_parallel else self.world_size
-                epoch_length = cfg.dataset_size // dp
-            dataset = VBVRLatentDataset(cfg.latent_webdataset_dir, epoch_length=epoch_length)
+                epoch_length = cfg.dataset_size // data_world_size
+            dataset = VBVRLatentDataset(
+                cfg.latent_webdataset_dir,
+                epoch_length=epoch_length,
+                seed=data_seed,
+                node_rank=data_rank,
+                node_world_size=data_world_size,
+            )
             return dataset, None  # IterableDataset; shard splitting handled by wds
         else:
             dataset = I2VDataset(

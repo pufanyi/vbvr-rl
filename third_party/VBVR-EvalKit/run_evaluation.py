@@ -67,7 +67,7 @@ class NumpyEncoder(json.JSONEncoder):
 # Add VBVR-Bench to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from vbvr_bench.evaluators import (
+from vbvr_bench.evaluators import (  # noqa: E402
     TASK_EVALUATOR_MAP,
     get_evaluator,
     get_task_category,

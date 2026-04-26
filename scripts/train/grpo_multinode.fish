@@ -68,7 +68,7 @@ cd $project_root
 
 echo "Launching Flow-GRPO multi-node training: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$master_port"
 
-. .venv/bin/activate.fish
+source (dirname (status filename))/../lib/env.fish
 
 torchrun \
     --nnodes=$WORLD_SIZE \

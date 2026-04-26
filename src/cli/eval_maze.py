@@ -6,15 +6,15 @@ latents are decoded through the VAE and saved as a video.
 
 Usage:
     # Single GPU
-    uv run python -m src.cli.eval_maze \
+    .venv/bin/python -m src.cli.eval_maze \
         --eval_json /path/to/test.json --output_dir eval_out/
 
     # Multi-GPU (fastest)
-    uv run torchrun --nproc_per_node=8 -m src.cli.eval_maze \
+    .venv/bin/torchrun --nproc_per_node=8 -m src.cli.eval_maze \
         --eval_json /path/to/test.json --output_dir eval_out/
 
     # With checkpoint
-    uv run torchrun --nproc_per_node=8 -m src.cli.eval_maze \
+    .venv/bin/torchrun --nproc_per_node=8 -m src.cli.eval_maze \
         --eval_json /path/to/test.json --output_dir eval_out/ \
         --checkpoint storage/checkpoints/cos_maze/checkpoint-1000
 

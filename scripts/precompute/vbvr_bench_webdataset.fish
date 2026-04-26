@@ -3,7 +3,9 @@
 # Precompute VBVR-Bench eval dataset as WebDataset tar shards, then
 # optionally upload to HuggingFace.
 #
-#   fish scripts/eval/pre_compute_vbvr_bench.fish
+#   fish scripts/precompute/vbvr_bench_webdataset.fish
+
+source (dirname (status filename))/../lib/env.fish
 
 # ── Configuration ────────────────────────────────────────────────────
 set GT_BASE        /mnt/umm/users/pufanyi/workspace/Wan-Trainer/data/vbvr/VBVR-Bench
@@ -18,7 +20,7 @@ set SKIP_PRECOMPUTE                       # set to any value to skip encoding (u
 
 # Hub upload — empty by default; local tars sit under $OUTPUT_DIR.
 # To push later (idempotent — HF dedupes by hash, crashed uploads resume):
-#   uv run python scripts/data/vbvr_to_hf.py --tar_dir $OUTPUT_DIR
+#   .venv/bin/python scripts/data/vbvr_upload_hf.py --tar_dir $OUTPUT_DIR
 # or set PUSH_TO_HUB=yes below to upload at the end of this script.
 set PUSH_TO_HUB                           # set to any value to push after precompute
 set HF_REPO_ID     pufanyi/VBVR-Bench-wan2.2-latent
@@ -45,10 +47,10 @@ echo "---"
 # ── 1. Precompute ────────────────────────────────────────────────────
 if not set -q SKIP_PRECOMPUTE[1]
     if test $NUM_GPUS -gt 1
-        uv run torchrun --nproc_per_node=$NUM_GPUS -m src.precompute.vbvr_bench_webdataset $precompute_args
+        torchrun --nproc_per_node=$NUM_GPUS -m src.precompute.vbvr_bench_webdataset $precompute_args
         or exit 1
     else
-        uv run python -m src.precompute.vbvr_bench_webdataset $precompute_args
+        python -m src.precompute.vbvr_bench_webdataset $precompute_args
         or exit 1
     end
 else
@@ -61,7 +63,7 @@ if test -n "$PUSH_TO_HUB"
     if set -q HF_PRIVATE[1]
         set -a upload_args --private
     end
-    uv run python scripts/data/vbvr_to_hf.py $upload_args
+    python scripts/data/vbvr_upload_hf.py $upload_args
     or exit 1
 end
 

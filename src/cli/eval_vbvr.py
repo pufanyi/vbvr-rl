@@ -1,15 +1,15 @@
 """CLI for VBVR-Bench VLM-judged evaluation.
 
 Single GPU:
-    uv run python -m src.cli.eval_vbvr \\
+    .venv/bin/python -m src.cli.eval_vbvr \\
         --model_output storage/eval_out/vbvr/sft_maze_checkpoint-2000
 
 Multi-GPU data-parallel (one VLM copy per rank, per-rank JSONL shards):
-    uv run torchrun --nproc_per_node=8 -m src.cli.eval_vbvr \\
+    .venv/bin/torchrun --nproc_per_node=8 -m src.cli.eval_vbvr \\
         --model_output storage/eval_out/vbvr/sft_maze_checkpoint-2000
 
 Videos must already exist at <model_output>/{Open_60,Hidden_40}/<task>/<idx>.mp4
-— generate them with ``src.cli.eval_i2v`` (see ``scripts/eval/eval_vbvr.fish``).
+— generate them with ``src.cli.eval_i2v`` (see ``scripts/eval/vbvr_generate_score.fish``).
 """
 
 from __future__ import annotations
@@ -123,10 +123,7 @@ def main() -> None:
 
     if world_size > 1:
         backend = dist.get_backend()
-        if backend == "nccl":
-            barrier_fn = lambda: dist.barrier(device_ids=[local_rank])  # noqa: E731
-        else:
-            barrier_fn = dist.barrier
+        barrier_fn = (lambda: dist.barrier(device_ids=[local_rank])) if backend == "nccl" else dist.barrier
     else:
         barrier_fn = None
     run_eval(

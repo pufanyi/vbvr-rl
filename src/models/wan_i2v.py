@@ -7,6 +7,7 @@ components from the WanImageToVideoPipeline.
 import html
 import json
 import math
+from contextlib import nullcontext
 from pathlib import Path
 
 import ftfy
@@ -18,6 +19,7 @@ from diffusers.models import WanTransformer3DModel
 from loguru import logger
 from peft import LoraConfig
 from pydantic import BaseModel
+from torch.utils.checkpoint import checkpoint
 from transformers import AutoTokenizer, UMT5EncoderModel
 
 from src.models.cos_path import PathType, compute_cos_path
@@ -40,6 +42,46 @@ def _clean_prompt(text: str) -> str:
     return text
 
 
+def _read_flow_shift(model_dir: Path) -> float:
+    """Read the scheduler flow shift used by inference."""
+    scheduler_config_path = model_dir / "scheduler" / "scheduler_config.json"
+    if not scheduler_config_path.exists():
+        logger.warning("Scheduler config not found at {}; falling back to flow_shift=5.0", scheduler_config_path)
+        return 5.0
+    with open(scheduler_config_path) as f:
+        scheduler_config = json.load(f)
+    return float(scheduler_config.get("flow_shift", scheduler_config.get("shift", 5.0)))
+
+
+def _make_autocast_checkpoint_func(dtype: torch.dtype):
+    """Checkpoint blocks under the same autocast context for forward and recompute."""
+
+    def _gradient_checkpointing_func(module, *args):
+        device_type = "cuda"
+        for arg in args:
+            if isinstance(arg, torch.Tensor):
+                device_type = arg.device.type
+                break
+
+        def context_fn():
+            if device_type == "cuda":
+                return (
+                    torch.autocast(device_type=device_type, dtype=dtype),
+                    torch.autocast(device_type=device_type, dtype=dtype),
+                )
+            return nullcontext(), nullcontext()
+
+        return checkpoint(
+            module.__call__,
+            *args,
+            use_reentrant=False,
+            context_fn=context_fn,
+            determinism_check="none",
+        )
+
+    return _gradient_checkpointing_func
+
+
 class WanI2VForTraining:
     """Wan2.2 I2V model for flow-matching training.
 
@@ -56,6 +98,8 @@ class WanI2VForTraining:
         gradient_checkpointing: bool = True,
         load_vae: bool = True,
         load_text_encoder: bool = True,
+        transformer_dtype: torch.dtype = torch.bfloat16,
+        gradient_checkpointing_autocast_dtype: torch.dtype | None = None,
     ):
         assert train_experts in ("both", "high", "low"), (
             f"train_experts must be 'both', 'high', or 'low', got '{train_experts}'"
@@ -72,6 +116,7 @@ class WanI2VForTraining:
         boundary_ratio = pipe_config.get("boundary_ratio", 0.9)
         self.boundary_timestep = int(boundary_ratio * self.num_train_timesteps)  # 900
         # boundary_idx is computed below after shifted_timesteps is built.
+        self.flow_shift = _read_flow_shift(model_dir)
 
         # ---- Load components sequentially ----
         self.tokenizer = None
@@ -109,12 +154,12 @@ class WanI2VForTraining:
         self.transformer_2: WanTransformer3DModel | None = None
         if train_experts in ("both", "high"):
             self.transformer = WanTransformer3DModel.from_pretrained(
-                model_dir / "transformer", torch_dtype=torch.bfloat16
+                model_dir / "transformer", torch_dtype=transformer_dtype
             )
             logger.info("Loaded transformer")
         if train_experts in ("both", "low"):
             self.transformer_2 = WanTransformer3DModel.from_pretrained(
-                model_dir / "transformer_2", torch_dtype=torch.bfloat16
+                model_dir / "transformer_2", torch_dtype=transformer_dtype
             )
             logger.info("Loaded transformer_2")
 
@@ -140,10 +185,21 @@ class WanI2VForTraining:
             if m is None:
                 continue
             # Ensure uniform dtype for FSDP2 (some params load as float32)
-            m.to(torch.bfloat16)
+            m.to(transformer_dtype)
             m.train()
             if gradient_checkpointing:
-                m.enable_gradient_checkpointing()
+                if gradient_checkpointing_autocast_dtype is None:
+                    m.enable_gradient_checkpointing()
+                else:
+                    m.enable_gradient_checkpointing(
+                        gradient_checkpointing_func=_make_autocast_checkpoint_func(
+                            gradient_checkpointing_autocast_dtype
+                        )
+                    )
+                    logger.info(
+                        "Enabled gradient checkpointing with {} autocast recompute",
+                        gradient_checkpointing_autocast_dtype,
+                    )
 
         # ---- VAE normalization constants ----
         if load_vae:
@@ -171,8 +227,8 @@ class WanI2VForTraining:
         self.vae_scale_factor_spatial: int = vae_cfg.scale_factor_spatial
         self.vae_scale_factor_temporal: int = vae_cfg.scale_factor_temporal
 
-        # ---- Shifted sigma schedule (shift=5, matching DiffSynth) ----
-        shift = 5.0
+        # ---- Shifted sigma schedule (match the inference scheduler) ----
+        shift = self.flow_shift
         linear_sigmas = torch.linspace(1.0, 0.0, self.num_train_timesteps + 1)[:-1]
         self.shifted_sigmas = shift * linear_sigmas / (1 + (shift - 1) * linear_sigmas)
         # Derive timesteps from shifted sigmas (for passing to transformer)
@@ -180,6 +236,13 @@ class WanI2VForTraining:
 
         # Compute boundary_idx from shifted schedule (accounts for nonlinear shift)
         self.boundary_idx = int((self.shifted_timesteps >= self.boundary_timestep).sum().item())
+        logger.info(
+            "Flow schedule: flow_shift={} boundary_timestep={} boundary_idx={}/{}",
+            self.flow_shift,
+            self.boundary_timestep,
+            self.boundary_idx,
+            self.num_train_timesteps,
+        )
 
         # ---- BSMNTW loss weighting (Gaussian centered at t=500) ----
         bsmntw = torch.exp(-2.0 * ((self.shifted_timesteps - 500.0) / 1000.0) ** 2)
@@ -349,11 +412,12 @@ class WanI2VForTraining:
         video_latents: torch.Tensor,
         condition: torch.Tensor,
         prompt_embeds: torch.Tensor,
+        prompt_dropout: float = 0.0,
     ) -> torch.Tensor:
         """Compute flow-matching loss for one training step.
 
-        Flow matching formulation (shifted sigma schedule, shift=5):
-            sigma = 5s / (1 + 4s) where s = linear_sigma
+        Flow matching formulation (shifted sigma schedule):
+            sigma = shift*s / (1 + (shift - 1)*s) where s = linear_sigma
             noisy = sigma * noise + (1 - sigma) * x0
             target = noise - x0  (velocity)
             loss = BSMNTW_weight * MSE(model_pred, target)
@@ -373,6 +437,7 @@ class WanI2VForTraining:
         B = video_latents.shape[0]
         device = video_latents.device
         shifted_sigmas, shifted_timesteps, bsmntw = self._get_training_buffers(device)
+        prompt_embeds = self._apply_prompt_dropout(prompt_embeds, prompt_dropout)
 
         # Sample random timestep indices, then look up shifted sigma / timestep
         if self.train_experts == "high":
@@ -423,6 +488,19 @@ class WanI2VForTraining:
             total_weight = total_weight + selected_weights.sum()
 
         return loss / total_weight if total_weight > 0 else loss
+
+    def _apply_prompt_dropout(self, prompt_embeds: torch.Tensor, dropout: float) -> torch.Tensor:
+        """Drop whole prompt embeddings to train the unconditional CFG branch."""
+        if dropout <= 0.0:
+            return prompt_embeds
+        if dropout >= 1.0:
+            return torch.zeros_like(prompt_embeds)
+        keep = torch.rand((prompt_embeds.shape[0],), device=prompt_embeds.device) >= dropout
+        if keep.all():
+            return prompt_embeds
+        dropped = prompt_embeds.clone()
+        dropped[~keep] = 0
+        return dropped
 
     # ------------------------------------------------------------------
     # On-policy correction loss
@@ -542,6 +620,7 @@ class WanI2VForTraining:
         boundary_noise_std: float = 0.02,
         path_type: PathType = "linear",
         smooth_blend_delta: float = 0.05,
+        prompt_dropout: float = 0.0,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute N-step piecewise flow-matching loss for COS training.
 
@@ -573,6 +652,7 @@ class WanI2VForTraining:
         B = x_final.shape[0]
         device = x_final.device
         shifted_sigmas, shifted_timesteps, bsmntw = self._get_training_buffers(device)
+        prompt_embeds = self._apply_prompt_dropout(prompt_embeds, prompt_dropout)
 
         # Each available expert gets dedicated sigma in its MoE range
         expert_passes: list[tuple[str, torch.nn.Module, int, int]] = []
@@ -761,7 +841,7 @@ class WanI2VForTraining:
         # Build sigma schedule for sampling: T+1 values from 1→0
         # Use linspace in [0, 1] then apply the shifted schedule
         t_values = torch.linspace(1.0, 0.0, num_sampling_steps + 1, device=device)
-        shift = 5.0
+        shift = self.flow_shift
         sigmas = shift * t_values / (1.0 + (shift - 1.0) * t_values)
 
         # Start from pure noise unless a caller provides a shared x_T.
@@ -796,7 +876,7 @@ class WanI2VForTraining:
             )[0]
 
             # CFG (if scale > 1)
-            if cfg_scale > 1.0 and self.transformer is not None:
+            if cfg_scale > 1.0:
                 # Unconditional forward with zero prompt
                 uncond_embeds = torch.zeros_like(prompt_embeds)
                 uncond_output = transformer(

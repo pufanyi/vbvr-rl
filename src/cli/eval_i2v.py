@@ -5,10 +5,10 @@ a disjoint slice of the dataset.
 
 Usage:
     # Single GPU
-    python -m src.cli.eval_i2v --eval_json data/eval.json --output_dir eval_out/
+    .venv/bin/python -m src.cli.eval_i2v --eval_json data/eval.json --output_dir eval_out/
 
     # Multi-GPU
-    torchrun --nproc_per_node=8 -m src.cli.eval_i2v \
+    .venv/bin/torchrun --nproc_per_node=8 -m src.cli.eval_i2v \
         --eval_json data/eval.json --output_dir eval_out/
 
 JSON format (compatible with training dataset):
@@ -22,8 +22,10 @@ If "image" is absent but "video" is present, the first frame of the video is use
 """
 
 import argparse
+import gc
 import json
 import os
+from datetime import timedelta
 from pathlib import Path
 
 import decord
@@ -66,9 +68,28 @@ def parse_args():
     )
     parser.add_argument("--num_frames", type=int, default=81, help="Number of frames to generate")
     parser.add_argument("--guidance_scale", type=float, default=3.5, help="Guidance scale")
-    parser.add_argument("--num_inference_steps", type=int, default=40, help="Number of inference steps")
+    parser.add_argument("--num_inference_steps", type=int, default=50, help="Number of inference steps")
     parser.add_argument("--fps", type=int, default=16, help="Output video FPS")
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
+    parser.add_argument(
+        "--parallel_load",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Load the model concurrently on all ranks. Use --no-parallel_load to reduce host RAM peak.",
+    )
+    parser.add_argument(
+        "--dist_backend",
+        type=str,
+        default="nccl",
+        choices=["nccl"],
+        help="Distributed backend for rank coordination.",
+    )
+    parser.add_argument(
+        "--dist_timeout_minutes",
+        type=int,
+        default=180,
+        help="Process-group timeout in minutes. Slow serialized model loading can exceed PyTorch's default.",
+    )
     return parser.parse_args()
 
 
@@ -87,12 +108,58 @@ def _first_frame_from_video(video_path: str) -> Image.Image:
     return Image.fromarray(frame)
 
 
+def _load_pipeline(args, device: torch.device, rank: int) -> WanImageToVideoPipeline:
+    if rank == 0:
+        print(f"Loading model from {args.model_path} ...", flush=True)
+    pipe = WanImageToVideoPipeline.from_pretrained(
+        args.model_path,
+        torch_dtype=torch.bfloat16,
+        low_cpu_mem_usage=True,
+    )
+    pipe.to(device)
+    gc.collect()
+
+    if args.checkpoint:
+        from src.trainer.checkpoint import load_dcp_into_pipeline
+
+        if rank == 0:
+            print(f"Loading DCP checkpoint from {args.checkpoint} (ema={args.use_ema}) ...", flush=True)
+        load_dcp_into_pipeline(pipe, args.checkpoint, use_ema=args.use_ema)
+        gc.collect()
+
+    return pipe
+
+
+def _barrier(device: torch.device) -> None:
+    if device.type == "cuda":
+        dist.barrier(device_ids=[device.index])
+    else:
+        dist.barrier()
+
+
+def _load_pipeline_rank_serialized(args, device: torch.device, rank: int, world_size: int) -> WanImageToVideoPipeline:
+    if world_size == 1 or args.parallel_load:
+        return _load_pipeline(args, device, rank)
+
+    pipe = None
+    if rank == 0:
+        print("Loading model rank-by-rank to avoid host RAM spikes.", flush=True)
+    for load_rank in range(world_size):
+        if rank == load_rank:
+            print(f"[rank {rank}] Loading pipeline on {device} ...", flush=True)
+            pipe = _load_pipeline(args, device, rank)
+            print(f"[rank {rank}] Pipeline ready on {device}", flush=True)
+        _barrier(device)
+    assert pipe is not None
+    return pipe
+
+
 def main():
     args = parse_args()
 
     # ---- Distributed setup (works for both single and multi-GPU) ----
     if "RANK" in os.environ:
-        dist.init_process_group("nccl")
+        dist.init_process_group(args.dist_backend, timeout=timedelta(minutes=args.dist_timeout_minutes))
         rank = dist.get_rank()
         world_size = dist.get_world_size()
     else:
@@ -114,25 +181,14 @@ def main():
         print(f"Eval: {len(data)} samples, {world_size} GPUs, {len(my_indices)} samples on this rank")
 
     # ---- Load pipeline ----
-    if rank == 0:
-        print(f"Loading model from {args.model_path} ...")
-    pipe = WanImageToVideoPipeline.from_pretrained(args.model_path, torch_dtype=torch.bfloat16)
-
-    if args.checkpoint:
-        from src.trainer.checkpoint import load_dcp_into_pipeline
-
-        if rank == 0:
-            print(f"Loading DCP checkpoint from {args.checkpoint} (ema={args.use_ema}) ...")
-        load_dcp_into_pipeline(pipe, args.checkpoint, use_ema=args.use_ema)
-
-    pipe.to(device)
+    pipe = _load_pipeline_rank_serialized(args, device, rank, world_size)
 
     # ---- Output dir ----
     output_dir = Path(args.output_dir)
     if rank == 0:
         output_dir.mkdir(parents=True, exist_ok=True)
     if world_size > 1:
-        dist.barrier()
+        _barrier(device)
     else:
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -194,7 +250,7 @@ def main():
         print(f"[rank {rank}] [{count + 1}/{len(my_indices)}] Saved {out_path}")
 
     if world_size > 1:
-        dist.barrier()
+        _barrier(device)
         dist.destroy_process_group()
 
     if rank == 0:

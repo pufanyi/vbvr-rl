@@ -169,12 +169,21 @@ class StableSortEvaluator(BaseEvaluator):
             # Check size preservation (total area should be similar)
             initial_total_area = sum(s['area'] for s in initial_shapes)
             final_total_area = sum(s['area'] for s in final_shapes)
-            area_ratio = min(initial_total_area, final_total_area) / max(initial_total_area, final_total_area) if max(initial_total_area, final_total_area) > 0 else 0
+            max_total_area = max(initial_total_area, final_total_area)
+            area_ratio = (
+                min(initial_total_area, final_total_area) / max_total_area
+                if max_total_area > 0
+                else 0
+            )
 
             # Check shape type preservation
             initial_types = sorted([s['type'] for s in initial_shapes])
             final_types = sorted([s['type'] for s in final_shapes])
-            type_match = sum(1 for a, b in zip(initial_types, final_types, strict=False) if a == b) / max(len(initial_types), len(final_types), 1)
+            type_match = sum(1 for a, b in zip(initial_types, final_types, strict=False) if a == b) / max(
+                len(initial_types),
+                len(final_types),
+                1,
+            )
 
             fidelity_score = 0.4 * count_match + 0.3 * area_ratio + 0.3 * type_match
         scores['fidelity'] = fidelity_score
@@ -964,12 +973,9 @@ class GridAvoidObstaclesEvaluator(BaseEvaluator):
 
             # Check if a cell that was white/yellow now has a different grid color
             # (This could happen if grid structure changed)
-            if first_color in ['white', 'yellow']:
-                # If final is blue/red, check if it's a valid reveal (agent moved away from start)
-                # For simplicity, count any new blue/red as suspicious
-                if final_color in ['blue', 'red']:
-                    # This is OK if it's the start cell being revealed
-                    pass  # Allow this
+            if first_color in ['white', 'yellow'] and final_color in ['blue', 'red']:
+                # This is OK if it's the start cell being revealed
+                pass  # Allow this
 
         # Also check total number of blue+red cells
         first_br_count = sum(1 for c in first_colors.values() if c in ['blue', 'red'])

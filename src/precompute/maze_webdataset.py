@@ -21,7 +21,7 @@ maze-aware dataset / reward function.
 
 Launch (single node, 8 GPUs)::
 
-    UV_NO_SYNC=1 uv run torchrun --nproc_per_node=8 \
+    .venv/bin/torchrun --nproc_per_node=8 \
         -m src.precompute.maze_webdataset \
         --output_dir data/maze_synth/latents/webdataset \
         --model_path storage/models/Wan2.2-I2V-A14B-Diffusers \

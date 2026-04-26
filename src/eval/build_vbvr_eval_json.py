@@ -7,7 +7,7 @@ JSON file compatible with `src.cli.eval_i2v`. Each entry's `name` is
 `run_evaluation_video_icml.py`.
 
 Usage:
-    uv run python scripts/eval/build_vbvr_eval_json.py \
+    .venv/bin/python -m src.eval.build_vbvr_eval_json \
         --gt_base /mnt/umm/users/wangruisi/01-project/mllm/hokin_data/VBVR-Bench \
         --output data/vbvr_eval.json
 """

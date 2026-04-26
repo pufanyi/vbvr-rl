@@ -11,6 +11,7 @@ Usage:
 
 import logging
 import re
+from itertools import islice
 from pathlib import Path
 
 import torch.nn.functional as F
@@ -23,6 +24,24 @@ _LATENTS_KEY_RE = re.compile(r"latents_(\d+)$")
 
 
 _RESERVED_TENSOR_KEYS = frozenset({"prompt_embeds", "condition", "latents"})
+
+
+class _RankShardSplitter:
+    """Split WebDataset shards with an explicit rank/world-size pair."""
+
+    def __init__(self, rank: int, world_size: int):
+        if world_size <= 0:
+            raise ValueError(f"world_size must be positive, got {world_size}")
+        if not 0 <= rank < world_size:
+            raise ValueError(f"rank must be in [0, {world_size}), got {rank}")
+        self.rank = int(rank)
+        self.world_size = int(world_size)
+
+    def __call__(self, src, group=None):
+        if self.world_size > 1:
+            yield from islice(src, self.rank, None, self.world_size)
+        else:
+            yield from src
 
 
 def _decode_sample(sample: dict, max_text_len: int = 512) -> dict:
@@ -83,6 +102,11 @@ class VBVRLatentDataset(IterableDataset):
             epoch via ``with_epoch()``.  This guarantees all ranks produce the
             same number of batches, preventing FSDP/NCCL deadlocks at epoch
             boundaries when shard counts are not evenly divisible by world_size.
+        seed: Deterministic shard/sample shuffle seed.
+        node_rank: Explicit distributed rank for shard splitting.  Expert
+            parallel duplicate mode passes the rank within an expert group so
+            the high and low groups see the same shard stream.
+        node_world_size: Explicit distributed world size for shard splitting.
     """
 
     def __init__(
@@ -91,6 +115,9 @@ class VBVRLatentDataset(IterableDataset):
         max_text_len: int = 512,
         shuffle_buffer: int = 50000,
         epoch_length: int | None = None,
+        seed: int | None = None,
+        node_rank: int | None = None,
+        node_world_size: int | None = None,
     ):
         shard_dir = Path(webdataset_dir)
         shard_paths = sorted(shard_dir.glob("shard-*.tar"))
@@ -100,9 +127,22 @@ class VBVRLatentDataset(IterableDataset):
         urls = [str(p) for p in shard_paths]
         logger.info("VBVRLatentDataset: %d shards in %s", len(shard_paths), shard_dir)
 
-        pipeline = wds.WebDataset(urls, nodesplitter=wds.split_by_node, shardshuffle=len(urls))
+        if (node_rank is None) != (node_world_size is None):
+            raise ValueError("node_rank and node_world_size must be provided together")
+        if node_rank is None:
+            nodesplitter = wds.split_by_node
+            logger.info("VBVRLatentDataset: shard splitting by global PyTorch rank")
+        else:
+            nodesplitter = _RankShardSplitter(node_rank, node_world_size)
+            logger.info(
+                "VBVRLatentDataset: shard splitting rank=%d/%d",
+                node_rank,
+                node_world_size,
+            )
+
+        pipeline = wds.WebDataset(urls, nodesplitter=nodesplitter, shardshuffle=len(urls), seed=seed)
         if shuffle_buffer > 0:
-            pipeline = pipeline.shuffle(shuffle_buffer)
+            pipeline = pipeline.shuffle(shuffle_buffer, seed=seed)
         pipeline = pipeline.map(lambda s: _decode_sample(s, max_text_len))
         if epoch_length is not None:
             pipeline = pipeline.with_epoch(epoch_length)

@@ -1,1 +1,1 @@
-"""Evaluation utilities for trained Wan models."""
+"""Evaluation helper CLIs and utilities."""

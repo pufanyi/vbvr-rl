@@ -629,7 +629,11 @@ def compute_frame_difference(frame1: np.ndarray, frame2: np.ndarray) -> float:
     return float(np.mean(diff) / 255.0)
 
 
-def detect_motion_regions(frame1: np.ndarray, frame2: np.ndarray, threshold: int = 30) -> list[tuple[int, int, int, int]]:
+def detect_motion_regions(
+    frame1: np.ndarray,
+    frame2: np.ndarray,
+    threshold: int = 30,
+) -> list[tuple[int, int, int, int]]:
     """
     Detect regions with motion between two frames.
 

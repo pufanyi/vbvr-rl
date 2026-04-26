@@ -15,7 +15,9 @@ save_steps: 2
 log_steps: 1
 seed: 42
 
-ema_decay: 0.99
+ema_decay: 0.999
+prompt_dropout: 0.1
+transformer_load_dtype: float32
 
 expert_parallel: true
 train_experts: both

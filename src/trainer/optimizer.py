@@ -18,6 +18,19 @@ from torch.nn import Parameter
 from src.trainer.config import TrainConfig
 
 
+def _log_trainable_param_dtypes(params: list[Parameter], cfg: TrainConfig) -> None:
+    dtype_counts: dict[torch.dtype, int] = {}
+    for p in params:
+        dtype_counts[p.dtype] = dtype_counts.get(p.dtype, 0) + p.numel()
+    summary = ", ".join(f"{dtype}: {count / 1e6:.1f}M" for dtype, count in sorted(dtype_counts.items(), key=str))
+    logger.info("Optimizer trainable param dtypes: {}", summary or "none")
+    if cfg.optimizer == "adamw" and cfg.lora_rank == 0 and any(dtype != torch.float32 for dtype in dtype_counts):
+        logger.warning(
+            "Full fine-tune AdamW has non-fp32 trainable params; Adam moments will follow param dtype. "
+            "Set transformer_load_dtype: float32 to keep optimizer state in fp32."
+        )
+
+
 def build_optimizer(
     params: Iterable[Parameter], cfg: TrainConfig
 ) -> tuple[torch.optim.Optimizer, list[torch.optim.Optimizer]]:
@@ -28,6 +41,7 @@ def build_optimizer(
         checkpointing; extras are stepped but not checkpointed.
     """
     params = list(params)
+    _log_trainable_param_dtypes(params, cfg)
 
     if cfg.optimizer == "adamw":
         opt = torch.optim.AdamW(

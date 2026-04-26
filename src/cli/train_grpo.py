@@ -1,7 +1,7 @@
 """Wan2.2 I2V Flow-GRPO training entry point.
 
 Usage:
-    torchrun --nproc_per_node=8 -m src.cli.train_grpo --config configs/train_grpo.yaml
+    .venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_grpo --config configs/train_grpo.yaml
 """
 
 import argparse

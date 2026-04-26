@@ -201,7 +201,7 @@ class LocateSegmentIntersectionEvaluator(BaseEvaluator):
         if lines is None:
             return []
 
-        return [(l[0][0], l[0][1], l[0][2], l[0][3]) for l in lines]
+        return [(line[0][0], line[0][1], line[0][2], line[0][3]) for line in lines]
 
     def _line_intersection(self, line1: tuple, line2: tuple) -> tuple[float, float] | None:
         """Calculate intersection point of two line segments."""
@@ -835,7 +835,12 @@ class DrawNextSizedShapeEvaluator(BaseEvaluator):
 
         return smoothness
 
-    def _detect_shapes_with_area(self, frame: np.ndarray, exclude_boxes: bool = True, min_area: int = 2000) -> list[tuple[int, int, int]]:
+    def _detect_shapes_with_area(
+        self,
+        frame: np.ndarray,
+        exclude_boxes: bool = True,
+        min_area: int = 2000,
+    ) -> list[tuple[int, int, int]]:
         """Detect shapes with (x, y, area).
 
         Args:
@@ -1166,10 +1171,12 @@ class MarkWavePeaksEvaluator(BaseEvaluator):
                     right_max = max(right_y)
 
                     # Must be clearly lower (smaller y) than neighbors
-                    if y < left_max - significance_threshold and y < right_max - significance_threshold:
-                        # Check distance from existing peaks
-                        if not peaks or all(abs(x - px) > min_peak_distance for px, py in peaks):
-                            peaks.append((x, int(x_to_y[x])))
+                    if (
+                        y < left_max - significance_threshold
+                        and y < right_max - significance_threshold
+                        and (not peaks or all(abs(x - px) > min_peak_distance for px, py in peaks))
+                    ):
+                        peaks.append((x, int(x_to_y[x])))
 
             if len(peaks) > len(all_peaks):
                 all_peaks = peaks

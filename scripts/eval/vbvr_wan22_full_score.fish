@@ -1,36 +1,30 @@
 #!/usr/bin/env fish
 
-# Score pre-generated videos against VBVR-Bench using the vendored
-# rule-based EvalKit (third_party/VBVR-EvalKit/run_evaluation.py).
+# Score pre-generated Wan2.2 full-model videos under
+# storage/eval_out/vbvr_wan22_full/videos against VBVR-Bench using the
+# vendored rule-based EvalKit (third_party/VBVR-EvalKit/run_evaluation.py).
 #
-# Assumes videos already exist under each MODEL_OUT with layout:
-#   $MODEL_OUT/{In-Domain_50,Out-of-Domain_50}/{task}/{00000..00004}.mp4
+# Videos already follow the EvalKit layout:
+#   $MODEL_OUT/{In-Domain_50,Out-of-Domain_50}/{task}/{00000..}.mp4
 #
 # Per-model results land in $MODEL_OUT/score/.
 #
 # Run from repo root:
-#   fish scripts/eval/eval_vbvr_rule.fish
+#   fish scripts/eval/vbvr_wan22_full_score.fish
+
+source (dirname (status filename))/../lib/env.fish
 
 # ── Configuration ────────────────────────────────────────────────────
-#   NOTE: these must be *video output* dirs (produced by src.cli.eval_i2v),
-#   not model / checkpoint weight dirs.
 set MODEL_OUTPUTS \
-    storage/eval_out/vbvr/sft_vbvr_5e-6_checkpoint-10000
-    # storage/eval_out/vbvr/sft_vbvr_checkpoint-8000
-    # storage/eval_out/vbvr/correction_vbvr_checkpoint-3000 \
-    # storage/eval_out/vbvr/sft_vbvr_checkpoint-4000 \
-    # storage/eval_out/vbvr/sft_vbvr_checkpoint-12000
+    storage/eval_out/vbvr_wan22_full/videos
 
 set GT_BASE      /mnt/umm/users/pufanyi/workspace/Wan-Trainer/data/vbvr/VBVR-Bench
 set EVALKIT_DIR  third_party/VBVR-EvalKit
 set DEVICE       cuda
-set NUM_WORKERS  64
+set NUM_WORKERS  32
 
-# If your videos live under $MODEL_OUT/$SOURCE_SPLIT/{task}/ (e.g. Open_60/)
-# instead of the In-Domain_50/ & Out-of-Domain_50/ layout EvalKit expects,
-# set SOURCE_SPLIT and we'll symlink tasks into the correct split first.
-# Leave empty to skip restructuring.
-set SOURCE_SPLIT Open_60
+# Layout is already EvalKit-native; leave SOURCE_SPLIT empty to skip restructure.
+set SOURCE_SPLIT
 # ─────────────────────────────────────────────────────────────────────
 
 for MODEL_OUT in $MODEL_OUTPUTS
@@ -49,7 +43,7 @@ for MODEL_OUT in $MODEL_OUTPUTS
     echo "==============================================================="
 
     if test -n "$SOURCE_SPLIT"; and test -d $ABS_MODEL_OUT/$SOURCE_SPLIT
-        uv run python scripts/eval/vbvr_restructure_to_evalkit.py \
+        python -m src.eval.vbvr_restructure_to_evalkit \
             --model_out    $ABS_MODEL_OUT \
             --source_split $SOURCE_SPLIT
         or begin
@@ -58,7 +52,7 @@ for MODEL_OUT in $MODEL_OUTPUTS
         end
     end
 
-    uv run python scripts/eval/vbvr_run_evaluation_parallel.py \
+    python -m src.eval.vbvr_run_evaluation_parallel \
         --model_path  $ABS_MODEL_OUT \
         --gt_base     $GT_BASE \
         --output_dir  $SCORE_DIR \

@@ -1,7 +1,7 @@
 """Wan2.2 I2V training with on-policy correction loss.
 
 Usage:
-    torchrun --nproc_per_node=8 -m src.cli.train_i2v_correction \
+    .venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v_correction \
         --config configs/train_i2v_correction.yaml
 """
 

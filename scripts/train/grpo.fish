@@ -40,6 +40,8 @@ end
 set -l project_root (realpath (dirname (status filename))/../..)
 cd $project_root
 
+source (dirname (status filename))/../lib/env.fish
+
 echo "Launching Flow-GRPO training with $nproc GPUs..."
 
 torchrun --nproc_per_node=$nproc -m src.cli.train_grpo $train_args
