@@ -44,6 +44,7 @@ class BaseTrainer(CheckpointRuntimeMixin):
         self.device = torch.device(f"cuda:{local_rank}")
         torch.cuda.set_device(self.device)
         torch.manual_seed(cfg.seed + self.rank)
+        self._dcp_pg = None
 
         # ---- Expert parallel (must run before model build) ----
         self._init_expert_parallel(cfg)
@@ -85,6 +86,7 @@ class BaseTrainer(CheckpointRuntimeMixin):
             self.mesh, self.mp_policy = None, None
             self.sync_modules = []
             self._dp_pg = None
+            self._dcp_pg = None
             logger.info("FSDP disabled — using manual gradient all-reduce")
 
         # ---- EMA ----
@@ -348,6 +350,7 @@ class BaseTrainer(CheckpointRuntimeMixin):
             half = self.world_size // 2
             dp_ranks = list(range(half)) if self.expert_group == 0 else list(range(half, self.world_size))
             self._dp_pg = dist.new_group(ranks=dp_ranks)
+            self._dcp_pg = self._create_expert_dcp_pg()
             logger.info(
                 "Expert parallel: group={} dp_rank={}/{}",
                 self.expert_group,
@@ -362,6 +365,7 @@ class BaseTrainer(CheckpointRuntimeMixin):
             )
             mesh = mesh_2d["dp"]
             self._dp_pg = mesh.get_group()
+            self._dcp_pg = self._create_expert_dcp_pg()
             logger.info(
                 "Expert parallel mesh: group={} dp_rank={}/{}",
                 self.expert_group,
@@ -396,9 +400,11 @@ class BaseTrainer(CheckpointRuntimeMixin):
                     rep_backend,
                 )
             self._dp_pg = None
+            self._dcp_pg = None
         else:
             mesh = init_device_mesh("cuda", (self.world_size,))
             self._dp_pg = None
+            self._dcp_pg = None
 
         dtype_map = {"bfloat16": torch.bfloat16, "float32": torch.float32}
         mp_policy = MixedPrecisionPolicy(
@@ -624,6 +630,14 @@ class BaseTrainer(CheckpointRuntimeMixin):
         if self.mesh is not None and self.mesh.ndim == 2:
             return self.mesh.get_local_rank("shard")
         return self.rank
+
+    def _create_expert_dcp_pg(self):
+        """Create per-expert Gloo groups for DCP metadata collectives."""
+
+        half = self.world_size // 2
+        high_pg = dist.new_group(ranks=list(range(half)), backend="gloo")
+        low_pg = dist.new_group(ranks=list(range(half, self.world_size)), backend="gloo")
+        return high_pg if self.expert_group == 0 else low_pg
 
     # ------------------------------------------------------------------
     # DCP checkpointing — provided by CheckpointRuntimeMixin

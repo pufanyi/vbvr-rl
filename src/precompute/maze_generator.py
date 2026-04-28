@@ -1,13 +1,13 @@
-"""Self-contained maze layout + video renderer for synthetic RL data.
+"""Self-contained random maze layout + video renderer for synthetic RL data.
 
 Produces:
-    - a perfect maze (DFS backtracker) on an ``(2h+1, 2w+1)`` grid
+    - a random perfect maze on a fixed logical grid
       (``1 = wall``, ``0 = passage``);
-    - the BFS shortest path from start to goal;
+    - a BFS shortest path from start to goal;
     - a sequence of RGB frames showing a ball travelling that path at a
       configurable number of frames;
     - all metadata needed by a custom reward (grid, start, goal, path,
-      per-frame ball position, palette, pixel geometry).
+      per-frame ball position, palette, pixel geometry, generation settings).
 
 No torch / CUDA dependencies — this module is pure Python + numpy + PIL so it
 can be imported by the precompute pipeline, the reward implementation, and
@@ -17,6 +17,7 @@ offline visualisation tools.
 from __future__ import annotations
 
 from collections import deque
+from typing import Any
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -89,6 +90,71 @@ DEFAULT_PALETTES: list[MazePalette] = [
 
 
 # ---------------------------------------------------------------------------
+# Difficulty schedule
+# ---------------------------------------------------------------------------
+
+
+class MazeDifficulty(BaseModel):
+    """Random-maze difficulty recipe.
+
+    ``path_ratio`` is relative to the start-goal Manhattan distance on the
+    rendered logical grid.  The generator rejects mazes whose true BFS path
+    falls outside this range.
+    """
+
+    id: int
+    name: str
+    path_ratio_min: float
+    path_ratio_max: float
+    branch_count_range: tuple[int, int]
+    branch_len_range: tuple[int, int]
+    prompt_adjective: str
+
+
+DEFAULT_DIFFICULTIES: tuple[MazeDifficulty, ...] = (
+    MazeDifficulty(
+        id=0,
+        name="easy",
+        path_ratio_min=1.00,
+        path_ratio_max=2.25,
+        branch_count_range=(0, 0),
+        branch_len_range=(0, 0),
+        prompt_adjective="simple",
+    ),
+    MazeDifficulty(
+        id=1,
+        name="mid",
+        path_ratio_min=2.25,
+        path_ratio_max=3.60,
+        branch_count_range=(0, 0),
+        branch_len_range=(0, 0),
+        prompt_adjective="moderately winding",
+    ),
+    MazeDifficulty(
+        id=2,
+        name="hard",
+        path_ratio_min=3.60,
+        path_ratio_max=5.00,
+        branch_count_range=(0, 0),
+        branch_len_range=(0, 0),
+        prompt_adjective="complex",
+    ),
+    MazeDifficulty(
+        id=3,
+        name="xhard",
+        path_ratio_min=5.00,
+        path_ratio_max=6.80,
+        branch_count_range=(0, 0),
+        branch_len_range=(0, 0),
+        prompt_adjective="very difficult",
+    ),
+)
+
+DIFFICULTY_BY_NAME: dict[str, MazeDifficulty] = {d.name: d for d in DEFAULT_DIFFICULTIES}
+DIFFICULTY_BY_NAME["medium"] = DIFFICULTY_BY_NAME["mid"]
+
+
+# ---------------------------------------------------------------------------
 # Maze layout + path
 # ---------------------------------------------------------------------------
 
@@ -130,6 +196,340 @@ def generate_maze_grid(cell_h: int, cell_w: int, rng: np.random.Generator) -> np
     return grid
 
 
+_DIRS_4: tuple[tuple[int, int], ...] = ((-1, 0), (1, 0), (0, -1), (0, 1))
+
+
+def _manhattan(a: tuple[int, int], b: tuple[int, int]) -> int:
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+def _sample_endpoint_pair(
+    grid_h: int,
+    grid_w: int,
+    rng: np.random.Generator,
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Sample start near the top-left and goal near the bottom-right."""
+    row_jitter = max(2, grid_h // 8)
+    col_jitter = max(2, grid_w // 8)
+    start = (
+        int(rng.integers(1, min(grid_h - 1, row_jitter + 1))),
+        int(rng.integers(1, min(grid_w - 1, col_jitter + 1))),
+    )
+    goal = (
+        int(rng.integers(max(1, grid_h - row_jitter - 1), grid_h - 1)),
+        int(rng.integers(max(1, grid_w - col_jitter - 1), grid_w - 1)),
+    )
+    return start, goal
+
+
+def _weighted_pick(weights: list[float], rng: np.random.Generator) -> int:
+    total = float(sum(weights))
+    if total <= 0:
+        return int(rng.integers(0, len(weights)))
+    r = float(rng.random() * total)
+    acc = 0.0
+    for idx, weight in enumerate(weights):
+        acc += float(weight)
+        if acc >= r:
+            return idx
+    return len(weights) - 1
+
+
+def _random_self_avoiding_path(
+    grid_h: int,
+    grid_w: int,
+    start: tuple[int, int],
+    goal: tuple[int, int],
+    min_len: int,
+    max_len: int,
+    rng: np.random.Generator,
+    max_steps: int,
+) -> tuple[list[tuple[int, int]] | None, int]:
+    """Find a random simple path with length in ``[min_len, max_len]``.
+
+    The search is a weighted DFS with backtracking.  Before the lower bound is
+    met it prefers detours; after that it prefers moving toward the goal.
+    """
+    path: list[tuple[int, int]] = [start]
+    visited: set[tuple[int, int]] = {start}
+    tried_stack: list[set[tuple[int, int]]] = [set()]
+
+    steps = 0
+    while path and steps < max_steps:
+        steps += 1
+        cur = path[-1]
+        path_len = len(path) - 1
+
+        if cur == goal:
+            if min_len <= path_len <= max_len:
+                return path, steps
+            # Goal reached too early.  Backtrack; leaving and revisiting the
+            # goal would violate the simple-path constraint.
+            candidates: list[tuple[int, int]] = []
+            weights: list[float] = []
+        else:
+            cur_dist = _manhattan(cur, goal)
+            candidates = []
+            weights = []
+            for di, dj in _DIRS_4:
+                nb = (cur[0] + di, cur[1] + dj)
+                if nb in tried_stack[-1]:
+                    continue
+                ni, nj = nb
+                if not (0 <= ni < grid_h and 0 <= nj < grid_w):
+                    continue
+                if nb in visited:
+                    continue
+                visited_neighbours = 0
+                for ndi, ndj in _DIRS_4:
+                    if (ni + ndi, nj + ndj) in visited:
+                        visited_neighbours += 1
+                if visited_neighbours != 1:
+                    continue
+
+                new_len = path_len + 1
+                new_dist = _manhattan(nb, goal)
+                if new_len + new_dist > max_len:
+                    continue
+                if nb == goal and new_len < min_len:
+                    continue
+
+                delta = new_dist - cur_dist
+                if path_len < min_len:
+                    # Positive delta moves away from the goal and creates
+                    # harder paths.  Near the max bound, pull back toward goal.
+                    weight = float(np.exp(0.9 * delta))
+                    if new_len + new_dist > max_len * 0.85:
+                        weight *= float(np.exp(-1.5 * delta))
+                else:
+                    weight = float(np.exp(-1.2 * delta))
+                candidates.append(nb)
+                weights.append(max(weight, 1e-3))
+
+        if candidates:
+            pick = _weighted_pick(weights, rng)
+            nb = candidates[pick]
+            tried_stack[-1].add(nb)
+            path.append(nb)
+            visited.add(nb)
+            tried_stack.append(set())
+            continue
+
+        old = path.pop()
+        visited.remove(old)
+        tried_stack.pop()
+
+    return None, steps
+
+
+def _open_neighbour_count(grid: np.ndarray, cell: tuple[int, int]) -> int:
+    grid_h, grid_w = grid.shape
+    ci, cj = cell
+    count = 0
+    for di, dj in _DIRS_4:
+        ni, nj = ci + di, cj + dj
+        if 0 <= ni < grid_h and 0 <= nj < grid_w and grid[ni, nj] == 0:
+            count += 1
+    return count
+
+
+def _scale_count_for_area(count_range: tuple[int, int], grid_h: int, grid_w: int) -> tuple[int, int]:
+    scale = (grid_h * grid_w) / float(48 * 48)
+    lo = max(1, int(round(count_range[0] * scale)))
+    hi = max(lo, int(round(count_range[1] * scale)))
+    return lo, hi
+
+
+def _carve_dead_end_branches(
+    grid: np.ndarray,
+    rng: np.random.Generator,
+    branch_count: int,
+    branch_len_range: tuple[int, int],
+) -> int:
+    """Carve random dead ends while avoiding loops/shortcuts."""
+    open_cells = [tuple(map(int, p)) for p in np.argwhere(grid == 0)]
+    carved = 0
+    for _ in range(branch_count):
+        if not open_cells:
+            break
+        root = open_cells[int(rng.integers(0, len(open_cells)))]
+        cur = root
+        branch_len = int(rng.integers(branch_len_range[0], branch_len_range[1] + 1))
+        for _step in range(branch_len):
+            candidates: list[tuple[int, int]] = []
+            for di, dj in _DIRS_4:
+                nb = (cur[0] + di, cur[1] + dj)
+                ni, nj = nb
+                if not (0 <= ni < grid.shape[0] and 0 <= nj < grid.shape[1]):
+                    continue
+                if grid[ni, nj] == 0:
+                    continue
+                if _open_neighbour_count(grid, nb) != 1:
+                    continue
+                candidates.append(nb)
+            if not candidates:
+                break
+            cur = candidates[int(rng.integers(0, len(candidates)))]
+            grid[cur] = 0
+            open_cells.append(cur)
+            carved += 1
+    return carved
+
+
+def _resolve_difficulty(name: str) -> MazeDifficulty:
+    try:
+        return DIFFICULTY_BY_NAME[name]
+    except KeyError as exc:
+        valid = ", ".join(sorted(DIFFICULTY_BY_NAME))
+        raise ValueError(f"Unknown maze difficulty '{name}'. Valid values: {valid}") from exc
+
+
+def generate_random_maze_grid(
+    grid_h: int,
+    grid_w: int,
+    difficulty: MazeDifficulty,
+    rng: np.random.Generator,
+    *,
+    max_attempts: int = 64,
+    max_search_steps: int = 250_000,
+    sample_seed: int | None = None,
+) -> tuple[np.ndarray, tuple[int, int], tuple[int, int], list[tuple[int, int]], dict[str, Any]]:
+    """Generate a random corridor maze and return full generation metadata."""
+    last_steps = 0
+    for attempt in range(max_attempts):
+        start, goal = _sample_endpoint_pair(grid_h, grid_w, rng)
+        manhattan = _manhattan(start, goal)
+        min_len = max(manhattan, int(np.ceil(manhattan * difficulty.path_ratio_min)))
+        max_len = max(min_len, int(np.ceil(manhattan * difficulty.path_ratio_max)))
+        max_len = min(max_len, grid_h * grid_w - 1)
+
+        path, search_steps = _random_self_avoiding_path(
+            grid_h,
+            grid_w,
+            start,
+            goal,
+            min_len,
+            max_len,
+            rng,
+            max_search_steps,
+        )
+        last_steps = search_steps
+        if path is None:
+            continue
+
+        grid = np.ones((grid_h, grid_w), dtype=np.uint8)
+        for cell in path:
+            grid[cell] = 0
+
+        branch_count_lo, branch_count_hi = _scale_count_for_area(difficulty.branch_count_range, grid_h, grid_w)
+        branch_count = int(rng.integers(branch_count_lo, branch_count_hi + 1))
+        branch_cells = _carve_dead_end_branches(grid, rng, branch_count, difficulty.branch_len_range)
+
+        # Branches are loop-free by construction, but run BFS anyway so the
+        # stored path is always the real shortest path under the final grid.
+        shortest_path = bfs_shortest_path(grid, start, goal)
+        path_len = len(shortest_path) - 1
+        path_ratio = path_len / max(1, manhattan)
+        generation = {
+            "method": "random_self_avoiding_corridor_with_dead_end_branches",
+            "difficulty": difficulty.name,
+            "difficulty_id": difficulty.id,
+            "sample_seed": sample_seed,
+            "attempt": attempt,
+            "search_steps": search_steps,
+            "grid_h": grid_h,
+            "grid_w": grid_w,
+            "start_goal_strategy": "random_jittered_top_left_to_bottom_right",
+            "manhattan_distance": manhattan,
+            "target_path_len_min": min_len,
+            "target_path_len_max": max_len,
+            "branch_count": branch_count,
+            "branch_cells": branch_cells,
+            "branch_len_min": difficulty.branch_len_range[0],
+            "branch_len_max": difficulty.branch_len_range[1],
+            "path_len": path_len,
+            "path_ratio": path_ratio,
+            "wall_fraction": float(grid.mean()),
+            "open_fraction": float(1.0 - grid.mean()),
+        }
+        return grid, start, goal, shortest_path, generation
+
+    raise RuntimeError(
+        "Could not generate random maze after "
+        f"{max_attempts} attempts for difficulty={difficulty.name}; last_search_steps={last_steps}"
+    )
+
+
+def generate_perfect_maze_grid(
+    cell_h: int,
+    cell_w: int,
+    difficulty: MazeDifficulty,
+    rng: np.random.Generator,
+    *,
+    max_attempts: int = 256,
+    sample_seed: int | None = None,
+) -> tuple[np.ndarray, tuple[int, int], tuple[int, int], list[tuple[int, int]], dict[str, Any]]:
+    """Generate a clear, one-cell-wide perfect maze at shape ``(2h, 2w)``.
+
+    ``generate_maze_grid`` returns the textbook ``(2h+1, 2w+1)`` layout with
+    an outer wall.  Cropping the top/left border gives an exactly divisible
+    ``(2h, 2w)`` logical grid, so ``cell_h=cell_w=16`` and ``cell_px=12``
+    render to 384x384 while preserving the normal maze topology.
+    """
+    start = (0, 0)
+    goal = (2 * cell_h - 2, 2 * cell_w - 2)
+    manhattan = _manhattan(start, goal)
+    last_path_len = -1
+    last_ratio = -1.0
+
+    for attempt in range(max_attempts):
+        grid = generate_maze_grid(cell_h, cell_w, rng)[1:, 1:]
+        path = bfs_shortest_path(grid, start, goal)
+        path_len = len(path) - 1
+        path_ratio = path_len / max(1, manhattan)
+        last_path_len = path_len
+        last_ratio = path_ratio
+
+        if difficulty.path_ratio_min <= path_ratio < difficulty.path_ratio_max:
+            turns = 0
+            for a, b, c in zip(path, path[1:], path[2:], strict=False):
+                d1 = (b[0] - a[0], b[1] - a[1])
+                d2 = (c[0] - b[0], c[1] - b[1])
+                if d1 != d2:
+                    turns += 1
+            generation = {
+                "method": "perfect_dfs_maze_cropped_to_even_grid",
+                "difficulty": difficulty.name,
+                "difficulty_id": difficulty.id,
+                "sample_seed": sample_seed,
+                "attempt": attempt,
+                "cell_h": cell_h,
+                "cell_w": cell_w,
+                "grid_h": int(grid.shape[0]),
+                "grid_w": int(grid.shape[1]),
+                "start_goal_strategy": "top_left_room_to_bottom_right_room",
+                "manhattan_distance": manhattan,
+                "target_path_ratio_min": difficulty.path_ratio_min,
+                "target_path_ratio_max": difficulty.path_ratio_max,
+                "branch_count": 0,
+                "branch_cells": 0,
+                "branch_len_min": 0,
+                "branch_len_max": 0,
+                "path_len": path_len,
+                "path_ratio": path_ratio,
+                "turn_count": turns,
+                "wall_fraction": float(grid.mean()),
+                "open_fraction": float(1.0 - grid.mean()),
+            }
+            return grid, start, goal, path, generation
+
+    raise RuntimeError(
+        "Could not generate perfect maze after "
+        f"{max_attempts} attempts for difficulty={difficulty.name}; "
+        f"last_path_len={last_path_len} last_path_ratio={last_ratio:.3f}"
+    )
+
+
 def bfs_shortest_path(
     grid: np.ndarray,
     start: tuple[int, int],
@@ -154,7 +554,7 @@ def bfs_shortest_path(
                 q.append((ni, nj))
 
     if goal not in parents:
-        raise RuntimeError("BFS could not reach goal — grid is not a perfect maze")
+        raise RuntimeError("BFS could not reach goal — generated maze is disconnected")
 
     path: list[tuple[int, int]] = []
     cur: tuple[int, int] | None = goal
@@ -274,24 +674,25 @@ def render_video(
 
 
 PROMPT_TEMPLATES: tuple[str, ...] = (
-    "A {ball} ball navigates through a {wall} maze from the top-left to the "
-    "bottom-right, following the only valid path.",
-    "A small {ball} circle moves through a maze with {wall} walls on a "
+    "A {ball} ball navigates through a {difficulty} {wall} maze, following "
+    "the valid path to the goal.",
+    "A small {ball} circle moves through a {difficulty} maze with {wall} walls on a "
     "{passage} background, heading toward the {goal} goal marker.",
-    "Top-down view of a {passage} maze with {wall} walls; a {ball} ball "
+    "Top-down view of a {difficulty} {passage} maze with {wall} walls; a {ball} ball "
     "traverses the shortest path to the {goal} exit.",
-    "A {ball} ball rolls step-by-step through a grid maze, navigating "
+    "A {ball} ball rolls step-by-step through a {difficulty} grid maze, navigating "
     "{wall} corridors to reach the {goal} target at the far corner.",
 )
 
 
-def build_prompt(palette: MazePalette, rng: np.random.Generator) -> str:
+def build_prompt(palette: MazePalette, difficulty: MazeDifficulty, rng: np.random.Generator) -> str:
     tpl = PROMPT_TEMPLATES[int(rng.integers(0, len(PROMPT_TEMPLATES)))]
     return tpl.format(
         ball=palette.ball_name,
         wall=palette.wall_name,
         passage=palette.passage_name,
         goal=palette.goal_name,
+        difficulty=difficulty.prompt_adjective,
     )
 
 
@@ -303,7 +704,7 @@ def build_prompt(palette: MazePalette, rng: np.random.Generator) -> str:
 class MazeSpec(BaseModel):
     """Configuration for one maze sample generator.
 
-    Resolution derived as ``(2*cell_h+1)*cell_px`` by ``(2*cell_w+1)*cell_px``.
+    Resolution is derived as ``(2*cell_h)*cell_px`` by ``(2*cell_w)*cell_px``.
     """
 
     cell_h: int = Field(ge=2)
@@ -311,10 +712,13 @@ class MazeSpec(BaseModel):
     cell_px: int = Field(ge=4)
     num_frames: int = Field(ge=2)
     palettes: list[MazePalette] = Field(default_factory=lambda: list(DEFAULT_PALETTES))
+    difficulty_names: tuple[str, ...] = ("easy", "mid", "hard", "xhard")
+    max_generation_attempts: int = Field(default=64, ge=1)
+    max_search_steps: int = Field(default=250_000, ge=1)
 
     @property
     def image_hw(self) -> tuple[int, int]:
-        return ((2 * self.cell_h + 1) * self.cell_px, (2 * self.cell_w + 1) * self.cell_px)
+        return (2 * self.cell_h * self.cell_px, 2 * self.cell_w * self.cell_px)
 
 
 class MazeSample(BaseModel):
@@ -322,6 +726,8 @@ class MazeSample(BaseModel):
 
     # Layout
     grid: list[list[int]]  # shape (Hg, Wg), 1=wall 0=passage
+    grid_h: int
+    grid_w: int
     cell_h: int
     cell_w: int
     cell_px: int
@@ -333,11 +739,18 @@ class MazeSample(BaseModel):
     goal: tuple[int, int]  # (i, j) in grid coords
     path: list[tuple[int, int]]  # BFS shortest path (start → goal inclusive)
     path_len: int
+    manhattan_distance: int
+    path_ratio: float
 
     # Animation
     num_frames: int
     frame_positions_cell: list[tuple[float, float]]  # per-frame (i, j) in cell coords
     frame_positions_pix: list[tuple[float, float]]  # per-frame (x, y) in pixels
+
+    # Difficulty + generation metadata
+    difficulty: str
+    difficulty_id: int
+    generation: dict[str, Any]
 
     # Palette + text
     palette: MazePalette
@@ -347,31 +760,46 @@ class MazeSample(BaseModel):
         frozen = False
 
 
-def build_maze_sample(spec: MazeSpec, rng: np.random.Generator) -> tuple[np.ndarray, MazeSample]:
+def build_maze_sample(
+    spec: MazeSpec,
+    rng: np.random.Generator,
+    *,
+    sample_seed: int | None = None,
+) -> tuple[np.ndarray, MazeSample]:
     """Generate maze + render video + return full metadata.
 
-    Start is always the top-left cell ``(1, 1)``; goal is the bottom-right
-    cell ``(2*cell_h - 1, 2*cell_w - 1)``.  A perfect maze guarantees a unique
-    path, and BFS finds it in linear time.
+    The start is sampled near the top-left and the goal near the bottom-right.
+    Difficulty controls the random corridor path length and branch density.
 
     Returns ``(video_uint8, MazeSample)`` where ``video_uint8`` has shape
     ``(num_frames, H, W, 3)``.
     """
-    grid = generate_maze_grid(spec.cell_h, spec.cell_w, rng)
-    start = (1, 1)
-    goal = (2 * spec.cell_h - 1, 2 * spec.cell_w - 1)
-    path = bfs_shortest_path(grid, start, goal)
+    if not spec.difficulty_names:
+        raise ValueError("MazeSpec.difficulty_names must contain at least one difficulty")
+    difficulty_name = spec.difficulty_names[int(rng.integers(0, len(spec.difficulty_names)))]
+    difficulty = _resolve_difficulty(difficulty_name)
+
+    grid, start, goal, path, generation = generate_perfect_maze_grid(
+        spec.cell_h,
+        spec.cell_w,
+        difficulty,
+        rng,
+        max_attempts=spec.max_generation_attempts,
+        sample_seed=sample_seed,
+    )
 
     fp_cell, fp_pix = interpolate_ball_positions(path, spec.num_frames, spec.cell_px)
 
     palette = spec.palettes[int(rng.integers(0, len(spec.palettes)))]
 
     video = render_video(grid, fp_pix, goal, palette, spec.cell_px)
-    prompt = build_prompt(palette, rng)
+    prompt = build_prompt(palette, difficulty, rng)
 
     img_h, img_w = video.shape[1], video.shape[2]
     sample = MazeSample(
         grid=grid.astype(int).tolist(),
+        grid_h=int(grid.shape[0]),
+        grid_w=int(grid.shape[1]),
         cell_h=spec.cell_h,
         cell_w=spec.cell_w,
         cell_px=spec.cell_px,
@@ -381,9 +809,14 @@ def build_maze_sample(spec: MazeSpec, rng: np.random.Generator) -> tuple[np.ndar
         goal=goal,
         path=[tuple(p) for p in path],
         path_len=len(path),
+        manhattan_distance=int(generation["manhattan_distance"]),
+        path_ratio=float(generation["path_ratio"]),
         num_frames=spec.num_frames,
         frame_positions_cell=[tuple(row) for row in fp_cell.tolist()],
         frame_positions_pix=[tuple(row) for row in fp_pix.tolist()],
+        difficulty=difficulty.name,
+        difficulty_id=difficulty.id,
+        generation=generation,
         palette=palette,
         prompt=prompt,
     )

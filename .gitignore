@@ -212,3 +212,5 @@ storage/
 wandb/
 
 eval_out/
+
+logs/

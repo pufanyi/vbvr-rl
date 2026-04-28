@@ -146,6 +146,23 @@ class COSTrainer(BaseTrainer):
                 is_last_micro_step = (batch_idx + 1) % cfg.gradient_accumulation_steps == 0
                 self._set_requires_gradient_sync(is_last_micro_step)
                 loss, debug = self._train_step(batch)
+
+                loss_finite = torch.isfinite(loss.detach())
+                if torch.distributed.is_available() and torch.distributed.is_initialized():
+                    finite_flag = loss_finite.to(dtype=torch.int32, device=self.device)
+                    torch.distributed.all_reduce(finite_flag, op=torch.distributed.ReduceOp.MIN)
+                    loss_finite = bool(finite_flag.item())
+                else:
+                    loss_finite = bool(loss_finite.item())
+                if not loss_finite:
+                    if self.rank == 0:
+                        logger.warning("Skipping non-finite COS loss at epoch={} batch_idx={}", epoch, batch_idx)
+                    for opt in self.optimizers:
+                        opt.zero_grad(set_to_none=True)
+                    self._cos_debug_accum.clear()
+                    self._cos_debug_count = 0
+                    continue
+
                 scaled_loss = loss / cfg.gradient_accumulation_steps
                 scaled_loss.backward()
 
@@ -156,6 +173,25 @@ class COSTrainer(BaseTrainer):
                 if is_last_micro_step:
                     self._all_reduce_gradients()
                     self._last_grad_norm = torch.nn.utils.clip_grad_norm_(self.params, cfg.max_grad_norm).item()
+                    grad_finite = torch.isfinite(torch.tensor(self._last_grad_norm, device=self.device))
+                    if torch.distributed.is_available() and torch.distributed.is_initialized():
+                        finite_flag = grad_finite.to(dtype=torch.int32, device=self.device)
+                        torch.distributed.all_reduce(finite_flag, op=torch.distributed.ReduceOp.MIN)
+                        grad_finite = bool(finite_flag.item())
+                    else:
+                        grad_finite = bool(grad_finite.item())
+                    if not grad_finite:
+                        if self.rank == 0:
+                            logger.warning(
+                                "Skipping optimizer step for non-finite COS gradients at epoch={} batch_idx={}",
+                                epoch,
+                                batch_idx,
+                            )
+                        for opt in self.optimizers:
+                            opt.zero_grad(set_to_none=True)
+                        self._cos_debug_accum.clear()
+                        self._cos_debug_count = 0
+                        continue
 
                     lr = cosine_lr(global_step, cfg.warmup_steps, self.total_steps, cfg.learning_rate)
                     for opt in self.optimizers:
@@ -219,7 +255,15 @@ class COSTrainer(BaseTrainer):
                             avg.update(self._remote_expert_avg)
                             del self._remote_expert_avg
 
-                        fractional_epoch = epoch + (batch_idx + 1) / len(self.dataloader)
+                        try:
+                            batches = len(self.dataloader)
+                        except TypeError:
+                            if cfg.dataset_size is not None:
+                                dp = self.dp_size if self._expert_parallel_duplicates_data(cfg) else self.world_size
+                                batches = cfg.dataset_size // (dp * cfg.batch_size)
+                            else:
+                                batches = None
+                        fractional_epoch = epoch + (batch_idx + 1) / batches if batches else float(epoch)
                         logger.info(
                             "step={}/{} epoch={:.2f} loss={:.4f} lr={:.2e} grad_norm={:.4f} mfu={} eta={} ({} s/it)",
                             global_step,
@@ -306,10 +350,15 @@ class COSTrainer(BaseTrainer):
             condition = batch["condition"].to(self.device)
             raw_video_latents = batch["video_latents"]
             if not isinstance(raw_video_latents, list):
-                raise ValueError(
-                    "COS latent training requires all chain latents. Re-run precompute with --encode_all_videos."
-                )
-            video_latents = [latent.to(self.device) for latent in raw_video_latents]
+                if cfg.cos_tau_sigma:
+                    raise ValueError(
+                        "COS latent training with tau boundaries requires all chain latents. "
+                        "Re-run precompute with --encode_all_videos or set cos_tau_sigma: [] "
+                        "for single-target latent training."
+                    )
+                video_latents = [raw_video_latents.to(self.device)]
+            else:
+                video_latents = [latent.to(self.device) for latent in raw_video_latents]
         else:
             prompt_embeds = self.model.encode_text(batch["prompt"], self.device)
             image = to_model_pixels(batch["image"], self.device)

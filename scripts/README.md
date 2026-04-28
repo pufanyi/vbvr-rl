@@ -22,6 +22,7 @@ under `storage/`, `data/`, or `docs/assets/`.
 fish scripts/train/i2v.fish --config configs/train_i2v.yaml
 fish scripts/train/grpo.fish --config configs/train_grpo_maze.yaml
 fish scripts/inference/i2v.fish --image path/to/image.jpg --prompt "..."
+fish scripts/precompute/vbvr_384_webdataset_single_node.fish
 fish scripts/precompute/maze_webdataset.fish --num_samples 20000
 fish scripts/eval/vbvr_generate_score.fish
 fish scripts/convert/dcp_to_diffusers.fish

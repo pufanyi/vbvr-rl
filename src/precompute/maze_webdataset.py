@@ -7,7 +7,7 @@ End-to-end pipeline (runnable under torchrun):
        renders an RGB video (CPU).
     3. The rank batch-encodes video + first-frame condition through the
        Wan2.2 VAE and the prompt through the UMT5 text encoder (GPU).
-    4. Results are packed into ``shard-NNNNNN.tar`` files whose sample
+    4. Results are packed into SFT/RL ``shard-NNNNNN.tar`` files whose sample
        layout matches ``VBVRLatentDataset``:
 
            {key:07d}.safetensors   → prompt_embeds / latents / condition
@@ -24,11 +24,13 @@ Launch (single node, 8 GPUs)::
     .venv/bin/torchrun --nproc_per_node=8 \
         -m src.precompute.maze_webdataset \
         --output_dir data/maze_synth/latents/webdataset \
+        --sft_output_dir data/maze_synth/latents/webdataset/sft \
+        --rl_output_dir data/maze_synth/latents/webdataset/rl \
         --model_path storage/models/Wan2.2-I2V-A14B-Diffusers \
-        --num_samples 20000 --samples_per_shard 500
+        --num_samples 100000 --samples_per_shard 1000
 
 The output directory is compatible with ``configs/train_correction_vbvr.yaml``
-by setting ``latent_webdataset_dir: data/maze_synth/latents/webdataset``.
+by setting ``latent_webdataset_dir`` to either the SFT or RL split directory.
 """
 
 from __future__ import annotations
@@ -39,6 +41,8 @@ import html
 import io
 import json
 import os
+import random
+import shutil
 import tarfile
 from pathlib import Path
 
@@ -52,6 +56,7 @@ from safetensors.torch import save as st_save
 from tqdm import tqdm
 
 from src.precompute.maze_generator import (
+    DEFAULT_DIFFICULTIES,
     DEFAULT_PALETTES,
     MazeSample,
     MazeSpec,
@@ -68,20 +73,28 @@ class GenConfig(BaseModel):
 
     # Output
     output_dir: str
-    tar_tag: str = "maze_synthetic"
+    sft_output_dir: str | None = None
+    rl_output_dir: str | None = None
+    preview_dir: str | None = None
+    tar_tag: str = "maze_384x384x81_perfect_v2"
 
     # Volume
     num_samples: int = Field(ge=1)
-    samples_per_shard: int = Field(default=500, ge=1)
+    samples_per_shard: int = Field(default=1000, ge=1)
+    shard_write_batch_size: int = Field(default=64, ge=1)
+    sft_ratio: float = Field(default=0.8, gt=0.0, lt=1.0)
 
     # Model
     model_path: str
 
     # Maze geometry
-    cell_h: int = Field(default=4, ge=2)
-    cell_w: int = Field(default=4, ge=2)
-    cell_px: int = Field(default=32, ge=4)  # image H = (2*cell_h+1)*cell_px, must land on mult of 8
+    cell_h: int = Field(default=16, ge=2)
+    cell_w: int = Field(default=16, ge=2)
+    cell_px: int = Field(default=12, ge=4)  # image H/W = (2 * rooms) * cell_px
     num_frames: int = Field(default=81, ge=2)
+    difficulty_names: str = "easy,mid,hard,xhard"
+    max_generation_attempts: int = Field(default=512, ge=1)
+    max_search_steps: int = Field(default=250_000, ge=1)
 
     # Encoding
     vae_batch_size: int = Field(default=2, ge=1)
@@ -89,17 +102,26 @@ class GenConfig(BaseModel):
 
     # Reproducibility
     seed: int = 42
+    split_seed: int | None = None
 
     # Misc
     skip_existing: bool = False
+    only_split: str | None = None
+    num_preview_videos: int = Field(default=0, ge=0)
+    preview_fps: int = Field(default=16, ge=1)
+    dry_run: bool = False
 
     def maze_spec(self) -> MazeSpec:
+        difficulty_names = tuple(name.strip() for name in self.difficulty_names.split(",") if name.strip())
         return MazeSpec(
             cell_h=self.cell_h,
             cell_w=self.cell_w,
             cell_px=self.cell_px,
             num_frames=self.num_frames,
             palettes=list(DEFAULT_PALETTES),
+            difficulty_names=difficulty_names,
+            max_generation_attempts=self.max_generation_attempts,
+            max_search_steps=self.max_search_steps,
         )
 
 
@@ -159,12 +181,12 @@ _SPATIAL_DIVISOR = 8  # Wan2.2 VAE scale_factor_spatial
 
 
 def _validate_resolution(cfg: GenConfig) -> tuple[int, int]:
-    h = (2 * cfg.cell_h + 1) * cfg.cell_px
-    w = (2 * cfg.cell_w + 1) * cfg.cell_px
+    h = 2 * cfg.cell_h * cfg.cell_px
+    w = 2 * cfg.cell_w * cfg.cell_px
     if h % _SPATIAL_DIVISOR != 0 or w % _SPATIAL_DIVISOR != 0:
         raise ValueError(
             f"Maze image resolution {h}x{w} must be divisible by {_SPATIAL_DIVISOR}. "
-            f"Pick cell_px / cell counts that satisfy (2*cells+1)*cell_px % 8 == 0."
+            f"Pick cell_px / cell counts that satisfy 2*cells*cell_px % 8 == 0."
         )
     return h, w
 
@@ -301,6 +323,17 @@ def _sample_to_reward_tensors(sample: MazeSample) -> dict[str, torch.Tensor]:
         "maze_frame_positions_pix": torch.tensor(sample.frame_positions_pix, dtype=torch.float32),
         "maze_start": torch.tensor(sample.start, dtype=torch.int16),
         "maze_goal": torch.tensor(sample.goal, dtype=torch.int16),
+        "maze_difficulty_id": torch.tensor(sample.difficulty_id, dtype=torch.int16),
+        "maze_path_len": torch.tensor(sample.path_len, dtype=torch.int16),
+        "maze_manhattan_distance": torch.tensor(sample.manhattan_distance, dtype=torch.int16),
+        "maze_path_ratio": torch.tensor(sample.path_ratio, dtype=torch.float32),
+        "maze_wall_fraction": torch.tensor(sample.generation["wall_fraction"], dtype=torch.float32),
+        "maze_branch_count": torch.tensor(sample.generation["branch_count"], dtype=torch.int16),
+        "maze_branch_cells": torch.tensor(sample.generation["branch_cells"], dtype=torch.int16),
+        "maze_generation_seed": torch.tensor(
+            sample.generation["sample_seed"] if sample.generation.get("sample_seed") is not None else -1,
+            dtype=torch.int64,
+        ),
         "maze_ball_rgb": torch.tensor(sample.palette.ball_rgb, dtype=torch.uint8),
         "maze_goal_rgb": torch.tensor(sample.palette.goal_rgb, dtype=torch.uint8),
         "maze_wall_rgb": torch.tensor(sample.palette.wall_rgb, dtype=torch.uint8),
@@ -313,6 +346,11 @@ def _sample_to_reward_tensors(sample: MazeSample) -> dict[str, torch.Tensor]:
 def _sample_to_json_blob(sample: MazeSample) -> dict:
     """JSON-friendly maze record — everything human-readable for offline use."""
     return {
+        "generation": sample.generation,
+        "difficulty": sample.difficulty,
+        "difficulty_id": sample.difficulty_id,
+        "grid_h": sample.grid_h,
+        "grid_w": sample.grid_w,
         "cell_h": sample.cell_h,
         "cell_w": sample.cell_w,
         "cell_px": sample.cell_px,
@@ -322,6 +360,8 @@ def _sample_to_json_blob(sample: MazeSample) -> dict:
         "start": list(sample.start),
         "goal": list(sample.goal),
         "path_len": sample.path_len,
+        "manhattan_distance": sample.manhattan_distance,
+        "path_ratio": sample.path_ratio,
         "path": [list(p) for p in sample.path],
         "frame_positions_cell": [list(p) for p in sample.frame_positions_cell],
         "frame_positions_pix": [list(p) for p in sample.frame_positions_pix],
@@ -355,30 +395,100 @@ def _tar_add_bytes(tar: tarfile.TarFile, name: str, data: bytes) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _shard_plan(cfg: GenConfig) -> list[tuple[int, int, int]]:
-    """Global plan: (shard_id, start_global_idx, count)."""
-    plan = []
-    for sid in range((cfg.num_samples + cfg.samples_per_shard - 1) // cfg.samples_per_shard):
-        start = sid * cfg.samples_per_shard
-        count = min(cfg.samples_per_shard, cfg.num_samples - start)
-        plan.append((sid, start, count))
-    return plan
+ShardPlanEntry = tuple[str, Path, int, list[int], int]
+
+
+def _using_split_dirs(cfg: GenConfig) -> bool:
+    if (cfg.sft_output_dir is None) != (cfg.rl_output_dir is None):
+        raise ValueError("--sft_output_dir and --rl_output_dir must be provided together")
+    return cfg.sft_output_dir is not None and cfg.rl_output_dir is not None
+
+
+def _output_dirs(cfg: GenConfig) -> dict[str, Path]:
+    if _using_split_dirs(cfg):
+        assert cfg.sft_output_dir is not None and cfg.rl_output_dir is not None
+        return {"sft": Path(cfg.sft_output_dir), "rl": Path(cfg.rl_output_dir)}
+    return {"all": Path(cfg.output_dir)}
+
+
+def _preview_output_dir(cfg: GenConfig) -> Path | None:
+    if cfg.num_preview_videos <= 0:
+        return None
+    return Path(cfg.preview_dir) if cfg.preview_dir is not None else Path(cfg.output_dir) / "preview_videos"
+
+
+def _shard_plan(cfg: GenConfig) -> tuple[list[ShardPlanEntry], dict[str, int]]:
+    """Global plan: (split_name, output_dir, shard_id, sample_gids, split_offset)."""
+    output_dirs = _output_dirs(cfg)
+    split_seed = cfg.seed if cfg.split_seed is None else cfg.split_seed
+
+    if set(output_dirs) == {"sft", "rl"}:
+        gids = list(range(cfg.num_samples))
+        random.Random(split_seed).shuffle(gids)
+        sft_count = int(cfg.num_samples * cfg.sft_ratio)
+        split_gids = {
+            "sft": gids[:sft_count],
+            "rl": gids[sft_count:],
+        }
+    else:
+        split_gids = {"all": list(range(cfg.num_samples))}
+
+    plan: list[ShardPlanEntry] = []
+    split_counts: dict[str, int] = {}
+    for split_name, gids in split_gids.items():
+        split_counts[split_name] = len(gids)
+        output_dir = output_dirs[split_name]
+        for sid, start in enumerate(range(0, len(gids), cfg.samples_per_shard)):
+            plan.append((split_name, output_dir, sid, gids[start : start + cfg.samples_per_shard], start))
+    return plan, split_counts
 
 
 def _generate_shard_samples(
     cfg: GenConfig,
     spec: MazeSpec,
-    start_global_idx: int,
-    count: int,
+    sample_gids: list[int],
+    split_name: str,
 ) -> list[tuple[np.ndarray, MazeSample, int]]:
     """CPU-only: synthesise ``count`` maze samples with deterministic seeds."""
     out = []
-    for k in range(count):
-        gid = start_global_idx + k
-        rng = np.random.default_rng(cfg.seed + gid)
-        video, sample = build_maze_sample(spec, rng)
+    for gid in sample_gids:
+        sample_seed = cfg.seed + gid
+        rng = np.random.default_rng(sample_seed)
+        video, sample = build_maze_sample(spec, rng, sample_seed=sample_seed)
+        _write_preview_video(cfg, gid, split_name, video, sample)
         out.append((video, sample, gid))
     return out
+
+
+def _write_preview_video(
+    cfg: GenConfig,
+    gid: int,
+    split_name: str,
+    video: np.ndarray,
+    sample: MazeSample,
+) -> None:
+    preview_dir = _preview_output_dir(cfg)
+    if preview_dir is None or gid >= cfg.num_preview_videos:
+        return
+
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"{gid:07d}_{sample.difficulty}"
+    video_path = preview_dir / f"{stem}.mp4"
+    if not video_path.exists():
+        from diffusers.utils import export_to_video
+        from PIL import Image
+
+        export_to_video([Image.fromarray(frame) for frame in video], str(video_path), fps=cfg.preview_fps)
+
+    meta_path = preview_dir / f"{stem}.json"
+    if not meta_path.exists():
+        meta = {
+            "global_index": gid,
+            "split": split_name,
+            "prompt": sample.prompt,
+            "maze": _sample_to_json_blob(sample),
+        }
+        meta_path.write_text(json.dumps(meta, indent=2) + "\n")
 
 
 def _encode_shard(
@@ -420,39 +530,90 @@ def _encode_shard(
     return [(latents_all[i], condition_all[i], prompt_embeds_all[i], samples[i][1], samples[i][2]) for i in range(n)]
 
 
+def _write_encoded_samples(
+    cfg: GenConfig,
+    tar: tarfile.TarFile,
+    split_name: str,
+    encoded: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, MazeSample, int]],
+    split_offset: int,
+    local_start: int,
+) -> None:
+    for local_idx, (latents, condition, prompt_embeds, sample, gid) in enumerate(encoded):
+        key = f"{gid:07d}"
+
+        st_tensors = {
+            "prompt_embeds": prompt_embeds,
+            "latents": latents,
+            "condition": condition,
+            **_sample_to_reward_tensors(sample),
+        }
+        st_bytes = st_save(st_tensors)
+
+        meta = {
+            "prompt": sample.prompt,
+            "tar": cfg.tar_tag,
+            "index_in_tar": gid,
+            "global_index": gid,
+            "split": split_name,
+            "split_index": split_offset + local_start + local_idx,
+            "seq_len": int(prompt_embeds.shape[0]),
+            "maze": _sample_to_json_blob(sample),
+        }
+        meta_bytes = json.dumps(meta).encode()
+
+        _tar_add_bytes(tar, f"{key}.safetensors", st_bytes)
+        _tar_add_bytes(tar, f"{key}.json", meta_bytes)
+
+
 def _write_shard(
     cfg: GenConfig,
+    spec: MazeSpec,
+    split_name: str,
     shard_id: int,
-    encoded: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, MazeSample, int]],
+    sample_gids: list[int],
     output_dir: Path,
+    split_offset: int,
+    vae_bundle: dict,
+    text_bundle: dict,
+    device: str,
+    height: int,
+    width: int,
 ) -> Path:
-    """Pack encoded samples into a single shard-NNNNNN.tar (atomic)."""
+    """Generate, encode, and pack one shard into ``shard-NNNNNN.tar`` atomically."""
     final_path = output_dir / f"shard-{shard_id:06d}.tar"
-    tmp_path = final_path.with_suffix(".tar.tmp")
-    with tarfile.open(tmp_path, "w") as tar:
-        for latents, condition, prompt_embeds, sample, gid in encoded:
-            key = f"{gid:07d}"
+    if final_path.exists():
+        return final_path
 
-            st_tensors = {
-                "prompt_embeds": prompt_embeds,
-                "latents": latents,
-                "condition": condition,
-                **_sample_to_reward_tensors(sample),
-            }
-            st_bytes = st_save(st_tensors)
-
-            meta = {
-                "prompt": sample.prompt,
-                "tar": cfg.tar_tag,
-                "index_in_tar": gid,
-                "seq_len": int(prompt_embeds.shape[0]),
-                "maze": _sample_to_json_blob(sample),
-            }
-            meta_bytes = json.dumps(meta).encode()
-
-            _tar_add_bytes(tar, f"{key}.safetensors", st_bytes)
-            _tar_add_bytes(tar, f"{key}.json", meta_bytes)
-    tmp_path.rename(final_path)
+    local_tmp_dir = Path(os.environ.get("WAN_TRAINER_LOCAL_TMP", "/tmp/wan_trainer_shards"))
+    local_tmp_dir.mkdir(parents=True, exist_ok=True)
+    local_tmp = local_tmp_dir / f"{cfg.tar_tag}_{split_name}_{shard_id:06d}.{os.getpid()}.tar"
+    dest_tmp = output_dir / f"shard-{shard_id:06d}.tar.copying.{os.getpid()}"
+    try:
+        with tarfile.open(local_tmp, "w") as tar:
+            for local_start in range(0, len(sample_gids), cfg.shard_write_batch_size):
+                chunk_gids = sample_gids[local_start : local_start + cfg.shard_write_batch_size]
+                samples = _generate_shard_samples(cfg, spec, chunk_gids, split_name)
+                encoded = _encode_shard(cfg, samples, vae_bundle, text_bundle, device, height, width)
+                _write_encoded_samples(cfg, tar, split_name, encoded, split_offset, local_start)
+                del samples, encoded
+        if final_path.exists():
+            local_tmp.unlink(missing_ok=True)
+            return final_path
+        shutil.copyfile(local_tmp, dest_tmp)
+        if final_path.exists():
+            dest_tmp.unlink(missing_ok=True)
+            return final_path
+        dest_tmp.replace(final_path)
+    except FileNotFoundError:
+        if final_path.exists():
+            return final_path
+        raise
+    except Exception:
+        raise
+    finally:
+        local_tmp.unlink(missing_ok=True)
+        if not final_path.exists():
+            dest_tmp.unlink(missing_ok=True)
     return final_path
 
 
@@ -472,13 +633,27 @@ def main() -> None:
 
     output_dir = Path(cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    output_dirs = _output_dirs(cfg)
+    for out_dir in output_dirs.values():
+        out_dir.mkdir(parents=True, exist_ok=True)
+    preview_dir = _preview_output_dir(cfg)
+    if preview_dir is not None:
+        preview_dir.mkdir(parents=True, exist_ok=True)
 
     height, width = _validate_resolution(cfg)
     spec = cfg.maze_spec()
+    plan, split_counts = _shard_plan(cfg)
+    if cfg.only_split:
+        only_split = cfg.only_split.strip()
+        if only_split not in output_dirs:
+            raise ValueError(f"--only_split={only_split!r} is not one of {sorted(output_dirs)}")
+        plan = [entry for entry in plan if entry[0] == only_split]
+        output_dirs = {only_split: output_dirs[only_split]}
+        split_counts = {only_split: split_counts.get(only_split, 0)}
 
     if rank == 0:
         logger.info(
-            "Maze gen: {} samples @ {}x{} px, {} frames, cells {}x{}, cell_px {}",
+            "Maze gen: {} samples @ {}x{} px, {} frames, grid {}x{}, cell_px {}",
             cfg.num_samples,
             height,
             width,
@@ -487,12 +662,24 @@ def main() -> None:
             cfg.cell_w,
             cfg.cell_px,
         )
+        logger.info("Difficulties sampled uniformly from: {}", spec.difficulty_names)
+        logger.info("Split counts: {}", split_counts)
+        if preview_dir is not None:
+            logger.info("Preview videos: first {} global samples -> {}", cfg.num_preview_videos, preview_dir)
 
-    plan = _shard_plan(cfg)
     my_shards = plan[rank::world_size]
     if cfg.skip_existing:
-        my_shards = [s for s in my_shards if not (output_dir / f"shard-{s[0]:06d}.tar").exists()]
+        my_shards = [s for s in my_shards if not (s[1] / f"shard-{s[2]:06d}.tar").exists()]
     logger.info("[rank {}] assigned {} / {} shards", rank, len(my_shards), len(plan))
+
+    if cfg.dry_run:
+        if rank == 0:
+            logger.info("dry_run=1: validated config and shard plan; not loading models")
+        if _is_distributed():
+            with contextlib.suppress(Exception):
+                torch.distributed.barrier()
+            torch.distributed.destroy_process_group()
+        return
 
     torch.backends.cudnn.benchmark = True
     logger.info("[rank {}] loading VAE", rank)
@@ -501,10 +688,21 @@ def main() -> None:
     text_bundle = _load_text_encoder(cfg.model_path, device)
 
     pbar = tqdm(total=len(my_shards), desc=f"[rank {rank}]", position=local_rank, leave=True, unit="shard")
-    for shard_id, start_gid, count in my_shards:
-        samples = _generate_shard_samples(cfg, spec, start_gid, count)
-        encoded = _encode_shard(cfg, samples, vae_bundle, text_bundle, device, height, width)
-        _write_shard(cfg, shard_id, encoded, output_dir)
+    for split_name, shard_output_dir, shard_id, sample_gids, split_offset in my_shards:
+        _write_shard(
+            cfg,
+            spec,
+            split_name,
+            shard_id,
+            sample_gids,
+            shard_output_dir,
+            split_offset,
+            vae_bundle,
+            text_bundle,
+            device,
+            height,
+            width,
+        )
         pbar.update(1)
     pbar.close()
 
@@ -514,17 +712,38 @@ def main() -> None:
             "tar_tag": cfg.tar_tag,
             "num_samples": cfg.num_samples,
             "samples_per_shard": cfg.samples_per_shard,
+            "shard_write_batch_size": cfg.shard_write_batch_size,
             "num_shards": len(plan),
+            "splits": {
+                name: {
+                    "output_dir": str(path),
+                    "num_samples": split_counts.get(name, 0),
+                    "num_shards": sum(1 for entry in plan if entry[0] == name),
+                }
+                for name, path in output_dirs.items()
+            },
+            "sft_ratio": cfg.sft_ratio if "sft" in output_dirs else None,
             "image_h": height,
             "image_w": width,
             "num_frames": cfg.num_frames,
             "cell_h": cfg.cell_h,
             "cell_w": cfg.cell_w,
             "cell_px": cfg.cell_px,
+            "difficulty_names": list(spec.difficulty_names),
+            "difficulty_recipes": [d.model_dump() for d in DEFAULT_DIFFICULTIES if d.name in spec.difficulty_names],
             "seed": cfg.seed,
+            "split_seed": cfg.seed if cfg.split_seed is None else cfg.split_seed,
+            "preview_dir": str(preview_dir) if preview_dir is not None else None,
+            "num_preview_videos": cfg.num_preview_videos,
             "model_path": cfg.model_path,
         }
         (output_dir / "dataset_info.json").write_text(json.dumps(info, indent=2))
+        for split_name, split_dir in output_dirs.items():
+            split_info = dict(info)
+            split_info["active_split"] = split_name
+            split_info["num_samples"] = split_counts.get(split_name, cfg.num_samples)
+            split_info["num_shards"] = sum(1 for entry in plan if entry[0] == split_name)
+            (split_dir / "dataset_info.json").write_text(json.dumps(split_info, indent=2))
 
     if _is_distributed():
         with contextlib.suppress(Exception):

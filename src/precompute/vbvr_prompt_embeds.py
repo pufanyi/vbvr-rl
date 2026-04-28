@@ -70,6 +70,12 @@ def parse_args():
     p.add_argument("--tars", nargs="*", default=None, help="Process only these tar files (basenames). Default: all.")
     p.add_argument("--skip_existing", action="store_true", help="Skip samples whose output already exists")
     p.add_argument("--compile", action="store_true", help="Use torch.compile on text encoder")
+    p.add_argument(
+        "--output_rank_offset",
+        type=int,
+        default=0,
+        help="Add this offset to torchrun rank when naming rank*_batch*.safetensors outputs",
+    )
     return p.parse_args()
 
 
@@ -153,6 +159,7 @@ def main():
     rank = _get_rank()
     world_size = _get_world_size()
     device = f"cuda:{int(os.environ.get('LOCAL_RANK', 0))}"
+    output_rank = args.output_rank_offset + rank
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -196,16 +203,7 @@ def main():
     my_samples = all_samples[rank::world_size]
     logger.info("[rank {}] Assigned {} / {} samples", rank, len(my_samples), len(all_samples))
 
-    # Skip existing
-    if args.skip_existing:
-        before = len(my_samples)
-        my_samples = [
-            s for s in my_samples if not (output_dir / f"{s['tar_stem']}_{s['index_in_tar']}.safetensors").exists()
-        ]
-        skipped = before - len(my_samples)
-        if skipped > 0:
-            logger.info("[rank {}] Skipped {} existing samples", rank, skipped)
-
+    # Batch-level resume happens below after output batch paths are known.
     # ---- Load model ----
     logger.info("[rank {}] Loading text encoder from {}", rank, args.model_path)
     components = load_text_encoder(args.model_path, device)
@@ -229,7 +227,7 @@ def main():
                 [{"tar": s["tar_name"], "index_in_tar": s["index_in_tar"], "prompt": s["prompt"]} for s in batch]
             ),
         }
-        out_path = output_dir / f"rank{rank}_batch{batch_idx}.safetensors"
+        out_path = output_dir / f"rank{output_rank}_batch{batch_idx}.safetensors"
         tmp_path = out_path.with_suffix(".safetensors.tmp")
         save_file(tensors, tmp_path, metadata=meta)
         tmp_path.rename(out_path)
@@ -239,6 +237,12 @@ def main():
 
     for batch_idx, batch_start in enumerate(range(0, n, args.batch_size)):
         batch = my_samples[batch_start : batch_start + args.batch_size]
+        out_path = output_dir / f"rank{output_rank}_batch{batch_idx}.safetensors"
+        if args.skip_existing and out_path.exists():
+            done += len(batch)
+            pbar.update(1)
+            continue
+
         prompts = [s["prompt"] for s in batch]
 
         embeds_list = encode_text(components, prompts, device)

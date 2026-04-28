@@ -43,16 +43,24 @@ torchrun \
     --master_addr=$MASTER_ADDR \
     --master_port=$MASTER_PORT \
     -m src.precompute.maze_webdataset \
-    --output_dir data/maze_synth/latents/webdataset \
+    --output_dir data/maze/latents/maze_384x384x81_perfect_v2/webdataset \
+    --sft_output_dir data/maze/latents/maze_384x384x81_perfect_v2/webdataset/sft \
+    --rl_output_dir data/maze/latents/maze_384x384x81_perfect_v2/webdataset/rl \
+    --preview_dir data/maze/latents/maze_384x384x81_perfect_v2/previews \
     --model_path storage/models/Wan2.2-I2V-A14B-Diffusers \
-    --num_samples 20000 \
-    --samples_per_shard 500 \
-    --cell_h 6 \
-    --cell_w 10 \
-    --cell_px 32 \
+    --num_samples 100000 \
+    --samples_per_shard 1000 \
+    --shard_write_batch_size 64 \
+    --sft_ratio 0.8 \
+    --cell_h 16 \
+    --cell_w 16 \
+    --cell_px 12 \
     --num_frames 81 \
     --vae_batch_size 4 \
     --text_batch_size 64 \
     --seed 42 \
+    --split_seed 42 \
+    --difficulty_names easy,mid,hard,xhard \
+    --num_preview_videos 100 \
     --skip_existing \
     $argv

@@ -45,7 +45,14 @@ end
 
 function _is_dcp_checkpoint
     set -l ckpt $argv[1]
-    test -f $ckpt/.metadata; or test -f $ckpt/high/.metadata; or test -f $ckpt/low/.metadata
+    if test -f $ckpt/.metadata
+        return 0
+    end
+
+    # High/low MoE checkpoints are not complete until both halves have DCP
+    # metadata. Training may create low/ first, so accepting either side can
+    # convert a partial checkpoint.
+    test -f $ckpt/high/.metadata; and test -f $ckpt/low/.metadata
 end
 
 function _output_for_checkpoint

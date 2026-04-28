@@ -28,6 +28,7 @@ Host trainer contract — the mixin reads:
     self.cfg, self.model, self.ema, self.train_state, self.dataloader,
     self.rank, self.mesh,
     self.expert_parallel, self.expert_group, self.dp_rank, self._dp_pg,
+    self._dcp_pg,
     self._reset_on_load, self.optimizer_te, self.optimizer_1, self.optimizer_2,
     self.total_steps,
 
@@ -74,6 +75,19 @@ class _SubdirEntry:
 
 
 class CheckpointRuntimeMixin:
+    def _expert_parallel_dcp_kwargs(self) -> dict:
+        """Return DCP kwargs for this expert-parallel group.
+
+        DCP uses Python object collectives while planning.  Keep the training
+        DP group on NCCL, but prefer a dedicated Gloo group for checkpoint
+        metadata to avoid NCCL object-collective failures during save/load.
+        """
+
+        if not self.expert_parallel:
+            return {}
+        pg = getattr(self, "_dcp_pg", None) or self._dp_pg
+        return {"process_group": pg}
+
     # ------------------------------------------------------------------
     # Discovery
     # ------------------------------------------------------------------
@@ -125,7 +139,7 @@ class CheckpointRuntimeMixin:
                 transformer_model=model,
                 transformer_optimizer=optimizer,
                 shard_rank=self.dp_rank,
-                dcp_kwargs={"process_group": self._dp_pg},
+                dcp_kwargs=self._expert_parallel_dcp_kwargs(),
             )
             return
         # Flat: save each attached transformer to its own subdir, all ranks
@@ -258,7 +272,7 @@ class CheckpointRuntimeMixin:
                 path=ckpt,
                 filter_keys=None,  # load everything that matches what's in TrainState
                 shard_rank=self._checkpoint_rank(),
-                dcp_kwargs={"process_group": self._dp_pg} if self.expert_parallel else {},
+                dcp_kwargs=self._expert_parallel_dcp_kwargs(),
                 transformer_key=None,
             )
             return
@@ -282,7 +296,7 @@ class CheckpointRuntimeMixin:
                 path=sub_path,
                 filter_keys=self._subdir_filter_keys(key),
                 shard_rank=self.dp_rank if self.expert_parallel else self.rank,
-                dcp_kwargs={"process_group": self._dp_pg} if self.expert_parallel else {},
+                dcp_kwargs=self._expert_parallel_dcp_kwargs(),
                 transformer_key=key,
             )
 
