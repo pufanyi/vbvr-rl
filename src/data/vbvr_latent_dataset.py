@@ -17,7 +17,7 @@ from pathlib import Path
 import torch.nn.functional as F
 import webdataset as wds
 from safetensors.torch import load as st_load
-from torch.utils.data import IterableDataset
+from torch.utils.data import IterableDataset, get_worker_info
 
 logger = logging.getLogger(__name__)
 _LATENTS_KEY_RE = re.compile(r"latents_(\d+)$")
@@ -99,9 +99,8 @@ class VBVRLatentDataset(IterableDataset):
         max_text_len: Pad/truncate prompt embeddings to this length.
         shuffle_buffer: Buffer size for sample-level shuffle (0 to disable).
         epoch_length: If set, cap each rank to exactly this many samples per
-            epoch via ``with_epoch()``.  This guarantees all ranks produce the
-            same number of batches, preventing FSDP/NCCL deadlocks at epoch
-            boundaries when shard counts are not evenly divisible by world_size.
+            epoch.  The cap is split across DataLoader workers so multi-worker
+            loading does not multiply the effective epoch length.
         seed: Deterministic shard/sample shuffle seed.
         node_rank: Explicit distributed rank for shard splitting.  Expert
             parallel duplicate mode passes the rank within an expert group so
@@ -129,25 +128,69 @@ class VBVRLatentDataset(IterableDataset):
 
         if (node_rank is None) != (node_world_size is None):
             raise ValueError("node_rank and node_world_size must be provided together")
+        rank_shard_count = None
         if node_rank is None:
             nodesplitter = wds.split_by_node
             logger.info("VBVRLatentDataset: shard splitting by global PyTorch rank")
         else:
             nodesplitter = _RankShardSplitter(node_rank, node_world_size)
+            rank_shard_count = (len(urls) + node_world_size - 1 - node_rank) // node_world_size
             logger.info(
-                "VBVRLatentDataset: shard splitting rank=%d/%d",
+                "VBVRLatentDataset: shard splitting rank=%d/%d (%d shards)",
                 node_rank,
                 node_world_size,
+                rank_shard_count,
             )
 
-        pipeline = wds.WebDataset(urls, nodesplitter=nodesplitter, shardshuffle=len(urls), seed=seed)
+        pipeline = wds.WebDataset(
+            urls,
+            nodesplitter=nodesplitter,
+            shardshuffle=len(urls),
+            seed=seed,
+            empty_check=False,
+        )
         if shuffle_buffer > 0:
             pipeline = pipeline.shuffle(shuffle_buffer, seed=seed)
         pipeline = pipeline.map(lambda s: _decode_sample(s, max_text_len))
-        if epoch_length is not None:
-            pipeline = pipeline.with_epoch(epoch_length)
-            logger.info("VBVRLatentDataset: epoch_length=%d samples per rank", epoch_length)
         self._pipeline = pipeline
+        self._epoch_length = epoch_length
+        self._rank_shard_count = rank_shard_count
+        if epoch_length is not None:
+            logger.info("VBVRLatentDataset: epoch_length=%d samples per rank", epoch_length)
+
+    def _worker_epoch_length(self) -> int | None:
+        """Return this DataLoader worker's share of the per-rank epoch length."""
+        if self._epoch_length is None:
+            return None
+
+        worker = get_worker_info()
+        if worker is None or worker.num_workers <= 1:
+            return self._epoch_length
+
+        active_workers = worker.num_workers
+        if self._rank_shard_count is not None:
+            active_workers = min(active_workers, self._rank_shard_count)
+        active_workers = min(active_workers, self._epoch_length)
+        if active_workers <= 0 or worker.id >= active_workers:
+            return 0
+
+        base, extra = divmod(self._epoch_length, active_workers)
+        return base + int(worker.id < extra)
 
     def __iter__(self):
-        return iter(self._pipeline)
+        limit = self._worker_epoch_length()
+        if limit is None:
+            yield from self._pipeline
+            return
+
+        yielded = 0
+        while yielded < limit:
+            produced = 0
+            for sample in self._pipeline:
+                yield sample
+                yielded += 1
+                produced += 1
+                if yielded >= limit:
+                    break
+            if produced == 0:
+                break

@@ -37,6 +37,7 @@ class TrainConfig(BaseModel):
     log_steps: int = 10
     seed: int = 42
     ema_decay: float = 0.0  # 0 = disabled; typical value: 0.9999
+    distributed_timeout_minutes: int = 240
 
     # Optimizer
     optimizer: Literal["adamw", "muon"] = "adamw"
@@ -82,6 +83,11 @@ class TrainConfig(BaseModel):
     auto_resume: bool = True  # auto-detect latest checkpoint in output_dir
     # None = auto (reset when resume_from is set, keep when auto-resuming from output_dir)
     reset_dataloader: bool | None = None
+    # Local rank within the DCP process group. None keeps PyTorch's default
+    # coordinator rank 0; negative values count from the end.
+    checkpoint_dcp_coordinator_rank: int | None = None
+    checkpoint_dcp_thread_count: int = 4
+    checkpoint_dcp_sync_files: bool = True
 
     # Logging
     wandb_project: str | None = None
@@ -174,7 +180,7 @@ class RLConfig(TrainConfig):
     grpo_num_sampling_steps: int = 10  # T: denoising steps during SDE sampling
     grpo_clip_range: float = 1e-3  # PPO clipping epsilon
     grpo_kl_coeff: float = 0.004  # beta: KL penalty coefficient against reference policy
-    grpo_sde_noise_scale: float = 0.7  # a in sigma_t = a * sqrt(t / (1-t))
+    grpo_sde_noise_scale: float = 0.3  # DanceGRPO eta / exploration noise level
     grpo_sde_sigma_min: float = 0.0  # noise floor for SDE std
     grpo_sde_sigma_max: float = 1.0  # noise ceiling for SDE std
     grpo_adv_clip_max: float = 5.0  # clamp advantages to [-max, max]
@@ -183,7 +189,7 @@ class RLConfig(TrainConfig):
 
     # DanceGRPO (paper-inspired variant of GRPO)
     dancegrpo_share_group_init_noise: bool = True
-    dancegrpo_timestep_selection_ratio: float = 1.0
+    dancegrpo_timestep_selection_ratio: float = 0.6
 
     @field_validator("dancegrpo_timestep_selection_ratio")
     @classmethod

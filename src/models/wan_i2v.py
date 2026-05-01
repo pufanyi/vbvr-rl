@@ -796,6 +796,73 @@ class WanI2VForTraining:
 
         return prev_sample, prev_sample_mean, log_prob
 
+    @staticmethod
+    def _gaussian_transition_log_prob(
+        sample: torch.Tensor,
+        mean: torch.Tensor,
+        std_dev_t: float,
+    ) -> torch.Tensor:
+        """Per-sample Gaussian transition log-probability in fp32."""
+        if std_dev_t <= 1e-8:
+            return torch.zeros(sample.shape[0], device=sample.device)
+        log_prob = (
+            -((sample.detach().to(torch.float32) - mean.to(torch.float32)) ** 2) / (2.0 * std_dev_t**2)
+            - math.log(std_dev_t)
+            - 0.5 * math.log(2.0 * math.pi)
+        )
+        return log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
+
+    @staticmethod
+    def _dancegrpo_transition_mean(
+        sample: torch.Tensor,
+        model_output: torch.Tensor,
+        sigma: float,
+        sigma_prev: float,
+        eta: float,
+    ) -> tuple[torch.Tensor, float]:
+        """DanceGRPO rectified-flow SDE transition mean and noise std.
+
+        This matches the official implementation's ``flux_step``: start from
+        the rectified-flow ODE update, then add the SDE score correction using a
+        constant noise level ``eta``.
+        """
+        sample_fp32 = sample.to(torch.float32)
+        model_output_fp32 = model_output.to(torch.float32)
+        dsigma = sigma_prev - sigma
+        delta_t = sigma - sigma_prev
+        std_dev_t = eta * math.sqrt(max(delta_t, 0.0))
+
+        prev_sample_mean = sample_fp32 + dsigma * model_output_fp32
+        if sigma > 1e-8:
+            pred_original_sample = sample_fp32 - sigma * model_output_fp32
+            score_estimate = -(sample_fp32 - pred_original_sample * (1.0 - sigma)) / (sigma**2)
+            prev_sample_mean = prev_sample_mean + (-0.5 * eta**2 * score_estimate) * dsigma
+
+        return prev_sample_mean, std_dev_t
+
+    def _dancegrpo_sde_step(
+        self,
+        sample: torch.Tensor,
+        model_output: torch.Tensor,
+        sigma: float,
+        sigma_prev: float,
+        eta: float,
+        noise: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Single official-style DanceGRPO RF-SDE step with log-probability."""
+        prev_sample_mean, std_dev_t = self._dancegrpo_transition_mean(
+            sample=sample,
+            model_output=model_output,
+            sigma=sigma,
+            sigma_prev=sigma_prev,
+            eta=eta,
+        )
+        if noise is None:
+            noise = torch.randn_like(sample)
+        prev_sample = (prev_sample_mean + noise.to(torch.float32) * std_dev_t).to(sample.dtype)
+        log_prob = self._gaussian_transition_log_prob(prev_sample, prev_sample_mean, std_dev_t)
+        return prev_sample, prev_sample_mean, log_prob
+
     @torch.no_grad()
     def sde_generate(
         self,
@@ -808,6 +875,7 @@ class WanI2VForTraining:
         cfg_scale: float = 1.0,
         generator: torch.Generator | None = None,
         initial_latent: torch.Tensor | None = None,
+        sde_formula: str = "flowgrpo",
     ) -> dict:
         """Generate video latents via SDE sampling, storing per-step data for GRPO.
 
@@ -825,6 +893,8 @@ class WanI2VForTraining:
             generator: Optional RNG for reproducibility.
             initial_latent: Optional pre-sampled x_T. When provided, all group
                 members can share the same initial noise as in DanceGRPO.
+            sde_formula: ``"flowgrpo"`` keeps the existing trainer behavior;
+                ``"dancegrpo"`` uses the official DanceGRPO RF-SDE update.
 
         Returns:
             dict with keys:
@@ -834,6 +904,9 @@ class WanI2VForTraining:
                 - sigmas: list of T+1 sigma values
                 - noises: list of T noise vectors (for recomputation)
         """
+        if sde_formula not in {"flowgrpo", "dancegrpo"}:
+            raise ValueError(f"Unknown SDE formula: {sde_formula}")
+
         B = condition.shape[0]
         device = condition.device
         latent_shape = (B, condition.shape[1] - 4, *condition.shape[2:])  # (B, z_dim, T', H', W')
@@ -885,20 +958,36 @@ class WanI2VForTraining:
                     encoder_hidden_states=uncond_embeds,
                     return_dict=False,
                 )[0]
-                model_output = uncond_output + cfg_scale * (model_output - uncond_output)
+                if sde_formula == "dancegrpo":
+                    model_output = uncond_output.to(torch.float32) + cfg_scale * (
+                        model_output.to(torch.float32) - uncond_output.to(torch.float32)
+                    )
+                else:
+                    model_output = uncond_output + cfg_scale * (model_output - uncond_output)
 
             # SDE step
-            noise = torch.randn_like(latent, generator=generator)
-            latent, prev_mean, log_prob = self._sde_step(
-                sample=latent,
-                model_output=model_output,
-                sigma=sigma,
-                sigma_prev=sigma_prev,
-                sde_noise_scale=sde_noise_scale,
-                sigma_min=sigma_min,
-                sigma_max=sigma_max,
-                noise=noise,
-            )
+            if sde_formula == "dancegrpo":
+                noise = torch.randn(latent.shape, device=device, dtype=torch.float32, generator=generator)
+                latent, prev_mean, log_prob = self._dancegrpo_sde_step(
+                    sample=latent,
+                    model_output=model_output,
+                    sigma=sigma,
+                    sigma_prev=sigma_prev,
+                    eta=sde_noise_scale,
+                    noise=noise,
+                )
+            else:
+                noise = torch.randn_like(latent, generator=generator)
+                latent, prev_mean, log_prob = self._sde_step(
+                    sample=latent,
+                    model_output=model_output,
+                    sigma=sigma,
+                    sigma_prev=sigma_prev,
+                    sde_noise_scale=sde_noise_scale,
+                    sigma_min=sigma_min,
+                    sigma_max=sigma_max,
+                    noise=noise,
+                )
 
             all_latents.append(latent)
             all_log_probs.append(log_prob)

@@ -203,7 +203,28 @@ only contains files from that same source machine.
 
 ## Build Final WebDataset Splits
 
-Run this once after all prompt embeddings and VAE latents are collected:
+Run this once after all prompt embeddings and VAE latents are collected. The
+wrapper checks the six rank tar assignments, verifies the expected sample
+counts, and then builds globally shuffled 80/20 SFT/RL shards:
+
+```bash
+bash scripts/precompute/vbvr_384_isolated_build_webdataset.bash
+```
+
+To only check whether the collected files are ready:
+
+```bash
+bash scripts/precompute/vbvr_384_isolated_build_webdataset.bash --verify-only
+```
+
+The wrapper defaults to `BUILD_WORKERS=$(nproc)`. Override it if storage
+contention is higher than CPU pressure:
+
+```bash
+BUILD_WORKERS=64 bash scripts/precompute/vbvr_384_isolated_build_webdataset.bash
+```
+
+The underlying command is:
 
 ```bash
 .venv/bin/python -m src.precompute.build_webdataset_split \

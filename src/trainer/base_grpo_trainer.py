@@ -5,7 +5,6 @@ computation, and the outer training loop.  Concrete subclasses implement
 ``_grpo_step(batch)`` with their specific policy-gradient update logic.
 """
 
-import math
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -147,13 +146,17 @@ class BaseGRPOTrainer(BaseRLTrainer):
 
         G = cfg.grpo_group_size
         T = cfg.grpo_num_sampling_steps
-        T_replay = math.ceil(T * cfg.dancegrpo_timestep_selection_ratio)
+        if cfg.trainer == "dancegrpo":
+            T_candidates = max(1, T - 1)
+            T_replay = max(1, int(T_candidates * cfg.dancegrpo_timestep_selection_ratio))
+        else:
+            T_replay = T
         cfg_mult = 2 if cfg.grpo_cfg_scale > 1.0 else 1
 
         n_no_grad = G * T * cfg_mult + G  # sampling + reward
-        n_with_grad = G * T_replay  # policy update
+        n_with_grad = G * T_replay * cfg_mult  # policy update
         if cfg.grpo_kl_coeff > 0:
-            n_no_grad += G * T_replay  # reference forwards
+            n_no_grad += G * T_replay * cfg_mult  # reference forwards
 
         flops_per_step = (n_no_grad * fwd_flops) + (n_with_grad * 3 * fwd_flops)
 
@@ -518,7 +521,14 @@ class BaseGRPOTrainer(BaseRLTrainer):
                     else:
                         eta_str, speed_str = "?", "?"
 
-                    fractional_epoch = epoch + (batch_idx + 1) / len(self.dataloader)
+                    if hasattr(self.dataloader.dataset, "__len__"):
+                        batches = len(self.dataloader)
+                    elif cfg.dataset_size is not None:
+                        dp = self.dp_size if self._expert_parallel_duplicates_data(cfg) else self.world_size
+                        batches = cfg.dataset_size // (dp * cfg.batch_size)
+                    else:
+                        batches = None
+                    fractional_epoch = epoch + (batch_idx + 1) / batches if batches else float(epoch)
                     if self.expert_parallel:
                         merged_metrics = dict(metrics)
                         if hasattr(self, "_remote_grpo_ep_metrics"):

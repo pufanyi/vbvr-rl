@@ -7,6 +7,7 @@ architecture — without affecting SFT trainers.
 """
 
 import os
+from datetime import timedelta
 
 import torch
 import torch.distributed as dist
@@ -46,7 +47,8 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         self.cfg = cfg
 
         # ---- Distributed ----
-        dist.init_process_group("nccl")
+        self._dist_timeout = timedelta(minutes=cfg.distributed_timeout_minutes)
+        dist.init_process_group("nccl", timeout=self._dist_timeout)
         self.rank = dist.get_rank()
         self.world_size = dist.get_world_size()
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -54,6 +56,11 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         torch.cuda.set_device(self.device)
         torch.manual_seed(cfg.seed + self.rank)
         self._dcp_pg = None
+        self._checkpoint_pg = dist.new_group(
+            ranks=list(range(self.world_size)),
+            backend="gloo",
+            timeout=self._dist_timeout,
+        )
 
         # ---- Expert parallel (must run before model build) ----
         self._init_expert_parallel(cfg)
@@ -334,7 +341,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
                 )
             half = self.world_size // 2
             dp_ranks = list(range(half)) if self.expert_group == 0 else list(range(half, self.world_size))
-            self._dp_pg = dist.new_group(ranks=dp_ranks)
+            self._dp_pg = dist.new_group(ranks=dp_ranks, timeout=self._dist_timeout)
             self._dcp_pg = self._create_expert_dcp_pg()
             logger.info(
                 "Expert parallel: group={} dp_rank={}/{}",
@@ -594,7 +601,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
                 dist.all_reduce(p.grad, op=dist.ReduceOp.AVG)
 
     def _barrier(self) -> None:
-        dist.barrier()
+        dist.barrier(group=self._checkpoint_pg)
 
     def _checkpoint_rank(self) -> int:
         if self.expert_parallel:
@@ -607,8 +614,12 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         """Create per-expert Gloo groups for DCP metadata collectives."""
 
         half = self.world_size // 2
-        high_pg = dist.new_group(ranks=list(range(half)), backend="gloo")
-        low_pg = dist.new_group(ranks=list(range(half, self.world_size)), backend="gloo")
+        high_pg = dist.new_group(ranks=list(range(half)), backend="gloo", timeout=self._dist_timeout)
+        low_pg = dist.new_group(
+            ranks=list(range(half, self.world_size)),
+            backend="gloo",
+            timeout=self._dist_timeout,
+        )
         return high_pg if self.expert_group == 0 else low_pg
 
     # ------------------------------------------------------------------

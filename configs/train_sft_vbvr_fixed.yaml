@@ -1,17 +1,17 @@
 trainer: i2v
 model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
-latent_webdataset_dir: data/vbvr/latents/sft
+latent_webdataset_dir: data/vbvr/latents/splits/sft
 dataset_size: 800000
 output_dir: storage/checkpoints/sft_vbvr_fixed
 
-batch_size: 12
+batch_size: 8
 gradient_accumulation_steps: 1
 num_epochs: 2
 learning_rate: 1.0e-5
 weight_decay: 0.01
 max_grad_norm: 1.0
 warmup_steps: 100
-save_steps: 2000
+save_steps: 4000
 log_steps: 1
 seed: 42
 

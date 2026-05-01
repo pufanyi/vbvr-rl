@@ -46,9 +46,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from loguru import logger
 from torch.distributed.checkpoint.state_dict import StateDictOptions, set_model_state_dict
+from torch.distributed.checkpoint.state_dict_saver import _save_state_dict, _stateful_to_state_dict
 
 from src.trainer.checkpoint import (
     MODEL_KEYS,
@@ -72,6 +74,8 @@ class _SubdirEntry:
     transformer_optimizer: torch.optim.Optimizer | None
     shard_rank: int
     dcp_kwargs: dict  # e.g. {"process_group": dp_pg} for EP
+    dcp_group_size: int
+    dcp_coordinator_rank: int
 
 
 class CheckpointRuntimeMixin:
@@ -140,6 +144,8 @@ class CheckpointRuntimeMixin:
                 transformer_optimizer=optimizer,
                 shard_rank=self.dp_rank,
                 dcp_kwargs=self._expert_parallel_dcp_kwargs(),
+                dcp_group_size=self.dp_size,
+                dcp_coordinator_rank=self._resolve_dcp_coordinator_rank(self.dp_size),
             )
             return
         # Flat: save each attached transformer to its own subdir, all ranks
@@ -157,7 +163,50 @@ class CheckpointRuntimeMixin:
                 transformer_optimizer=optimizer,
                 shard_rank=self.rank,
                 dcp_kwargs={},
+                dcp_group_size=self.world_size,
+                dcp_coordinator_rank=self._resolve_dcp_coordinator_rank(self.world_size),
             )
+
+    def _resolve_dcp_coordinator_rank(self, group_size: int) -> int:
+        configured = self.cfg.checkpoint_dcp_coordinator_rank
+        if configured is None:
+            return 0
+        rank = int(configured)
+        if rank < 0:
+            rank += group_size
+        if not 0 <= rank < group_size:
+            raise ValueError(
+                f"checkpoint_dcp_coordinator_rank={configured} resolves to {rank}, "
+                f"outside DCP group size {group_size}",
+            )
+        return rank
+
+    def _dcp_save(self, state: dict, checkpoint_id: Path, entry: _SubdirEntry) -> None:
+        writer = dcp.FileSystemWriter(
+            str(checkpoint_id),
+            thread_count=self.cfg.checkpoint_dcp_thread_count,
+            sync_files=self.cfg.checkpoint_dcp_sync_files,
+        )
+        coordinator_global_rank = entry.dcp_coordinator_rank
+        process_group = entry.dcp_kwargs.get("process_group")
+        if process_group is not None:
+            coordinator_global_rank = dist.get_global_rank(process_group, entry.dcp_coordinator_rank)
+        if self.rank == 0:
+            logger.info(
+                "Checkpoint DCP save {}: coordinator rank {} (local {}/{}), writer_threads={}, sync_files={}",
+                checkpoint_id,
+                coordinator_global_rank,
+                entry.dcp_coordinator_rank,
+                entry.dcp_group_size,
+                self.cfg.checkpoint_dcp_thread_count,
+                self.cfg.checkpoint_dcp_sync_files,
+            )
+        _save_state_dict(
+            state_dict=_stateful_to_state_dict(state),
+            storage_writer=writer,
+            process_group=process_group,
+            coordinator_rank=entry.dcp_coordinator_rank,
+        )
 
     def _save_subdir(self, root: Path, entry: _SubdirEntry) -> None:
         sub_path = root / entry.subdir
@@ -172,7 +221,7 @@ class CheckpointRuntimeMixin:
             state: dict = {"train_state": self.train_state}
             if self.ema is not None:
                 state["ema"] = self.ema
-            dcp.save(state, checkpoint_id=str(sub_path), **entry.dcp_kwargs)
+            self._dcp_save(state, sub_path, entry)
         finally:
             self.train_state.set_save_filter(None)
             if self.ema is not None:

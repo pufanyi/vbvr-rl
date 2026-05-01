@@ -10,13 +10,11 @@ The current implementation intentionally stays on the standard GRPO execution
 path and does not support MoE expert-parallel mode yet.
 """
 
-import math
-
 import torch
 import torch.distributed as dist
 from loguru import logger
 
-from src.trainer.base_grpo_trainer import BaseGRPOTrainer, _compute_ref_mean, _repeat_meta
+from src.trainer.base_grpo_trainer import BaseGRPOTrainer, _repeat_meta
 
 
 class DanceGRPOTrainer(BaseGRPOTrainer):
@@ -29,19 +27,24 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 "DanceGRPOTrainer currently supports standard FSDP/HSDP paths only; "
                 "expert_parallel remains specific to the custom GRPO trainer."
             )
+        if cfg.grpo_group_size < 2:
+            raise ValueError("DanceGRPO requires grpo_group_size >= 2 for group-relative advantages")
+        if cfg.grpo_num_sampling_steps < 2:
+            raise ValueError("DanceGRPO requires grpo_num_sampling_steps >= 2")
+        if cfg.grpo_sde_noise_scale <= 0:
+            raise ValueError("DanceGRPO requires grpo_sde_noise_scale > 0")
         logger.info(
             "DanceGRPO | shared_group_init_noise={} timestep_selection_ratio={:.2f}",
             cfg.dancegrpo_share_group_init_noise,
             cfg.dancegrpo_timestep_selection_ratio,
         )
 
-    def _sample_group_initial_latents(self, condition: torch.Tensor, cur_s: int) -> torch.Tensor | None:
-        """Sample one x_T per prompt and broadcast it across the whole group."""
+    def _sample_group_initial_latents(self, condition: torch.Tensor) -> torch.Tensor | None:
+        """Sample one x_T per prompt for reuse across the whole group."""
         if not self.cfg.dancegrpo_share_group_init_noise:
             return None
         latent_shape = (condition.shape[0], condition.shape[1] - 4, *condition.shape[2:])
-        shared = torch.randn(latent_shape, device=condition.device, dtype=torch.bfloat16)
-        return shared.repeat_interleave(cur_s, dim=0)
+        return torch.randn(latent_shape, device=condition.device, dtype=torch.bfloat16)
 
     def _select_training_timesteps(self, num_sampling_steps: int) -> list[int]:
         """Subsample replay timesteps following DanceGRPO's timestep selection idea.
@@ -52,15 +55,66 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         depending on the timestep value — if ranks diverge, the per-parameter
         all-gather in FSDP2 will deadlock.
         """
-        keep = max(1, math.ceil(num_sampling_steps * self.cfg.dancegrpo_timestep_selection_ratio))
-        if keep >= num_sampling_steps:
-            return list(range(num_sampling_steps))
+        candidate_steps = max(1, num_sampling_steps - 1)
+        keep = max(1, int(candidate_steps * self.cfg.dancegrpo_timestep_selection_ratio))
+        if keep >= candidate_steps:
+            return list(range(candidate_steps))
         if self.rank == 0:
-            selected = torch.randperm(num_sampling_steps, device=self.device)[:keep].sort().values
+            selected = torch.randperm(candidate_steps, device=self.device)[:keep].sort().values
         else:
             selected = torch.empty(keep, dtype=torch.long, device=self.device)
         dist.broadcast(selected, src=0)
         return selected.tolist()
+
+    def _policy_forward(
+        self,
+        transformer: torch.nn.Module,
+        latent: torch.Tensor,
+        condition: torch.Tensor,
+        prompt_embeds: torch.Tensor,
+        timestep_val: float,
+    ) -> torch.Tensor:
+        """Forward the trainable policy with optional CFG, matching rollout."""
+        B = latent.shape[0]
+        device = latent.device
+        timestep_tensor = torch.tensor([timestep_val], device=device, dtype=torch.bfloat16).expand(B)
+        model_input = torch.cat([latent, condition], dim=1)
+        model_output = transformer(
+            hidden_states=model_input,
+            timestep=timestep_tensor,
+            encoder_hidden_states=prompt_embeds,
+            return_dict=False,
+        )[0]
+
+        if self.cfg.grpo_cfg_scale <= 1.0:
+            return model_output
+
+        uncond_output = transformer(
+            hidden_states=model_input,
+            timestep=timestep_tensor,
+            encoder_hidden_states=torch.zeros_like(prompt_embeds),
+            return_dict=False,
+        )[0]
+        return uncond_output.to(torch.float32) + self.cfg.grpo_cfg_scale * (
+            model_output.to(torch.float32) - uncond_output.to(torch.float32)
+        )
+
+    def _ref_forward_cfg(
+        self,
+        latent: torch.Tensor,
+        condition: torch.Tensor,
+        prompt_embeds: torch.Tensor,
+        timestep_val: float,
+    ) -> torch.Tensor:
+        """Forward the reference policy with the same CFG semantics as rollout."""
+        ref_output = self._ref_forward(latent, condition, prompt_embeds, timestep_val)
+        if self.cfg.grpo_cfg_scale <= 1.0:
+            return ref_output
+
+        uncond_ref_output = self._ref_forward(latent, condition, torch.zeros_like(prompt_embeds), timestep_val)
+        return uncond_ref_output.to(torch.float32) + self.cfg.grpo_cfg_scale * (
+            ref_output.to(torch.float32) - uncond_ref_output.to(torch.float32)
+        )
 
     def _grpo_step(self, batch: dict) -> dict[str, float]:
         """DanceGRPO-style GRPO step on the standard single-group path."""
@@ -87,6 +141,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
         all_chunk_trajs = []
         reward_chunks = []
+        shared_initial_latent = self._sample_group_initial_latents(condition)
 
         for g_start in range(0, G, S):
             cur_s = min(S, G - g_start)
@@ -94,7 +149,11 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             pe_s = prompt_embeds.repeat_interleave(cur_s, dim=0)
             gt_s = gt_video_latents.repeat_interleave(cur_s, dim=0)
             meta_s = _repeat_meta(meta, cur_s)
-            initial_latent = self._sample_group_initial_latents(condition, cur_s)
+            initial_latent = (
+                shared_initial_latent.repeat_interleave(cur_s, dim=0)
+                if shared_initial_latent is not None
+                else None
+            )
 
             traj = self.model.sde_generate(
                 condition=cond_s,
@@ -105,6 +164,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 sigma_max=cfg.grpo_sde_sigma_max,
                 cfg_scale=cfg.grpo_cfg_scale,
                 initial_latent=initial_latent,
+                sde_formula="dancegrpo",
             )
 
             reward_flat = self.reward_fn(
@@ -131,7 +191,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         total_policy_loss = 0.0
         total_kl_loss = 0.0
         num_chunks = len(all_chunk_trajs)
-        total_accum_steps = len(selected_t_idxs) * num_chunks
+        metric_normalizer = max(len(selected_t_idxs) * G, 1)
 
         for opt in self.optimizers:
             opt.zero_grad(set_to_none=True)
@@ -158,38 +218,16 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 old_log_prob = traj["log_probs"][t_idx].detach()
                 timestep_val = traj["timesteps"][t_idx]
 
-                timestep_tensor = torch.tensor([timestep_val], device=device, dtype=torch.bfloat16).expand(BS)
                 transformer = self.model._get_expert_for_timestep(timestep_val)
-                model_input = torch.cat([latent, cond_s], dim=1)
-
-                model_output = transformer(
-                    hidden_states=model_input,
-                    timestep=timestep_tensor,
-                    encoder_hidden_states=pe_s,
-                    return_dict=False,
-                )[0]
-
-                dt = sigma_prev - sigma
-                std_dev_t = cfg.grpo_sde_sigma_min + (cfg.grpo_sde_sigma_max - cfg.grpo_sde_sigma_min) * sigma
-                noise_scale = std_dev_t * math.sqrt(max(-dt, 0.0))
-
-                if sigma > 1e-8:
-                    prev_mean = (
-                        latent * (1.0 + std_dev_t**2 / (2.0 * sigma) * dt)
-                        + model_output * (1.0 + std_dev_t**2 * (1.0 - sigma) / (2.0 * sigma)) * dt
-                    )
-                else:
-                    prev_mean = latent + model_output * dt
-
-                if noise_scale > 1e-8:
-                    new_log_prob = (
-                        -((next_latent - prev_mean) ** 2) / (2.0 * noise_scale**2)
-                        - math.log(noise_scale)
-                        - 0.5 * math.log(2.0 * math.pi)
-                    )
-                    new_log_prob = new_log_prob.mean(dim=list(range(1, new_log_prob.ndim)))
-                else:
-                    new_log_prob = torch.zeros(BS, device=device)
+                model_output = self._policy_forward(transformer, latent, cond_s, pe_s, timestep_val)
+                prev_mean, noise_scale = self.model._dancegrpo_transition_mean(
+                    sample=latent,
+                    model_output=model_output,
+                    sigma=sigma,
+                    sigma_prev=sigma_prev,
+                    eta=cfg.grpo_sde_noise_scale,
+                )
+                new_log_prob = self.model._gaussian_transition_log_prob(next_latent, prev_mean, noise_scale)
 
                 ratio = torch.exp(new_log_prob - old_log_prob)
                 unclipped = -adv_chunk * ratio
@@ -199,23 +237,29 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 kl_loss = torch.tensor(0.0, device=device)
                 if cfg.grpo_kl_coeff > 0:
                     with torch.no_grad():
-                        ref_output = self._ref_forward(latent, cond_s, pe_s, timestep_val)
+                        ref_output = self._ref_forward_cfg(latent, cond_s, pe_s, timestep_val)
                     if noise_scale > 1e-8:
-                        ref_mean = _compute_ref_mean(latent, ref_output, sigma, sigma_prev, std_dev_t, dt)
+                        ref_mean, _ = self.model._dancegrpo_transition_mean(
+                            sample=latent,
+                            model_output=ref_output,
+                            sigma=sigma,
+                            sigma_prev=sigma_prev,
+                            eta=cfg.grpo_sde_noise_scale,
+                        )
                         kl_loss = ((prev_mean - ref_mean) ** 2).mean(dim=list(range(1, prev_mean.ndim))).mean()
                         kl_loss = kl_loss / (2.0 * noise_scale**2)
 
-                loss = (policy_loss + cfg.grpo_kl_coeff * kl_loss) / total_accum_steps
+                loss = (policy_loss + cfg.grpo_kl_coeff * kl_loss) * (cur_s / metric_normalizer)
                 loss.backward()
 
-                total_policy_loss += policy_loss.item()
-                total_kl_loss += kl_loss.item()
+                total_policy_loss += policy_loss.item() * cur_s
+                total_kl_loss += kl_loss.item() * cur_s
 
             del traj["latents"], traj["log_probs"]
 
         return {
-            "policy_loss": total_policy_loss / max(total_accum_steps, 1),
-            "kl_loss": total_kl_loss / max(total_accum_steps, 1),
+            "policy_loss": total_policy_loss / metric_normalizer,
+            "kl_loss": total_kl_loss / metric_normalizer,
             "reward_mean": rewards.mean().item(),
             "reward_std": rewards.std().item(),
             "advantage_mean": advantages.mean().item(),
