@@ -118,12 +118,25 @@ class I2VTrainer(BaseTrainer):
                 is_last_micro_step = (batch_idx + 1) % cfg.gradient_accumulation_steps == 0
                 self._set_requires_gradient_sync(is_last_micro_step)
                 loss = self._train_step(batch)
+                if not torch.isfinite(loss).all().item():
+                    raise FloatingPointError(
+                        f"Non-finite loss on rank={self.rank} expert={self._effective_train_experts} "
+                        f"at step={global_step} epoch={epoch} batch_idx={batch_idx}: {loss.item()}"
+                    )
                 scaled_loss = loss / cfg.gradient_accumulation_steps
                 scaled_loss.backward()
 
                 if is_last_micro_step:
                     self._all_reduce_gradients()
-                    self._last_grad_norm = torch.nn.utils.clip_grad_norm_(self.params, cfg.max_grad_norm).item()
+                    context = f"at step={global_step} epoch={epoch} batch_idx={batch_idx}"
+                    if cfg.skip_nonfinite_gradients and not self._gradients_are_finite_across_ranks(context=context):
+                        for opt in self.optimizers:
+                            opt.zero_grad(set_to_none=True)
+                        global_step += 1
+                        if self.mfu_monitor is not None:
+                            self.mfu_monitor.step()
+                        continue
+                    self._last_grad_norm = self._clip_grad_norm_or_raise(cfg.max_grad_norm, context=context)
 
                     lr = cosine_lr(global_step, cfg.warmup_steps, self.total_steps, cfg.learning_rate)
                     for opt in self.optimizers:
@@ -139,7 +152,7 @@ class I2VTrainer(BaseTrainer):
                     if self.mfu_monitor is not None:
                         self.mfu_monitor.step()
 
-                    if self.rank == 0 and global_step % cfg.log_steps == 0:
+                    if self.log_enabled and global_step % cfg.log_steps == 0:
                         mfu = self.mfu_monitor.flush() if self.mfu_monitor is not None else None
                         mfu_str = f"{mfu:.1%}" if mfu is not None else "-"
 
@@ -217,6 +230,20 @@ class I2VTrainer(BaseTrainer):
         - Raw data: batch has "videos", "image", "prompt" — encode on-the-fly.
         - Precomputed: batch has "video_latents", "condition", "prompt_embeds" tensors.
         """
+        self._last_batch_debug = {
+            key: batch[key]
+            for key in (
+                "sample_key",
+                "sample_url",
+                "sample_tar",
+                "sample_index_in_tar",
+                "sample_seq_len",
+                "sample_prompt",
+                "prompt",
+                "index",
+            )
+            if key in batch
+        }
         if "prompt_embeds" in batch:
             # Precomputed latents path
             prompt_embeds = batch["prompt_embeds"].to(self.device)

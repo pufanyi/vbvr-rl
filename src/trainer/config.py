@@ -32,6 +32,7 @@ class TrainConfig(BaseModel):
     learning_rate: float = 1e-5
     weight_decay: float = 0.01
     max_grad_norm: float = 1.0
+    skip_nonfinite_gradients: bool = True
     warmup_steps: int = 100
     save_steps: int = 500
     log_steps: int = 10

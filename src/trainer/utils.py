@@ -58,6 +58,8 @@ def collate(batch):
         elif isinstance(value, list) and value and isinstance(value[0], torch.Tensor):
             # List of tensors (e.g. videos): stack each position across the batch
             collated[key] = [torch.stack([x[key][i] for x in batch]) for i in range(len(value))]
+        elif isinstance(value, str | int | float | bool):
+            collated[key] = [x[key] for x in batch]
     if "prompt" in sample:
         collated["prompt"] = [x["prompt"] for x in batch]
     if "index" in sample:
@@ -77,13 +79,16 @@ def shard_transformer(module, mesh, mp_policy):
     fully_shard(module, mesh=mesh, mp_policy=mp_policy)
 
 
-def setup_loguru(rank: int) -> None:
-    """Configure loguru: Rich sink on rank 0, silence other ranks."""
+def setup_loguru(rank: int, enabled: bool | None = None) -> None:
+    """Configure loguru: Rich sink on selected ranks, silence the rest."""
     from rich.console import Console
     from rich.text import Text
 
     logger.remove()
-    if rank == 0:
+    if enabled is None:
+        enabled = rank == 0
+
+    if enabled:
         console = Console(stderr=True)
 
         _LEVEL_STYLES = {
@@ -104,6 +109,8 @@ def setup_loguru(rank: int) -> None:
             line = Text()
             line.append(ts, style="dim")
             line.append(" | ", style="dim")
+            if rank != 0:
+                line.append(f"rank{rank} ", style="dim")
             line.append(f"{level:<8}", style=style)
             line.append(" | ", style="dim")
             line.append(str(record["message"]))

@@ -117,6 +117,7 @@ class CheckpointRuntimeMixin:
     # ------------------------------------------------------------------
 
     def _save_checkpoint(self, path: Path):
+        self._assert_finite_checkpoint_state(path)
         path.mkdir(parents=True, exist_ok=True)
         entries = list(self._save_plan())
         if not entries:
@@ -130,6 +131,39 @@ class CheckpointRuntimeMixin:
                 path,
                 ", ".join(e.subdir for e in entries),
             )
+
+    def _assert_finite_checkpoint_state(self, path: Path) -> None:
+        """Fail all ranks before DCP save if any local parameter or EMA shard is non-finite."""
+        problem = self._find_nonfinite_checkpoint_tensor()
+        if problem is not None:
+            logger.error("Refusing to save {}: {}", path, problem)
+
+        bad = torch.tensor([problem is not None], dtype=torch.int32)
+        if dist.is_initialized():
+            dist.all_reduce(bad, op=dist.ReduceOp.MAX, group=self._checkpoint_pg)
+        if bad.item():
+            raise FloatingPointError(
+                f"Non-finite parameter or EMA tensor detected before saving {path}. "
+                "See rank logs for the first offending tensor."
+            )
+
+    def _find_nonfinite_checkpoint_tensor(self) -> str | None:
+        for module_name in ("text_encoder", "transformer", "transformer_2"):
+            module = getattr(self.model, module_name, None)
+            if module is None:
+                continue
+            for param_name, param in module.named_parameters():
+                problem = _nonfinite_tensor_summary(param.detach(), f"{module_name}.{param_name}")
+                if problem is not None:
+                    return problem
+
+        ema = getattr(self, "ema", None)
+        if ema is not None:
+            for name, tensor in ema.shadow.items():
+                problem = _nonfinite_tensor_summary(tensor, f"ema.shadow.{name}")
+                if problem is not None:
+                    return problem
+        return None
 
     def _save_plan(self):
         if self.expert_parallel:
@@ -191,7 +225,7 @@ class CheckpointRuntimeMixin:
         process_group = entry.dcp_kwargs.get("process_group")
         if process_group is not None:
             coordinator_global_rank = dist.get_global_rank(process_group, entry.dcp_coordinator_rank)
-        if self.rank == 0:
+        if getattr(self, "log_enabled", self.rank == 0):
             logger.info(
                 "Checkpoint DCP save {}: coordinator rank {} (local {}/{}), writer_threads={}, sync_files={}",
                 checkpoint_id,
@@ -562,6 +596,19 @@ def _has_valid_step_suffix(name: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _nonfinite_tensor_summary(tensor: torch.Tensor, name: str) -> str | None:
+    local = getattr(tensor, "_local_tensor", tensor)
+    local = local.detach()
+    if not torch.is_floating_point(local):
+        return None
+    finite = torch.isfinite(local)
+    if finite.all().item():
+        return None
+    nan_count = torch.isnan(local).sum().item()
+    inf_count = torch.isinf(local).sum().item()
+    return f"{name} has non-finite values on local shard (nan={nan_count}, inf={inf_count})"
 
 
 # Re-export so call sites that import MODEL_KEYS from checkpoint_runtime still work.

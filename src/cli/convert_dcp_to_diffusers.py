@@ -163,6 +163,29 @@ def _merge_lora_into_plain_weights(pipe: WanImageToVideoPipeline, safe_fusing: b
     return merged
 
 
+def _assert_finite_module(module: torch.nn.Module, module_name: str) -> None:
+    for name, param in module.named_parameters():
+        if not torch.is_floating_point(param):
+            continue
+        tensor = param.detach()
+        finite = torch.isfinite(tensor)
+        if finite.all().item():
+            continue
+        nan_count = torch.isnan(tensor).sum().item()
+        inf_count = torch.isinf(tensor).sum().item()
+        raise FloatingPointError(
+            f"{module_name}.{name} contains non-finite values after checkpoint load "
+            f"(nan={nan_count}, inf={inf_count})"
+        )
+
+
+def _validate_pipeline_weights_finite(pipe: WanImageToVideoPipeline) -> None:
+    for name in ("transformer", "transformer_2"):
+        module = getattr(pipe, name, None)
+        if module is not None:
+            _assert_finite_module(module, name)
+
+
 def _validate_outputs(outputs: list[Path]) -> None:
     for output in outputs:
         if output.exists() and (not output.is_dir() or any(output.iterdir())):
@@ -262,6 +285,7 @@ def _convert_one(pipe: WanImageToVideoPipeline, args: argparse.Namespace, checkp
         logger.info("Merged LoRA adapters into {} transformer module(s)", merged)
     else:
         logger.warning("--no-merge_lora keeps PEFT adapter layers in the output; this is not a plain model export.")
+    _validate_pipeline_weights_finite(pipe)
 
     output.mkdir(parents=True, exist_ok=True)
     logger.info("Saving Diffusers pipeline to {}", output)

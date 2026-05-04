@@ -1,6 +1,7 @@
 """Base trainer with shared infrastructure for FSDP2 + DCP training."""
 
 import os
+import sys
 from datetime import timedelta
 
 import torch
@@ -56,7 +57,9 @@ class BaseTrainer(CheckpointRuntimeMixin):
         # ---- Expert parallel (must run before model build) ----
         self._init_expert_parallel(cfg)
 
-        setup_loguru(self.rank)
+        log_enabled = self.rank == 0 or (self.expert_parallel and self.dp_rank == 0)
+        self.log_enabled = log_enabled
+        setup_loguru(self.rank, enabled=log_enabled)
         logger.info("World size: {}", self.world_size)
         if self.expert_parallel:
             effective_data_replicas = self.dp_size if self._expert_parallel_duplicates_data(cfg) else self.world_size
@@ -627,6 +630,153 @@ class BaseTrainer(CheckpointRuntimeMixin):
         for p in self.params:
             if p.grad is not None:
                 dist.all_reduce(p.grad, op=dist.ReduceOp.AVG)
+
+    def _iter_trainable_named_parameters(self):
+        """Yield trainable parameters with stable-ish names for diagnostics."""
+        seen: set[int] = set()
+        modules = (
+            ("text_encoder", self.model.text_encoder if self.cfg.train_text_encoder else None),
+            ("transformer", self.model.transformer),
+            ("transformer_2", self.model.transformer_2),
+        )
+        for prefix, module in modules:
+            if module is None:
+                continue
+            for name, param in module.named_parameters():
+                if not param.requires_grad:
+                    continue
+                param_id = id(param)
+                if param_id in seen:
+                    continue
+                seen.add(param_id)
+                yield f"{prefix}.{name}", param
+
+        # Fallback in case a trainable parameter is owned outside the modules
+        # above.  This keeps the diagnostic complete without changing the
+        # optimizer parameter list.
+        for idx, param in enumerate(getattr(self, "params", [])):
+            param_id = id(param)
+            if param_id in seen or not param.requires_grad:
+                continue
+            seen.add(param_id)
+            yield f"params[{idx}]", param
+
+    @staticmethod
+    def _local_tensor_for_diagnostics(tensor: torch.Tensor) -> torch.Tensor:
+        if hasattr(tensor, "to_local"):
+            return tensor.to_local()
+        return tensor
+
+    def _format_nonfinite_gradient_report(self, max_items: int = 8) -> str:
+        """Return a compact report of local non-finite gradients."""
+        bad: list[str] = []
+        checked = 0
+        with torch.no_grad():
+            for name, param in self._iter_trainable_named_parameters():
+                grad = param.grad
+                if grad is None:
+                    continue
+                checked += 1
+                local_grad = self._local_tensor_for_diagnostics(grad.detach())
+                finite = torch.isfinite(local_grad)
+                if bool(finite.all().item()):
+                    continue
+
+                nan_count = int(torch.isnan(local_grad).sum().item())
+                inf_count = int(torch.isinf(local_grad).sum().item())
+                finite_count = int(finite.sum().item())
+                if finite_count > 0:
+                    finite_absmax = float(local_grad[finite].abs().max().item())
+                else:
+                    finite_absmax = float("nan")
+                bad.append(
+                    f"{name}: shape={tuple(local_grad.shape)} dtype={local_grad.dtype} "
+                    f"nan={nan_count} inf={inf_count} finite_absmax={finite_absmax:.6g}"
+                )
+                if len(bad) >= max_items:
+                    break
+
+        if not bad:
+            return f"no local non-finite gradients found among {checked} gradients"
+        suffix = "" if len(bad) < max_items else f"\n... truncated to first {max_items} tensors"
+        report = "\n".join(bad) + suffix
+        batch_report = self._format_last_batch_debug()
+        loss_report = self._format_last_loss_debug()
+        extras = "\n".join(x for x in (batch_report, loss_report) if x)
+        return f"{extras}\n{report}" if extras else report
+
+    def _format_last_batch_debug(self, max_items: int = 8) -> str:
+        batch = getattr(self, "_last_batch_debug", None)
+        if not batch:
+            return ""
+        parts = []
+        for key, value in batch.items():
+            if isinstance(value, torch.Tensor):
+                value = value.detach().cpu().tolist()
+            if isinstance(value, list) and len(value) > max_items:
+                value = value[:max_items] + [f"... +{len(value) - max_items} more"]
+            parts.append(f"{key}={value!r}")
+        return "batch: " + ", ".join(parts)
+
+    def _format_last_loss_debug(self) -> str:
+        debug = getattr(self.model, "_last_loss_debug", None)
+        if not debug:
+            return ""
+        return "loss_debug: " + repr(debug)
+
+    def _local_gradients_are_finite(self) -> bool:
+        with torch.no_grad():
+            for _name, param in self._iter_trainable_named_parameters():
+                grad = param.grad
+                if grad is None:
+                    continue
+                local_grad = self._local_tensor_for_diagnostics(grad.detach())
+                if not bool(torch.isfinite(local_grad).all().item()):
+                    return False
+        return True
+
+    def _emit_nonfinite_gradient_warning(self, context: str) -> None:
+        message = (
+            f"Skipping optimizer step for non-finite gradients on rank={self.rank} "
+            f"expert={self._effective_train_experts} {context}\n{self._format_nonfinite_gradient_report()}"
+        )
+        if self.log_enabled:
+            logger.warning(message)
+        else:
+            print(f"[rank{self.rank}] {message}", file=sys.stderr, flush=True)
+
+    def _gradients_are_finite_across_ranks(self, *, context: str) -> bool:
+        local_finite = self._local_gradients_are_finite()
+        if dist.is_available() and dist.is_initialized():
+            finite_flag = torch.tensor(int(local_finite), device=self.device, dtype=torch.int32)
+            dist.all_reduce(finite_flag, op=dist.ReduceOp.MIN)
+            global_finite = bool(finite_flag.item())
+        else:
+            global_finite = local_finite
+
+        if global_finite:
+            return True
+        if local_finite:
+            if self.log_enabled:
+                logger.warning("Skipping optimizer step because another rank has non-finite gradients {}", context)
+        else:
+            self._emit_nonfinite_gradient_warning(context)
+        return False
+
+    def _clip_grad_norm_or_raise(self, max_norm: float, *, context: str) -> float:
+        """Clip gradients, raising with parameter-level diagnostics on NaN/Inf."""
+        try:
+            return torch.nn.utils.clip_grad_norm_(
+                self.params,
+                max_norm,
+                error_if_nonfinite=True,
+            ).item()
+        except RuntimeError as exc:
+            report = self._format_nonfinite_gradient_report()
+            raise FloatingPointError(
+                f"Non-finite gradients before clipping on rank={self.rank} "
+                f"expert={self._effective_train_experts} {context}\n{report}"
+            ) from exc
 
     def _barrier(self) -> None:
         dist.barrier(group=self._checkpoint_pg)

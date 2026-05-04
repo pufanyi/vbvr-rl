@@ -450,6 +450,13 @@ class WanI2VForTraining:
         sigmas = shifted_sigmas.index_select(0, indices).view(B, 1, 1, 1, 1)
         timesteps = shifted_timesteps.index_select(0, indices)
         weights = bsmntw.index_select(0, indices)
+        with torch.no_grad():
+            self._last_loss_debug = {
+                "train_experts": self.train_experts,
+                "indices": indices.detach().cpu().tolist(),
+                "timesteps": [round(float(x), 4) for x in timesteps.detach().cpu()],
+                "sigmas": [round(float(x), 6) for x in sigmas.flatten().detach().cpu()],
+            }
 
         # Flow matching: noisy = sigma * noise + (1 - sigma) * x0
         noise = torch.randn_like(video_latents)
@@ -467,6 +474,10 @@ class WanI2VForTraining:
             experts.append(((timesteps >= self.boundary_timestep).nonzero(as_tuple=False).flatten(), self.transformer))
         if self.transformer_2 is not None:
             experts.append(((timesteps < self.boundary_timestep).nonzero(as_tuple=False).flatten(), self.transformer_2))
+        self._last_loss_debug["selected_counts"] = {
+            "high": int((timesteps >= self.boundary_timestep).sum().item()),
+            "low": int((timesteps < self.boundary_timestep).sum().item()),
+        }
 
         loss = torch.tensor(0.0, device=device, dtype=torch.float32)
         total_weight = torch.tensor(0.0, device=device, dtype=torch.float32)

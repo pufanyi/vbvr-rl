@@ -9,6 +9,7 @@ Usage:
     dataset = VBVRLatentDataset("data/vbvr/latents/webdataset")
 """
 
+import json
 import logging
 import re
 from itertools import islice
@@ -65,6 +66,21 @@ def _decode_sample(sample: dict, max_text_len: int = 512) -> dict:
         "prompt_embeds": prompt_embeds,
         "condition": tensors["condition"],
     }
+    if "__key__" in sample:
+        decoded["sample_key"] = sample["__key__"]
+    if "__url__" in sample:
+        decoded["sample_url"] = sample["__url__"]
+
+    metadata = sample.get("json")
+    if isinstance(metadata, (bytes, bytearray)):
+        try:
+            metadata = json.loads(metadata.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            metadata = None
+    if isinstance(metadata, dict):
+        for key in ("tar", "index_in_tar", "seq_len", "prompt"):
+            if key in metadata:
+                decoded[f"sample_{key}"] = metadata[key]
 
     if "latents" in tensors:
         decoded["video_latents"] = tensors["latents"]
