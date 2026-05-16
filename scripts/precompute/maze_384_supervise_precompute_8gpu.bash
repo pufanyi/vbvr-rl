@@ -43,6 +43,9 @@ CELL_W="${CELL_W:-16}"
 CELL_PX="${CELL_PX:-12}"
 NUM_FRAMES="${NUM_FRAMES:-81}"
 DIFFICULTY_NAMES="${DIFFICULTY_NAMES:-easy,mid,hard,xhard}"
+DIFFICULTY_GEOMETRIES="${DIFFICULTY_GEOMETRIES:-}"
+RENDER_MODE="${RENDER_MODE:-moving_ball}"
+TAR_TAG="${TAR_TAG:-maze_384x384x81_perfect_v2}"
 
 VAE_BATCH_SIZE="${VAE_BATCH_SIZE:-8}"
 TEXT_BATCH_SIZE="${TEXT_BATCH_SIZE:-64}"
@@ -66,6 +69,10 @@ echo "  split:             sft=$SFT_RATIO rl=$(awk -v r="$SFT_RATIO" 'BEGIN { pr
 echo "  shard batch:       samples_per_shard=$SAMPLES_PER_SHARD write_batch=$SHARD_WRITE_BATCH_SIZE"
 echo "  geometry:          ${CELL_H}x${CELL_W} cells * ${CELL_PX}px, frames=$NUM_FRAMES"
 echo "  difficulties:      $DIFFICULTY_NAMES"
+if [[ -n "$DIFFICULTY_GEOMETRIES" ]]; then
+    echo "  diff geometries:   $DIFFICULTY_GEOMETRIES"
+fi
+echo "  render mode:       $RENDER_MODE"
 echo "  batch sizes:       vae=$VAE_BATCH_SIZE text=$TEXT_BATCH_SIZE"
 echo "  log:               $RUN_LOG"
 echo
@@ -84,6 +91,11 @@ if [[ "${DRY_RUN:-0}" == "1" ]]; then
     DRY_RUN_ARGS+=(--dry_run)
 fi
 
+GEOMETRY_ARGS=()
+if [[ -n "$DIFFICULTY_GEOMETRIES" ]]; then
+    GEOMETRY_ARGS+=(--difficulty_geometries "$DIFFICULTY_GEOMETRIES")
+fi
+
 CUDA_VISIBLE_DEVICES="$GPUS" \
 PYTHONPATH="$ROOT_DIR:${PYTHONPATH:-}" \
 PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}" \
@@ -98,6 +110,7 @@ PYTHONUNBUFFERED=1 \
     --sft_output_dir "$SFT_WEBDATASET_DIR" \
     --rl_output_dir "$RL_WEBDATASET_DIR" \
     --preview_dir "$PREVIEW_DIR" \
+    --tar_tag "$TAR_TAG" \
     --model_path "$MODEL_PATH" \
     --num_samples "$NUM_SAMPLES" \
     --samples_per_shard "$SAMPLES_PER_SHARD" \
@@ -110,6 +123,8 @@ PYTHONUNBUFFERED=1 \
     --cell_px "$CELL_PX" \
     --num_frames "$NUM_FRAMES" \
     --difficulty_names "$DIFFICULTY_NAMES" \
+    "${GEOMETRY_ARGS[@]}" \
+    --render_mode "$RENDER_MODE" \
     --vae_batch_size "$VAE_BATCH_SIZE" \
     --text_batch_size "$TEXT_BATCH_SIZE" \
     --num_preview_videos "$NUM_PREVIEW_VIDEOS" \

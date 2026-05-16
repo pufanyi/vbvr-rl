@@ -29,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num_frames", type=int, default=81)
     p.add_argument("--fps", type=int, default=16)
     p.add_argument("--difficulties", default="easy,mid,hard,xhard")
+    p.add_argument("--render_mode", default="moving_ball")
     return p.parse_args()
 
 
@@ -63,6 +64,7 @@ def main() -> None:
             cell_px=args.cell_px,
             num_frames=args.num_frames,
             difficulty_names=(difficulty,),
+            render_mode=args.render_mode,
             max_generation_attempts=1024,
         )
         for local_idx in range(args.per_difficulty):
@@ -78,7 +80,7 @@ def main() -> None:
             Image.fromarray(video[0]).save(first_frame_path)
             export_to_video([Image.fromarray(frame) for frame in video], str(reference_video_path), fps=args.fps)
 
-            maze_blob = _sample_to_json_blob(sample)
+            maze_blob = _sample_to_json_blob(sample, fps=args.fps)
             metadata = {
                 "id": sample_id,
                 "difficulty": difficulty,

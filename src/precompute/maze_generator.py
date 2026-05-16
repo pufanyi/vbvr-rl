@@ -4,10 +4,10 @@ Produces:
     - a random perfect maze on a fixed logical grid
       (``1 = wall``, ``0 = passage``);
     - a BFS shortest path from start to goal;
-    - a sequence of RGB frames showing a ball travelling that path at a
-      configurable number of frames;
+    - a sequence of RGB frames showing either a ball travelling that path or
+      a path line being drawn over a configurable number of frames;
     - all metadata needed by a custom reward (grid, start, goal, path,
-      per-frame ball position, palette, pixel geometry, generation settings).
+      per-frame path position, palette, pixel geometry, generation settings).
 
 No torch / CUDA dependencies — this module is pure Python + numpy + PIL so it
 can be imported by the precompute pipeline, the reward implementation, and
@@ -17,7 +17,7 @@ offline visualisation tools.
 from __future__ import annotations
 
 from collections import deque
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -87,6 +87,28 @@ DEFAULT_PALETTES: list[MazePalette] = [
         goal_name="emerald",
     ),
 ]
+
+
+RenderMode = Literal["moving_ball", "growing_path_line"]
+
+RENDER_MODE_MOVING_BALL = "moving_ball"
+RENDER_MODE_GROWING_PATH_LINE = "growing_path_line"
+RENDER_MODE_ALIASES: dict[str, RenderMode] = {
+    "moving_ball": RENDER_MODE_MOVING_BALL,
+    "ball": RENDER_MODE_MOVING_BALL,
+    "growing_path_line": RENDER_MODE_GROWING_PATH_LINE,
+    "path_line": RENDER_MODE_GROWING_PATH_LINE,
+    "line": RENDER_MODE_GROWING_PATH_LINE,
+}
+
+
+def normalize_render_mode(mode: str) -> RenderMode:
+    key = mode.strip().lower().replace("-", "_")
+    try:
+        return RENDER_MODE_ALIASES[key]
+    except KeyError as exc:
+        valid = ", ".join(sorted(set(RENDER_MODE_ALIASES)))
+        raise ValueError(f"Unknown maze render mode '{mode}'. Valid values: {valid}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -575,6 +597,22 @@ def _cell_center_xy(i: int | float, j: int | float, cell_px: int) -> tuple[float
     return (j * cell_px + cell_px / 2.0, i * cell_px + cell_px / 2.0)
 
 
+def _goal_marker_half_extent(cell_px: int) -> float:
+    return cell_px / 3.0
+
+
+def _moving_ball_radius(cell_px: int) -> float:
+    return cell_px / 3.0
+
+
+def _path_line_width(cell_px: int) -> int:
+    return max(3, int(round(cell_px * 0.38)))
+
+
+def _path_start_cap_radius(cell_px: int) -> int:
+    return max(2, int(round(cell_px * 0.22)))
+
+
 def interpolate_ball_positions(
     path: list[tuple[int, int]],
     num_frames: int,
@@ -656,6 +694,46 @@ def render_frame(
     return np.asarray(img, dtype=np.uint8)
 
 
+def render_maze_base(
+    grid: np.ndarray,
+    goal_ij: tuple[int, int],
+    palette: MazePalette,
+    cell_px: int,
+    *,
+    goal_marker_half_extent_px: float | None = None,
+) -> Image.Image:
+    """Render maze walls/background/goal without the animated foreground."""
+    H_cells, W_cells = grid.shape
+    img_h = H_cells * cell_px
+    img_w = W_cells * cell_px
+
+    img = Image.new("RGB", (img_w, img_h), palette.passage_rgb)
+    draw = ImageDraw.Draw(img)
+
+    for i in range(H_cells):
+        j = 0
+        while j < W_cells:
+            if grid[i, j] == 1:
+                j0 = j
+                while j < W_cells and grid[i, j] == 1:
+                    j += 1
+                draw.rectangle(
+                    [j0 * cell_px, i * cell_px, j * cell_px - 1, (i + 1) * cell_px - 1],
+                    fill=palette.wall_rgb,
+                )
+            else:
+                j += 1
+
+    gi, gj = goal_ij
+    gcx, gcy = _cell_center_xy(gi, gj, cell_px)
+    gr = _goal_marker_half_extent(cell_px) if goal_marker_half_extent_px is None else goal_marker_half_extent_px
+    draw.rectangle(
+        [gcx - gr, gcy - gr, gcx + gr, gcy + gr],
+        fill=palette.goal_rgb,
+    )
+    return img
+
+
 def render_video(
     grid: np.ndarray,
     frame_positions_pix: np.ndarray,
@@ -666,6 +744,99 @@ def render_video(
     """Render every frame. Returns uint8 array of shape (T, H, W, 3)."""
     frames = [render_frame(grid, (float(x), float(y)), goal_ij, palette, cell_px) for x, y in frame_positions_pix]
     return np.stack(frames, axis=0)
+
+
+def render_path_line_video(
+    grid: np.ndarray,
+    frame_positions_pix: np.ndarray,
+    path: list[tuple[int, int]],
+    goal_ij: tuple[int, int],
+    palette: MazePalette,
+    cell_px: int,
+    *,
+    line_rgb: tuple[int, int, int] | None = None,
+    line_width_px: int | None = None,
+    start_cap_radius_px: int | None = None,
+    goal_marker_half_extent_px: float | None = None,
+) -> np.ndarray:
+    """Render a video where the solution path is drawn progressively."""
+    line_color = palette.ball_rgb if line_rgb is None else line_rgb
+    line_width = _path_line_width(cell_px) if line_width_px is None else line_width_px
+    start_radius = _path_start_cap_radius(cell_px) if start_cap_radius_px is None else start_cap_radius_px
+    base = render_maze_base(
+        grid,
+        goal_ij,
+        palette,
+        cell_px,
+        goal_marker_half_extent_px=goal_marker_half_extent_px,
+    )
+    path_centers = [_cell_center_xy(i, j, cell_px) for i, j in path]
+
+    frames: list[np.ndarray] = []
+    n_frames = int(frame_positions_pix.shape[0])
+    for frame_idx, cur_xy in enumerate(frame_positions_pix):
+        img = base.copy()
+        draw = ImageDraw.Draw(img)
+        t = 0.0 if n_frames == 1 else frame_idx * (len(path_centers) - 1) / (n_frames - 1)
+        k = int(np.floor(t))
+        cur = (float(cur_xy[0]), float(cur_xy[1]))
+        points = path_centers[: max(1, k + 1)]
+        if not points or points[-1] != cur:
+            points = points + [cur]
+        if len(points) >= 2:
+            draw.line(points, fill=line_color, width=line_width, joint="curve")
+
+        sx, sy = path_centers[0]
+        draw.ellipse(
+            [sx - start_radius, sy - start_radius, sx + start_radius, sy + start_radius],
+            fill=line_color,
+        )
+        frames.append(np.asarray(img, dtype=np.uint8))
+
+    return np.stack(frames, axis=0)
+
+
+def render_video_from_metadata(maze: dict[str, Any]) -> np.ndarray:
+    """Reconstruct the RGB video frames from the JSON ``maze`` metadata blob."""
+    palette_blob = maze["palette"]
+    palette = MazePalette(
+        wall_rgb=tuple(palette_blob["wall_rgb"]),
+        passage_rgb=tuple(palette_blob["passage_rgb"]),
+        ball_rgb=tuple(palette_blob["ball_rgb"]),
+        goal_rgb=tuple(palette_blob["goal_rgb"]),
+        wall_name=palette_blob["wall_name"],
+        passage_name=palette_blob["passage_name"],
+        ball_name=palette_blob["ball_name"],
+        goal_name=palette_blob["goal_name"],
+    )
+    grid = np.asarray(maze["grid"], dtype=np.uint8)
+    frame_positions_pix = np.asarray(maze["frame_positions_pix"], dtype=np.float32)
+    goal = tuple(int(x) for x in maze["goal"])
+    path = [tuple(int(x) for x in p) for p in maze["path"]]
+    cell_px = int(maze["cell_px"])
+    render_mode = normalize_render_mode(maze.get("render_mode", RENDER_MODE_MOVING_BALL))
+    render_metadata = maze.get("render_metadata") or {}
+
+    if render_mode == RENDER_MODE_MOVING_BALL:
+        return render_video(grid, frame_positions_pix, goal, palette, cell_px)
+
+    if render_mode == RENDER_MODE_GROWING_PATH_LINE:
+        return render_path_line_video(
+            grid,
+            frame_positions_pix,
+            path,
+            goal,
+            palette,
+            cell_px,
+            line_rgb=tuple(render_metadata.get("line_rgb", palette.ball_rgb)),
+            line_width_px=int(render_metadata.get("line_width_px", _path_line_width(cell_px))),
+            start_cap_radius_px=int(render_metadata.get("start_cap_radius_px", _path_start_cap_radius(cell_px))),
+            goal_marker_half_extent_px=float(
+                render_metadata.get("goal_marker_half_extent_px", _goal_marker_half_extent(cell_px))
+            ),
+        )
+
+    raise AssertionError(f"Unhandled render mode: {render_mode}")
 
 
 # ---------------------------------------------------------------------------
@@ -684,9 +855,26 @@ PROMPT_TEMPLATES: tuple[str, ...] = (
     "{wall} corridors to reach the {goal} target at the far corner.",
 )
 
+LINE_PROMPT_TEMPLATES: tuple[str, ...] = (
+    "A {ball} path line is drawn through a {difficulty} {wall} maze to the {goal} goal.",
+    "Top-down view of a {difficulty} {passage} maze with {wall} walls; a {ball} line traces the path to the {goal} exit.",
+    "A {ball} solution line grows step-by-step through a {difficulty} grid maze toward the {goal} target.",
+)
+
 
 def build_prompt(palette: MazePalette, difficulty: MazeDifficulty, rng: np.random.Generator) -> str:
     tpl = PROMPT_TEMPLATES[int(rng.integers(0, len(PROMPT_TEMPLATES)))]
+    return tpl.format(
+        ball=palette.ball_name,
+        wall=palette.wall_name,
+        passage=palette.passage_name,
+        goal=palette.goal_name,
+        difficulty=difficulty.prompt_adjective,
+    )
+
+
+def build_line_prompt(palette: MazePalette, difficulty: MazeDifficulty, rng: np.random.Generator) -> str:
+    tpl = LINE_PROMPT_TEMPLATES[int(rng.integers(0, len(LINE_PROMPT_TEMPLATES)))]
     return tpl.format(
         ball=palette.ball_name,
         wall=palette.wall_name,
@@ -713,6 +901,7 @@ class MazeSpec(BaseModel):
     num_frames: int = Field(ge=2)
     palettes: list[MazePalette] = Field(default_factory=lambda: list(DEFAULT_PALETTES))
     difficulty_names: tuple[str, ...] = ("easy", "mid", "hard", "xhard")
+    render_mode: str = RENDER_MODE_MOVING_BALL
     max_generation_attempts: int = Field(default=64, ge=1)
     max_search_steps: int = Field(default=250_000, ge=1)
 
@@ -746,6 +935,8 @@ class MazeSample(BaseModel):
     num_frames: int
     frame_positions_cell: list[tuple[float, float]]  # per-frame (i, j) in cell coords
     frame_positions_pix: list[tuple[float, float]]  # per-frame (x, y) in pixels
+    render_mode: str = RENDER_MODE_MOVING_BALL
+    render_metadata: dict[str, Any] = Field(default_factory=dict)
 
     # Difficulty + generation metadata
     difficulty: str
@@ -792,8 +983,48 @@ def build_maze_sample(
 
     palette = spec.palettes[int(rng.integers(0, len(spec.palettes)))]
 
-    video = render_video(grid, fp_pix, goal, palette, spec.cell_px)
-    prompt = build_prompt(palette, difficulty, rng)
+    render_mode = normalize_render_mode(spec.render_mode)
+    if render_mode == RENDER_MODE_MOVING_BALL:
+        video = render_video(grid, fp_pix, goal, palette, spec.cell_px)
+        prompt = build_prompt(palette, difficulty, rng)
+        render_metadata = {
+            "renderer_version": 1,
+            "mode": render_mode,
+            "ball_rgb": list(palette.ball_rgb),
+            "ball_radius_px": _moving_ball_radius(spec.cell_px),
+            "goal_rgb": list(palette.goal_rgb),
+            "goal_marker_shape": "square",
+            "goal_marker_half_extent_px": _goal_marker_half_extent(spec.cell_px),
+        }
+    elif render_mode == RENDER_MODE_GROWING_PATH_LINE:
+        line_width_px = _path_line_width(spec.cell_px)
+        start_cap_radius_px = _path_start_cap_radius(spec.cell_px)
+        goal_marker_half_extent_px = _goal_marker_half_extent(spec.cell_px)
+        video = render_path_line_video(
+            grid,
+            fp_pix,
+            path,
+            goal,
+            palette,
+            spec.cell_px,
+            line_width_px=line_width_px,
+            start_cap_radius_px=start_cap_radius_px,
+            goal_marker_half_extent_px=goal_marker_half_extent_px,
+        )
+        prompt = build_line_prompt(palette, difficulty, rng)
+        render_metadata = {
+            "renderer_version": 1,
+            "mode": render_mode,
+            "line_rgb": list(palette.ball_rgb),
+            "line_width_px": line_width_px,
+            "start_cap_shape": "circle",
+            "start_cap_radius_px": start_cap_radius_px,
+            "goal_rgb": list(palette.goal_rgb),
+            "goal_marker_shape": "square",
+            "goal_marker_half_extent_px": goal_marker_half_extent_px,
+        }
+    else:
+        raise AssertionError(f"Unhandled render mode: {render_mode}")
 
     img_h, img_w = video.shape[1], video.shape[2]
     sample = MazeSample(
@@ -814,6 +1045,8 @@ def build_maze_sample(
         num_frames=spec.num_frames,
         frame_positions_cell=[tuple(row) for row in fp_cell.tolist()],
         frame_positions_pix=[tuple(row) for row in fp_pix.tolist()],
+        render_mode=render_mode,
+        render_metadata=render_metadata,
         difficulty=difficulty.name,
         difficulty_id=difficulty.id,
         generation=generation,

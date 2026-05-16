@@ -1,0 +1,52 @@
+trainer: dancegrpo
+model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
+
+latent_webdataset_dir: data/vbvr/latents/splits/rl_supported_smoke
+dataset_size: 8
+num_workers: 0
+persistent_workers: false
+prefetch_factor: 2
+
+output_dir: storage/checkpoints/dancegrpo_vbvr_rule_kl_smoke_8gpu
+# The full config resumes from SFT. The smoke run skips the 426G DCP restore;
+# the interrupted first smoke already verified high/low SFT restore succeeds.
+resume_from: null
+reset_dataloader: true
+auto_resume: false
+
+batch_size: 1
+gradient_accumulation_steps: 1
+num_epochs: 1
+learning_rate: 1.0e-5
+weight_decay: 0.01
+max_grad_norm: 1.0
+warmup_steps: 1
+save_steps: 0
+log_steps: 1
+seed: 42
+ema_decay: 0.0
+
+expert_parallel: false
+train_experts: both
+lora_rank: 32
+
+# Small values keep the smoke test cheap while still exercising sampling,
+# VBVR rule reward, KL reference forward, policy loss, backward, and optimizer.
+grpo_group_size: 2
+grpo_sample_batch_size: 1
+grpo_num_sampling_steps: 2
+grpo_clip_range: 1.0e-4
+grpo_kl_coeff: 0.004
+grpo_reward_fn: vbvr_rule
+grpo_sde_noise_scale: 0.3
+grpo_cfg_scale: 1.0
+dancegrpo_share_group_init_noise: true
+dancegrpo_timestep_selection_ratio: 1.0
+
+vbvr_reward_device: cpu
+vbvr_reward_fps: 16
+vbvr_reward_decode_batch_size: 1
+vbvr_reward_task_specific_only: true
+vbvr_reward_tmp_dir: storage/tmp/vbvr_rule_reward_smoke
+vbvr_reward_keep_tmp: false
+vbvr_reward_unsupported_score: 0.0

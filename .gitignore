@@ -214,3 +214,5 @@ wandb/
 eval_out/
 
 logs/
+
+tmp/

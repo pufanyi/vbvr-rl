@@ -14,7 +14,7 @@ read via ``self.cfg``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import torch
 
@@ -52,6 +52,6 @@ class BaseReward:
         *,
         indices: torch.Tensor | None = None,
         expert_filter: str | None = None,
-        meta: dict[str, torch.Tensor] | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> torch.Tensor:
         raise NotImplementedError

@@ -61,6 +61,7 @@ from src.precompute.maze_generator import (
     MazeSample,
     MazeSpec,
     build_maze_sample,
+    normalize_render_mode,
 )
 
 # ---------------------------------------------------------------------------
@@ -93,6 +94,8 @@ class GenConfig(BaseModel):
     cell_px: int = Field(default=12, ge=4)  # image H/W = (2 * rooms) * cell_px
     num_frames: int = Field(default=81, ge=2)
     difficulty_names: str = "easy,mid,hard,xhard"
+    difficulty_geometries: str | None = None
+    render_mode: str = "moving_ball"
     max_generation_attempts: int = Field(default=512, ge=1)
     max_search_steps: int = Field(default=250_000, ge=1)
 
@@ -111,15 +114,25 @@ class GenConfig(BaseModel):
     preview_fps: int = Field(default=16, ge=1)
     dry_run: bool = False
 
-    def maze_spec(self) -> MazeSpec:
-        difficulty_names = tuple(name.strip() for name in self.difficulty_names.split(",") if name.strip())
+    def difficulty_tuple(self) -> tuple[str, ...]:
+        return tuple(name.strip() for name in self.difficulty_names.split(",") if name.strip())
+
+    def maze_spec(
+        self,
+        *,
+        difficulty_names: tuple[str, ...] | None = None,
+        cell_h: int | None = None,
+        cell_w: int | None = None,
+        cell_px: int | None = None,
+    ) -> MazeSpec:
         return MazeSpec(
-            cell_h=self.cell_h,
-            cell_w=self.cell_w,
-            cell_px=self.cell_px,
+            cell_h=self.cell_h if cell_h is None else cell_h,
+            cell_w=self.cell_w if cell_w is None else cell_w,
+            cell_px=self.cell_px if cell_px is None else cell_px,
             num_frames=self.num_frames,
             palettes=list(DEFAULT_PALETTES),
-            difficulty_names=difficulty_names,
+            difficulty_names=self.difficulty_tuple() if difficulty_names is None else difficulty_names,
+            render_mode=normalize_render_mode(self.render_mode),
             max_generation_attempts=self.max_generation_attempts,
             max_search_steps=self.max_search_steps,
         )
@@ -178,17 +191,105 @@ def _init_distributed() -> None:
 
 
 _SPATIAL_DIVISOR = 8  # Wan2.2 VAE scale_factor_spatial
+_TEMPORAL_GROUP_SIZE = 4  # Wan2.2 first-frame condition expects 4k+1 frames.
 
 
-def _validate_resolution(cfg: GenConfig) -> tuple[int, int]:
-    h = 2 * cfg.cell_h * cfg.cell_px
-    w = 2 * cfg.cell_w * cfg.cell_px
+def _validate_hw(cell_h: int, cell_w: int, cell_px: int) -> tuple[int, int]:
+    h = 2 * cell_h * cell_px
+    w = 2 * cell_w * cell_px
     if h % _SPATIAL_DIVISOR != 0 or w % _SPATIAL_DIVISOR != 0:
         raise ValueError(
             f"Maze image resolution {h}x{w} must be divisible by {_SPATIAL_DIVISOR}. "
             f"Pick cell_px / cell counts that satisfy 2*cells*cell_px % 8 == 0."
         )
     return h, w
+
+
+def _validate_num_frames(num_frames: int) -> None:
+    if (num_frames - 1) % _TEMPORAL_GROUP_SIZE != 0:
+        nearest = ((num_frames - 1 + _TEMPORAL_GROUP_SIZE - 1) // _TEMPORAL_GROUP_SIZE) * _TEMPORAL_GROUP_SIZE + 1
+        raise ValueError(
+            f"Wan2.2 first-frame conditioning requires num_frames = 4k + 1; got {num_frames}. "
+            f"Use {nearest} for the next valid frame count."
+        )
+
+
+def _parse_difficulty_geometries(raw: str | None) -> dict[str, tuple[int, int, int]]:
+    """Parse ``easy:8x8x24,mid:12x12x16`` into per-difficulty geometry."""
+    if raw is None or not raw.strip():
+        return {}
+
+    out: dict[str, tuple[int, int, int]] = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError(
+                "--difficulty_geometries entries must look like name:cell_hxcell_wxcell_px; "
+                f"got {item!r}"
+            )
+        name, spec = item.split(":", 1)
+        parts = [p for p in spec.lower().replace("x", ",").split(",") if p]
+        if len(parts) != 3:
+            raise ValueError(
+                "--difficulty_geometries entries must provide three integers "
+                f"(cell_h, cell_w, cell_px); got {item!r}"
+            )
+        cell_h, cell_w, cell_px = (int(p) for p in parts)
+        if cell_h < 2 or cell_w < 2 or cell_px < 4:
+            raise ValueError(f"Invalid geometry for {name!r}: {item!r}")
+        out[name.strip()] = (cell_h, cell_w, cell_px)
+    return out
+
+
+def _build_maze_specs(cfg: GenConfig) -> tuple[dict[str, MazeSpec], tuple[int, int], dict[str, tuple[int, int, int]]]:
+    """Build either one default spec or per-difficulty specs with shared output H/W."""
+    normalize_render_mode(cfg.render_mode)
+    _validate_num_frames(cfg.num_frames)
+    difficulty_names = cfg.difficulty_tuple()
+    if not difficulty_names:
+        raise ValueError("--difficulty_names must contain at least one difficulty")
+
+    geometry_map = _parse_difficulty_geometries(cfg.difficulty_geometries)
+    if not geometry_map:
+        height, width = _validate_hw(cfg.cell_h, cfg.cell_w, cfg.cell_px)
+        return {"__default__": cfg.maze_spec()}, (height, width), {}
+
+    missing = [name for name in difficulty_names if name not in geometry_map]
+    if missing:
+        raise ValueError(
+            "--difficulty_geometries must include every requested difficulty; "
+            f"missing {missing!r}"
+        )
+    extra = sorted(set(geometry_map) - set(difficulty_names))
+    if extra:
+        raise ValueError(
+            "--difficulty_geometries contains names not present in --difficulty_names: "
+            f"{extra!r}"
+        )
+
+    specs: dict[str, MazeSpec] = {}
+    image_hw: tuple[int, int] | None = None
+    for name in difficulty_names:
+        cell_h, cell_w, cell_px = geometry_map[name]
+        hw = _validate_hw(cell_h, cell_w, cell_px)
+        if image_hw is None:
+            image_hw = hw
+        elif hw != image_hw:
+            raise ValueError(
+                "All per-difficulty geometries must render to the same image size for batched VAE encoding; "
+                f"{name} gives {hw}, expected {image_hw}"
+            )
+        specs[name] = cfg.maze_spec(
+            difficulty_names=(name,),
+            cell_h=cell_h,
+            cell_w=cell_w,
+            cell_px=cell_px,
+        )
+
+    assert image_hw is not None
+    return specs, image_hw, geometry_map
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +418,7 @@ def _sample_to_reward_tensors(sample: MazeSample) -> dict[str, torch.Tensor]:
     available in the JSON blob if needed offline.  Fixed-shape tensors only
     in the safetensors pass-through.
     """
+    render_mode_id = 1 if sample.render_mode == "growing_path_line" else 0
     return {
         "maze_grid": torch.tensor(sample.grid, dtype=torch.int8),
         "maze_frame_positions_cell": torch.tensor(sample.frame_positions_cell, dtype=torch.float32),
@@ -334,6 +436,7 @@ def _sample_to_reward_tensors(sample: MazeSample) -> dict[str, torch.Tensor]:
             sample.generation["sample_seed"] if sample.generation.get("sample_seed") is not None else -1,
             dtype=torch.int64,
         ),
+        "maze_render_mode_id": torch.tensor(render_mode_id, dtype=torch.int16),
         "maze_ball_rgb": torch.tensor(sample.palette.ball_rgb, dtype=torch.uint8),
         "maze_goal_rgb": torch.tensor(sample.palette.goal_rgb, dtype=torch.uint8),
         "maze_wall_rgb": torch.tensor(sample.palette.wall_rgb, dtype=torch.uint8),
@@ -343,12 +446,19 @@ def _sample_to_reward_tensors(sample: MazeSample) -> dict[str, torch.Tensor]:
     }
 
 
-def _sample_to_json_blob(sample: MazeSample) -> dict:
+def _sample_to_json_blob(sample: MazeSample, *, fps: int | None = None) -> dict:
     """JSON-friendly maze record — everything human-readable for offline use."""
     return {
+        "metadata_schema_version": 2,
+        "reconstruction": {
+            "python_function": "src.precompute.maze_generator.render_video_from_metadata",
+            "note": "This maze blob contains the grid, path, per-frame positions, palette, geometry, and render settings needed to reconstruct the RGB video frames.",
+        },
         "generation": sample.generation,
         "difficulty": sample.difficulty,
         "difficulty_id": sample.difficulty_id,
+        "render_mode": sample.render_mode,
+        "render_metadata": sample.render_metadata,
         "grid_h": sample.grid_h,
         "grid_w": sample.grid_w,
         "cell_h": sample.cell_h,
@@ -357,6 +467,7 @@ def _sample_to_json_blob(sample: MazeSample) -> dict:
         "image_h": sample.image_h,
         "image_w": sample.image_w,
         "num_frames": sample.num_frames,
+        "fps": fps,
         "start": list(sample.start),
         "goal": list(sample.goal),
         "path_len": sample.path_len,
@@ -445,15 +556,22 @@ def _shard_plan(cfg: GenConfig) -> tuple[list[ShardPlanEntry], dict[str, int]]:
 
 def _generate_shard_samples(
     cfg: GenConfig,
-    spec: MazeSpec,
+    specs: dict[str, MazeSpec],
     sample_gids: list[int],
     split_name: str,
 ) -> list[tuple[np.ndarray, MazeSample, int]]:
     """CPU-only: synthesise ``count`` maze samples with deterministic seeds."""
     out = []
+    difficulty_names = cfg.difficulty_tuple()
     for gid in sample_gids:
         sample_seed = cfg.seed + gid
         rng = np.random.default_rng(sample_seed)
+        if "__default__" in specs:
+            spec = specs["__default__"]
+        else:
+            difficulty_rng = np.random.default_rng(sample_seed)
+            difficulty_name = difficulty_names[int(difficulty_rng.integers(0, len(difficulty_names)))]
+            spec = specs[difficulty_name]
         video, sample = build_maze_sample(spec, rng, sample_seed=sample_seed)
         _write_preview_video(cfg, gid, split_name, video, sample)
         out.append((video, sample, gid))
@@ -486,7 +604,7 @@ def _write_preview_video(
             "global_index": gid,
             "split": split_name,
             "prompt": sample.prompt,
-            "maze": _sample_to_json_blob(sample),
+            "maze": _sample_to_json_blob(sample, fps=cfg.preview_fps),
         }
         meta_path.write_text(json.dumps(meta, indent=2) + "\n")
 
@@ -550,6 +668,7 @@ def _write_encoded_samples(
         st_bytes = st_save(st_tensors)
 
         meta = {
+            "metadata_schema_version": 2,
             "prompt": sample.prompt,
             "tar": cfg.tar_tag,
             "index_in_tar": gid,
@@ -557,7 +676,8 @@ def _write_encoded_samples(
             "split": split_name,
             "split_index": split_offset + local_start + local_idx,
             "seq_len": int(prompt_embeds.shape[0]),
-            "maze": _sample_to_json_blob(sample),
+            "render_mode": sample.render_mode,
+            "maze": _sample_to_json_blob(sample, fps=cfg.preview_fps),
         }
         meta_bytes = json.dumps(meta).encode()
 
@@ -567,7 +687,7 @@ def _write_encoded_samples(
 
 def _write_shard(
     cfg: GenConfig,
-    spec: MazeSpec,
+    specs: dict[str, MazeSpec],
     split_name: str,
     shard_id: int,
     sample_gids: list[int],
@@ -592,7 +712,7 @@ def _write_shard(
         with tarfile.open(local_tmp, "w") as tar:
             for local_start in range(0, len(sample_gids), cfg.shard_write_batch_size):
                 chunk_gids = sample_gids[local_start : local_start + cfg.shard_write_batch_size]
-                samples = _generate_shard_samples(cfg, spec, chunk_gids, split_name)
+                samples = _generate_shard_samples(cfg, specs, chunk_gids, split_name)
                 encoded = _encode_shard(cfg, samples, vae_bundle, text_bundle, device, height, width)
                 _write_encoded_samples(cfg, tar, split_name, encoded, split_offset, local_start)
                 del samples, encoded
@@ -640,8 +760,7 @@ def main() -> None:
     if preview_dir is not None:
         preview_dir.mkdir(parents=True, exist_ok=True)
 
-    height, width = _validate_resolution(cfg)
-    spec = cfg.maze_spec()
+    specs, (height, width), geometry_map = _build_maze_specs(cfg)
     plan, split_counts = _shard_plan(cfg)
     if cfg.only_split:
         only_split = cfg.only_split.strip()
@@ -653,16 +772,18 @@ def main() -> None:
 
     if rank == 0:
         logger.info(
-            "Maze gen: {} samples @ {}x{} px, {} frames, grid {}x{}, cell_px {}",
+            "Maze gen: {} samples @ {}x{} px, {} frames, render_mode={}",
             cfg.num_samples,
             height,
             width,
             cfg.num_frames,
-            cfg.cell_h,
-            cfg.cell_w,
-            cfg.cell_px,
+            normalize_render_mode(cfg.render_mode),
         )
-        logger.info("Difficulties sampled uniformly from: {}", spec.difficulty_names)
+        if geometry_map:
+            logger.info("Per-difficulty geometries: {}", geometry_map)
+        else:
+            logger.info("Geometry: grid {}x{}, cell_px {}", cfg.cell_h, cfg.cell_w, cfg.cell_px)
+        logger.info("Difficulties sampled uniformly from: {}", cfg.difficulty_tuple())
         logger.info("Split counts: {}", split_counts)
         if preview_dir is not None:
             logger.info("Preview videos: first {} global samples -> {}", cfg.num_preview_videos, preview_dir)
@@ -691,7 +812,7 @@ def main() -> None:
     for split_name, shard_output_dir, shard_id, sample_gids, split_offset in my_shards:
         _write_shard(
             cfg,
-            spec,
+            specs,
             split_name,
             shard_id,
             sample_gids,
@@ -726,11 +847,16 @@ def main() -> None:
             "image_h": height,
             "image_w": width,
             "num_frames": cfg.num_frames,
+            "render_mode": normalize_render_mode(cfg.render_mode),
             "cell_h": cfg.cell_h,
             "cell_w": cfg.cell_w,
             "cell_px": cfg.cell_px,
-            "difficulty_names": list(spec.difficulty_names),
-            "difficulty_recipes": [d.model_dump() for d in DEFAULT_DIFFICULTIES if d.name in spec.difficulty_names],
+            "difficulty_names": list(cfg.difficulty_tuple()),
+            "difficulty_geometries": {
+                name: {"cell_h": values[0], "cell_w": values[1], "cell_px": values[2]}
+                for name, values in geometry_map.items()
+            },
+            "difficulty_recipes": [d.model_dump() for d in DEFAULT_DIFFICULTIES if d.name in cfg.difficulty_tuple()],
             "seed": cfg.seed,
             "split_seed": cfg.seed if cfg.split_seed is None else cfg.split_seed,
             "preview_dir": str(preview_dir) if preview_dir is not None else None,

@@ -8,6 +8,7 @@ computation, and the outer training loop.  Concrete subclasses implement
 import time
 from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -20,14 +21,22 @@ from src.trainer.rewards import build_reward
 from src.trainer.utils import cosine_lr, format_eta, shard_transformer, to_model_pixels
 
 
-def _repeat_meta(meta: dict[str, torch.Tensor], cur_S: int) -> dict[str, torch.Tensor]:
-    """Interleave-replicate every per-sample tensor to match a chunk's group size.
+def _repeat_meta(meta: dict[str, Any], cur_S: int) -> dict[str, Any]:
+    """Interleave-replicate every per-sample metadata field to match a chunk's group size.
 
     Mirrors the ``condition.repeat_interleave(cur_S, dim=0)`` pattern used on
     the training inputs so reward functions see per-sample metadata aligned
     with the flattened ``(B, cur_S)`` rollout batch.
     """
-    return {k: v.repeat_interleave(cur_S, dim=0) for k, v in meta.items()}
+    repeated: dict[str, Any] = {}
+    for k, v in meta.items():
+        if isinstance(v, torch.Tensor):
+            repeated[k] = v.repeat_interleave(cur_S, dim=0)
+        elif isinstance(v, list):
+            repeated[k] = [item for item in v for _ in range(cur_S)]
+        else:
+            repeated[k] = v
+    return repeated
 
 
 class BaseGRPOTrainer(BaseRLTrainer):
@@ -201,7 +210,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
 
     def _encode_batch_inputs(
         self, batch: dict
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
         """Encode one GRPO batch, supporting both raw and precomputed paths.
 
         Returns ``(prompt_embeds, gt_video_latents, condition, meta)`` where
@@ -224,12 +233,14 @@ class BaseGRPOTrainer(BaseRLTrainer):
             gt_video_latents = self.model.encode_video(video)
             condition = self.model.prepare_condition(image, video.shape[2], video.shape[-2], video.shape[-1])
 
-        meta: dict[str, torch.Tensor] = {}
+        meta: dict[str, Any] = {}
         for key, value in batch.items():
             if key in self._CORE_BATCH_KEYS:
                 continue
             if isinstance(value, torch.Tensor):
                 meta[key] = value.to(self.device)
+            else:
+                meta[key] = value
         return prompt_embeds, gt_video_latents, condition, meta
 
     # ------------------------------------------------------------------
