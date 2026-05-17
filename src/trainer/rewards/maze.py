@@ -46,6 +46,37 @@ _REQUIRED_META_KEYS = (
 )
 
 
+def _as_batched_tensor(
+    value: torch.Tensor | list[torch.Tensor],
+    *,
+    device: torch.device,
+    pad_value: int | float = 0,
+) -> torch.Tensor:
+    """Move a collated tensor/list to device, padding variable-shape metadata."""
+    if isinstance(value, torch.Tensor):
+        return value.to(device)
+    if not value:
+        raise RuntimeError("MazeReward received empty metadata list")
+    if not all(isinstance(item, torch.Tensor) for item in value):
+        raise TypeError(f"MazeReward metadata must be tensors, got {type(value[0]).__name__}")
+
+    first_shape = tuple(value[0].shape)
+    if all(tuple(item.shape) == first_shape for item in value):
+        return torch.stack(value).to(device)
+
+    ndim = value[0].ndim
+    if any(item.ndim != ndim for item in value):
+        shapes = [tuple(item.shape) for item in value]
+        raise RuntimeError(f"MazeReward cannot pad metadata tensors with different ranks: {shapes}")
+
+    max_shape = tuple(max(item.shape[dim] for item in value) for dim in range(ndim))
+    out = value[0].new_full((len(value), *max_shape), pad_value)
+    for idx, item in enumerate(value):
+        slices = (idx, *[slice(0, size) for size in item.shape])
+        out[slices] = item
+    return out.to(device)
+
+
 @register_reward("maze")
 class MazeReward(BaseReward):
     """Pixel-space maze reward (V1): trajectory + on-path + goal components."""
@@ -77,12 +108,12 @@ class MazeReward(BaseReward):
         self._check_meta(meta)
         assert meta is not None  # narrow for type checker
 
-        fp_pix = meta["maze_frame_positions_pix"].to(device).float()  # (B, T, 2) — (x, y)
-        grid = meta["maze_grid"].to(device).long()  # (B, Hg, Wg) — 1 wall, 0 passage
-        goal_ij = meta["maze_goal"].to(device).long()  # (B, 2) — (i, j)
-        ball_rgb = meta["maze_ball_rgb"].to(device).float()  # (B, 3) in [0, 255]
-        cell_px = meta["maze_cell_px"].to(device).long()  # (B,)
-        image_hw = meta["maze_image_hw"].to(device).float()  # (B, 2) — (H, W)
+        fp_pix = _as_batched_tensor(meta["maze_frame_positions_pix"], device=device).float()  # (B, T, 2) — (x, y)
+        grid = _as_batched_tensor(meta["maze_grid"], device=device, pad_value=1).long()  # (B, Hg, Wg)
+        goal_ij = _as_batched_tensor(meta["maze_goal"], device=device).long()  # (B, 2) — (i, j)
+        ball_rgb = _as_batched_tensor(meta["maze_ball_rgb"], device=device).float()  # (B, 3) in [0, 255]
+        cell_px = _as_batched_tensor(meta["maze_cell_px"], device=device).long()  # (B,)
+        image_hw = _as_batched_tensor(meta["maze_image_hw"], device=device).float()  # (B, 2) — (H, W)
 
         # ---- 1. Decode latents to pixel space ----
         pixel_video = self.trainer.model.decode_latents(generated_latents)

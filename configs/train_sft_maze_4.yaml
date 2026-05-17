@@ -2,9 +2,9 @@ trainer: i2v
 model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
 latent_webdataset_dir: data/maze/latents/maze_384x384x161_line_v1/webdataset/sft
 dataset_size: 80000
-output_dir: storage/checkpoints/sft_maze_3
+output_dir: storage/checkpoints/sft_maze_4
 
-batch_size: 4
+batch_size: 2
 gradient_accumulation_steps: 1
 num_epochs: 4
 learning_rate: 5.0e-6

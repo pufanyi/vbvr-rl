@@ -476,13 +476,20 @@ class BaseGRPOTrainer(BaseRLTrainer):
         start_batch_idx = self.train_state.batch_idx
         train_start_time = time.monotonic()
         train_start_step = global_step
+        stop_training = False
 
         for epoch in range(start_epoch, cfg.num_epochs):
             if self.sampler is not None:
                 self.sampler.set_epoch(epoch)
 
             enum_start = start_batch_idx if epoch == start_epoch else 0
+            last_batch_idx = enum_start - 1
             for batch_idx, batch in enumerate(self.dataloader, start=enum_start):
+                last_batch_idx = batch_idx
+                if cfg.max_steps is not None and global_step >= cfg.max_steps:
+                    stop_training = True
+                    break
+
                 metrics = self._grpo_step(batch)
 
                 self._all_reduce_gradients()
@@ -536,7 +543,12 @@ class BaseGRPOTrainer(BaseRLTrainer):
                         batches = len(self.dataloader)
                     elif cfg.dataset_size is not None:
                         dp = self.dp_size if self._expert_parallel_duplicates_data(cfg) else self.world_size
-                        batches = cfg.dataset_size // (dp * cfg.batch_size)
+                        dataset_size = (
+                            self._effective_dataset_size
+                            if getattr(self, "_effective_dataset_size", None) is not None
+                            else cfg.dataset_size
+                        )
+                        batches = dataset_size // (dp * cfg.batch_size)
                     else:
                         batches = None
                     fractional_epoch = epoch + (batch_idx + 1) / batches if batches else float(epoch)
@@ -633,10 +645,24 @@ class BaseGRPOTrainer(BaseRLTrainer):
                     self.train_state.batch_idx = batch_idx + 1
                     self._save_checkpoint(output_dir / f"checkpoint-{global_step}")
 
+                if cfg.max_steps is not None and global_step >= cfg.max_steps:
+                    stop_training = True
+                    break
+
+            if stop_training:
+                self.train_state.step = global_step
+                self.train_state.epoch = epoch
+                self.train_state.batch_idx = max(last_batch_idx + 1, 0)
+                if cfg.save_epoch_checkpoints:
+                    self._save_checkpoint(output_dir / f"checkpoint-{global_step}")
+                logger.info("Reached max_steps={} at step={}.", cfg.max_steps, global_step)
+                break
+
             self.train_state.step = global_step
             self.train_state.epoch = epoch + 1
             self.train_state.batch_idx = 0
-            self._save_checkpoint(output_dir / f"checkpoint-epoch{epoch}")
+            if cfg.save_epoch_checkpoints:
+                self._save_checkpoint(output_dir / f"checkpoint-epoch{epoch}")
             logger.info("Epoch {} done.", epoch)
 
         if self.use_wandb:

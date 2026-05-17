@@ -8,6 +8,7 @@ To add a new reward:
 """
 
 from src.trainer.rewards import maze as _maze  # noqa: F401  — register side-effect
+from src.trainer.rewards import maze_line as _maze_line  # noqa: F401  — register side-effect
 from src.trainer.rewards import neg_loss as _neg_loss  # noqa: F401  — register side-effect
 from src.trainer.rewards import vbvr_rule as _vbvr_rule  # noqa: F401  — register side-effect
 from src.trainer.rewards.base import BaseReward

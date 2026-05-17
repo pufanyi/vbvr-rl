@@ -7,6 +7,14 @@ from loguru import logger
 from torch.distributed.fsdp import fully_shard
 
 
+def _collate_tensor_values(values: list[torch.Tensor]) -> torch.Tensor | list[torch.Tensor]:
+    """Stack tensors when possible; preserve variable-shape metadata as a list."""
+    first_shape = tuple(values[0].shape)
+    if all(tuple(value.shape) == first_shape for value in values):
+        return torch.stack(values)
+    return values
+
+
 def apply_liger_rms_norm(model: torch.nn.Module) -> int:
     """Replace all torch.nn.RMSNorm modules with LigerRMSNorm (fused Triton kernel)."""
     from liger_kernel.transformers import LigerRMSNorm
@@ -54,10 +62,10 @@ def collate(batch):
     sample = batch[0]
     for key, value in sample.items():
         if isinstance(value, torch.Tensor):
-            collated[key] = torch.stack([x[key] for x in batch])
+            collated[key] = _collate_tensor_values([x[key] for x in batch])
         elif isinstance(value, list) and value and isinstance(value[0], torch.Tensor):
             # List of tensors (e.g. videos): stack each position across the batch
-            collated[key] = [torch.stack([x[key][i] for x in batch]) for i in range(len(value))]
+            collated[key] = [_collate_tensor_values([x[key][i] for x in batch]) for i in range(len(value))]
         elif isinstance(value, str | int | float | bool):
             collated[key] = [x[key] for x in batch]
     if "prompt" in sample:

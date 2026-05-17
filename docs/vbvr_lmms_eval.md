@@ -15,6 +15,34 @@ VBVR sample, lmms-eval parses the generated video path, compares it against the
 VBVR ground-truth assets, and aggregates metrics such as `vbvr_overall`,
 `vbvr_in_domain`, `vbvr_out_of_domain`, and category scores.
 
+## One-Command Checkpoint Eval
+
+`scripts/eval/lmms_eval_checkpoint.fish` wraps conversion and evaluation for a
+single DCP checkpoint. It computes the same converted model path as
+`scripts/convert/dcp_to_diffusers.fish`, skips conversion when
+`model_index.json` already exists, and then calls `scripts/eval/lmms_eval.fish`
+with `MODEL_DIR` pointed at the converted Diffusers model.
+
+Example:
+
+```bash
+DATA_PARALLEL=4 \
+fish scripts/eval/lmms_eval_checkpoint.fish \
+  storage/checkpoints/sft_vbvr_fixed_1e-6/checkpoint-4000
+```
+
+Useful overrides:
+
+- `CONVERTED_ROOT`: where converted Diffusers models are written; defaults to
+  `storage/models/dcp_converted`.
+- `EVAL_OUTPUT_DIR`: lmms-eval output root; defaults to `storage/lmms_eval`.
+- `DATA_PARALLEL`: fastvideo data parallel worker count. If unset, the wrapper
+  uses the number of visible GPUs.
+- `DEVICE`, `BASE_MODEL`, `TORCH_DTYPE`, `MAX_SHARD_SIZE`, `USE_EMA`,
+  `MERGE_LORA`, and `SAFE_SERIALIZATION`: forwarded to the DCP converter.
+- `OVERWRITE=1`: remove an incomplete converted output directory and reconvert.
+- `DRY_RUN=1`: print the conversion and eval commands without running them.
+
 ## DCP to Diffusers Conversion
 
 `scripts/convert/dcp_to_diffusers.fish` should be run from the Wan-Trainer repo

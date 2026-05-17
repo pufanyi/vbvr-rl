@@ -172,6 +172,10 @@ class RLConfig(TrainConfig):
 
     hsdp: bool = True
 
+    # Smoke / bounded RL runs. Defaults preserve the normal epoch-based loop.
+    max_steps: int | None = None
+    save_epoch_checkpoints: bool = True
+
     # Trainer selection
     trainer: Literal["grpo", "dancegrpo"] = "grpo"
 
@@ -211,6 +215,18 @@ class RLConfig(TrainConfig):
     maze_reward_w_goal: float = 1.0
     # r_goal: 1 if end-frame ball is within this many cells of goal, else 0.
     maze_reward_goal_cells: float = 0.75
+
+    # ------------------------------------------------------------------
+    # Maze growing-line reward (grpo_reward_fn: "maze_line")
+    # ------------------------------------------------------------------
+    # Scores the generated red/yellow/blue/pink path-line mask against the GT
+    # decoded line mask, plus a simple "line reaches goal" term.
+    maze_line_reward_num_frames: int = 6
+    maze_line_reward_color_threshold: float = 90.0
+    maze_line_reward_color_temperature: float = 12.0
+    maze_line_reward_w_mask: float = 1.0
+    maze_line_reward_w_goal: float = 0.5
+    maze_line_reward_goal_cells: float = 1.0
 
     # ------------------------------------------------------------------
     # VBVR rule reward (grpo_reward_fn: "vbvr_rule")

@@ -1,0 +1,54 @@
+trainer: grpo
+model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
+
+latent_webdataset_dir: data/maze/latents/maze_384x384x161_line_v1/webdataset/rl
+dataset_size: 4
+
+output_dir: storage/checkpoints/grpo_maze_4_rl_smoke_8gpu
+resume_from: storage/checkpoints/sft_maze_4/checkpoint-2000
+reset_dataloader: true
+auto_resume: false
+
+batch_size: 1
+gradient_accumulation_steps: 1
+num_epochs: 1
+max_steps: 1
+save_steps: 0
+save_epoch_checkpoints: false
+learning_rate: 1.0e-5
+weight_decay: 0.01
+max_grad_norm: 1.0
+warmup_steps: 0
+log_steps: 1
+seed: 42
+ema_decay: 0.0
+transformer_load_dtype: bfloat16
+
+num_workers: 0
+persistent_workers: false
+prefetch_factor: 2
+
+expert_parallel: true
+expert_parallel_data_mode: duplicate
+hsdp: true
+train_experts: both
+lora_rank: 32
+lora_alpha: 32
+
+grpo_group_size: 2
+grpo_sample_batch_size: 1
+grpo_num_sampling_steps: 4
+grpo_clip_range: 1.0e-4
+grpo_kl_coeff: 0.0
+grpo_reward_fn: maze_line
+grpo_sde_noise_scale: 0.3
+grpo_cfg_scale: 1.0
+
+maze_line_reward_num_frames: 2
+maze_line_reward_color_threshold: 90.0
+maze_line_reward_color_temperature: 12.0
+maze_line_reward_w_mask: 1.0
+maze_line_reward_w_goal: 0.5
+maze_line_reward_goal_cells: 1.0
+
+wandb_project: null

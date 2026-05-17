@@ -22,6 +22,15 @@ from src.trainer.rewards.registry import register_reward
 _EVALKIT = Path(__file__).resolve().parents[3] / "third_party" / "VBVR-EvalKit"
 
 
+def evalkit_supported_task_names() -> frozenset[str]:
+    if str(_EVALKIT) not in sys.path:
+        sys.path.insert(0, str(_EVALKIT))
+
+    from vbvr_bench.evaluators import TASK_EVALUATOR_MAP
+
+    return frozenset(TASK_EVALUATOR_MAP)
+
+
 @register_reward("vbvr_rule")
 class VBVRRuleReward(BaseReward):
     """Reward = VBVR EvalKit task-specific rule score in [0, 1]."""
@@ -33,9 +42,9 @@ class VBVRRuleReward(BaseReward):
         if str(_EVALKIT) not in sys.path:
             sys.path.insert(0, str(_EVALKIT))
 
-        from vbvr_bench.evaluators import TASK_EVALUATOR_MAP, get_evaluator
+        from vbvr_bench.evaluators import get_evaluator
 
-        self._task_evaluator_map = TASK_EVALUATOR_MAP
+        self._task_evaluator_map = evalkit_supported_task_names()
         self._get_evalkit_evaluator = get_evaluator
         self._evaluators: dict[str, Any] = {}
         self._warned_unsupported: set[str] = set()
@@ -77,29 +86,33 @@ class VBVRRuleReward(BaseReward):
             dtype=torch.float32,
         )
         decode_bs = max(1, int(self.cfg.vbvr_reward_decode_batch_size))
+        task_names: list[str] = []
+        supported_indices: list[int] = []
+        for i in range(B):
+            task_name = self._task_name(meta, i)
+            task_names.append(task_name)
+            if self._is_supported(task_name):
+                supported_indices.append(i)
 
-        for start in range(0, B, decode_bs):
-            end = min(B, start + decode_bs)
+        for start in range(0, len(supported_indices), decode_bs):
+            batch_indices = supported_indices[start : start + decode_bs]
+            latent_indices = torch.as_tensor(batch_indices, device=device, dtype=torch.long)
             decoded = self.trainer.model.decode_latents(
                 torch.cat(
                     [
-                        generated_latents[start:end],
-                        gt_video_latents[start:end],
+                        generated_latents.index_select(0, latent_indices),
+                        gt_video_latents.index_select(0, latent_indices),
                     ],
                     dim=0,
                 )
             )
             videos = self._to_uint8_videos(decoded)
-            n = end - start
+            n = len(batch_indices)
             gen_videos = videos[:n]
             gt_videos = videos[n:]
 
-            for local_i in range(n):
-                i = start + local_i
-                task_name = self._task_name(meta, i)
-                if not self._is_supported(task_name):
-                    continue
-
+            for local_i, i in enumerate(batch_indices):
+                task_name = task_names[i]
                 prompt = self._meta_item(meta, "sample_prompt", i, default="")
                 score = self._score_video_pair(
                     task_name=task_name,

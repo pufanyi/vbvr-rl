@@ -27,6 +27,32 @@ _LATENTS_KEY_RE = re.compile(r"latents_(\d+)$")
 _RESERVED_TENSOR_KEYS = frozenset({"prompt_embeds", "condition", "latents"})
 
 
+def _json_metadata(sample: dict) -> dict | None:
+    metadata = sample.get("json")
+    if isinstance(metadata, (bytes, bytearray)):
+        try:
+            metadata = json.loads(metadata.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+    return metadata if isinstance(metadata, dict) else None
+
+
+def _task_name_from_metadata(metadata: dict | None) -> str:
+    if metadata is None:
+        return ""
+    if "task_name" in metadata:
+        return str(metadata["task_name"])
+    tar_name = metadata.get("tar", "")
+    return Path(str(tar_name)).stem if tar_name else ""
+
+
+def _task_allowed(sample: dict, allowed_task_names: frozenset[str] | None) -> bool:
+    if allowed_task_names is None:
+        return True
+    task_name = _task_name_from_metadata(_json_metadata(sample))
+    return task_name in allowed_task_names
+
+
 class _RankShardSplitter:
     """Split WebDataset shards with an explicit rank/world-size pair."""
 
@@ -71,12 +97,7 @@ def _decode_sample(sample: dict, max_text_len: int = 512) -> dict:
     if "__url__" in sample:
         decoded["sample_url"] = sample["__url__"]
 
-    metadata = sample.get("json")
-    if isinstance(metadata, (bytes, bytearray)):
-        try:
-            metadata = json.loads(metadata.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            metadata = None
+    metadata = _json_metadata(sample)
     if isinstance(metadata, dict):
         for key in ("tar", "index_in_tar", "seq_len", "prompt"):
             if key in metadata:
@@ -118,6 +139,8 @@ class VBVRLatentDataset(IterableDataset):
             epoch.  The cap is split across DataLoader workers so multi-worker
             loading does not multiply the effective epoch length.
         seed: Deterministic shard/sample shuffle seed.
+        allowed_task_names: If set, drop samples whose JSON metadata task name
+            is not in this allowlist before tensor decoding.
         node_rank: Explicit distributed rank for shard splitting.  Expert
             parallel duplicate mode passes the rank within an expert group so
             the high and low groups see the same shard stream.
@@ -131,6 +154,7 @@ class VBVRLatentDataset(IterableDataset):
         shuffle_buffer: int = 50000,
         epoch_length: int | None = None,
         seed: int | None = None,
+        allowed_task_names: set[str] | frozenset[str] | None = None,
         node_rank: int | None = None,
         node_world_size: int | None = None,
     ):
@@ -165,6 +189,10 @@ class VBVRLatentDataset(IterableDataset):
             seed=seed,
             empty_check=False,
         )
+        allowed_tasks = frozenset(allowed_task_names) if allowed_task_names is not None else None
+        if allowed_tasks is not None:
+            logger.info("VBVRLatentDataset: filtering to %d allowed task names", len(allowed_tasks))
+            pipeline = pipeline.select(lambda sample: _task_allowed(sample, allowed_tasks))
         if shuffle_buffer > 0:
             pipeline = pipeline.shuffle(shuffle_buffer, seed=seed)
         pipeline = pipeline.map(lambda s: _decode_sample(s, max_text_len))

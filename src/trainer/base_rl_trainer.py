@@ -8,6 +8,7 @@ architecture — without affecting SFT trainers.
 
 import os
 from datetime import timedelta
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
@@ -99,6 +100,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
             self._compile_modules(cfg)
 
         # ---- Dataset / DataLoader ----
+        self._effective_dataset_size = None
         self.dataset, self.sampler = self._build_dataset(cfg)
         self.dataloader = self._build_dataloader(self.dataset, cfg)
 
@@ -202,10 +204,15 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
 
     def _compute_total_steps(self) -> int:
         """Total optimizer steps. Override for different accumulation strategies."""
-        if self.cfg.dataset_size is not None:
+        dataset_size = self._effective_dataset_size if self._effective_dataset_size is not None else self.cfg.dataset_size
+        if dataset_size is not None:
             dp = self.dp_size if self._expert_parallel_duplicates_data(self.cfg) else self.world_size
-            return self.cfg.num_epochs * (self.cfg.dataset_size // (dp * self.cfg.batch_size))
-        return self.cfg.num_epochs * len(self.dataloader)
+            total = self.cfg.num_epochs * (dataset_size // (dp * self.cfg.batch_size))
+        else:
+            total = self.cfg.num_epochs * len(self.dataloader)
+        if self.cfg.max_steps is not None:
+            total = min(total, self.cfg.max_steps)
+        return total
 
     def train(self):
         """Main training loop. Must be implemented by subclass."""
@@ -311,7 +318,10 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
 
     def _create_device_mesh(self, cfg: RLConfig):
         if self.expert_parallel and cfg.hsdp:
-            local_size = int(os.environ.get("LOCAL_WORLD_SIZE", torch.cuda.device_count()))
+            local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", torch.cuda.device_count()))
+            # On a single node, both expert groups share the node, so each
+            # expert's shard group only owns half of LOCAL_WORLD_SIZE.
+            local_size = min(local_world_size, self.dp_size)
             assert self.dp_size % local_size == 0, (
                 f"dp_size ({self.dp_size}) must be divisible by local GPUs ({local_size})"
             )
@@ -477,10 +487,50 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
             epoch_length = None
             if cfg.dataset_size is not None:
                 epoch_length = cfg.dataset_size // data_world_size
+            allowed_task_names = None
+            if cfg.grpo_reward_fn == "vbvr_rule":
+                from src.trainer.rewards.vbvr_rule import evalkit_supported_task_names
+
+                allowed_task_names = evalkit_supported_task_names()
+                if self.rank == 0:
+                    logger.info(
+                        "Filtering VBVR RL dataset to {} EvalKit-supported tasks",
+                        len(allowed_task_names),
+                    )
+                if epoch_length is not None:
+                    source_task_dir = Path("data/vbvr/VBVR-Dataset/tars")
+                    source_task_names = {path.stem for path in source_task_dir.glob("*.tar")}
+                    dataset_appears_prefiltered = "supported" in str(Path(cfg.latent_webdataset_dir)).lower()
+                    if dataset_appears_prefiltered:
+                        if self.rank == 0:
+                            logger.info(
+                                "VBVR RL dataset path appears prefiltered; keeping configured epoch_length={}",
+                                epoch_length,
+                            )
+                    elif source_task_names:
+                        supported_source_tasks = source_task_names & allowed_task_names
+                        task_ratio = len(supported_source_tasks) / len(source_task_names)
+                        filtered_epoch_length = max(1, int(epoch_length * task_ratio))
+                        if self.rank == 0:
+                            logger.info(
+                                "VBVR RL dataset filter keeps {}/{} source tasks; epoch_length per data rank: {} -> {}",
+                                len(supported_source_tasks),
+                                len(source_task_names),
+                                epoch_length,
+                                filtered_epoch_length,
+                            )
+                        epoch_length = filtered_epoch_length
+                        self._effective_dataset_size = epoch_length * data_world_size
+                    elif self.rank == 0:
+                        logger.warning(
+                            "Could not find {}; VBVR task filtering is enabled but dataset_size is unchanged",
+                            source_task_dir,
+                        )
             dataset = VBVRLatentDataset(
                 cfg.latent_webdataset_dir,
                 epoch_length=epoch_length,
                 seed=data_seed,
+                allowed_task_names=allowed_task_names,
                 node_rank=data_rank,
                 node_world_size=data_world_size,
             )
