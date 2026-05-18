@@ -49,7 +49,8 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
 
         # ---- Distributed ----
         self._dist_timeout = timedelta(minutes=cfg.distributed_timeout_minutes)
-        dist.init_process_group("nccl", timeout=self._dist_timeout)
+        dist_backend = os.environ.get("TORCH_DISTRIBUTED_BACKEND", "nccl")
+        dist.init_process_group(dist_backend, timeout=self._dist_timeout)
         self.rank = dist.get_rank()
         self.world_size = dist.get_world_size()
         local_rank = int(os.environ.get("LOCAL_RANK", 0))

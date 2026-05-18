@@ -23,7 +23,10 @@ seed: 42
 ema_decay: 0.0
 transformer_load_dtype: bfloat16
 
-num_workers: 8
+# 64 GPUs would otherwise spawn 64 * num_workers loader processes. The RL step
+# is dominated by rollout/reward compute, so keep loader fan-out small to avoid
+# CPU/filesystem contention without changing the GRPO objective.
+num_workers: 1
 prefetch_factor: 2
 persistent_workers: true
 
