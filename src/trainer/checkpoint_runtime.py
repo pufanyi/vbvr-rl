@@ -44,13 +44,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
+import torch.distributed.checkpoint.state_dict as dcp_state_dict
+from torch.distributed._state_dict_utils import _TensorInfo, _distribute_tensors
 from loguru import logger
 from torch.distributed.checkpoint.state_dict import StateDictOptions, set_model_state_dict
 from torch.distributed.checkpoint.state_dict_saver import _save_state_dict, _stateful_to_state_dict
+from torch.distributed.tensor import DTensor
 
 from src.trainer.checkpoint import (
     MODEL_KEYS,
@@ -76,6 +80,209 @@ class _SubdirEntry:
     dcp_kwargs: dict  # e.g. {"process_group": dp_pg} for EP
     dcp_group_size: int
     dcp_coordinator_rank: int
+
+
+def _set_model_state_dict_from_group_root(
+    model: torch.nn.Module,
+    model_state_dict: dict[str, Any],
+    *,
+    object_pg: dist.ProcessGroup | None,
+    tensor_pg: dist.ProcessGroup | None,
+    options: StateDictOptions,
+):
+    """Like ``set_model_state_dict(..., broadcast_from_rank0=True)`` with group-local rank 0.
+
+    PyTorch's helper hard-codes global rank 0 as the full-state source.  That is
+    wrong for expert-parallel weight-only init: the low expert's source rank is
+    local rank 0 of the low expert group, not global rank 0.
+    """
+
+    model_state_dict = dcp_state_dict._unflatten_model_state_dict(model, model_state_dict)
+    with dcp_state_dict._gc_context():
+        info = dcp_state_dict._verify_options(model, (), optim_only=False, options=options)
+        dcp_state_dict._verify_state_dict(model_state_dict, {}, info)
+        return _load_model_state_dict_from_group_root(
+            model,
+            model_state_dict,
+            info,
+            object_pg=object_pg,
+            tensor_pg=tensor_pg,
+        )
+
+
+@torch.no_grad()
+def _load_model_state_dict_from_group_root(
+    model: torch.nn.Module,
+    state_dict: dict[str, Any],
+    info,
+    *,
+    object_pg: dist.ProcessGroup | None,
+    tensor_pg: dist.ProcessGroup | None,
+):
+    if not info.handle_model:
+        return None
+
+    local_state_dict: dict[str, Any] = {}
+    is_root = _group_rank_is_zero(object_pg)
+    for key, value in dcp_state_dict._iterate_valid_model_state(model, info.dsd_fqn_modifiers):
+        fqns = dcp_state_dict._get_fqns(model, key, info.dsd_fqn_modifiers)
+        fqns_with_prefix = dcp_state_dict._get_fqns(
+            model,
+            key,
+            info.dsd_fqn_modifiers,
+            skip_ddp_prefix=False,
+            skip_compiler_prefix=False,
+        )
+
+        for fqn, fqn_with_prefix in zip(fqns, fqns_with_prefix, strict=False):
+            if is_root and fqn != fqn_with_prefix:
+                load_value = state_dict.pop(fqn, None)
+                if load_value is None:
+                    if info.strict:
+                        raise RuntimeError(f"Missing key: {fqn}.")
+                else:
+                    state_dict[fqn_with_prefix] = load_value
+            local_state_dict[fqn_with_prefix] = value
+
+    assign = False
+    devices = set()
+    for value in local_state_dict.values():
+        if torch.is_tensor(value) and value.dim() > 0:
+            devices.add(value.device)
+    if torch.device("meta") in devices:
+        devices.remove(torch.device("meta"))
+        assign = True
+    if len(devices) == 0:
+        devices.add(dist.distributed_c10d._get_pg_default_device())
+    elif len(devices) > 1:
+        raise ValueError("Multiple devices found")
+
+    _broadcast_state_dict_from_group_root(
+        state_dict,
+        local_state_dict,
+        device=devices.pop(),
+        object_pg=object_pg,
+        tensor_pg=tensor_pg,
+        strict=info.strict,
+        cpu_offload=info.cpu_offload,
+    )
+    state_dict.update(local_state_dict)
+
+    with info.fsdp_context():
+        return dcp_state_dict._state_dict_fn(model, "load_state_dict")(
+            state_dict=state_dict,
+            strict=info.strict,
+            assign=assign,
+        )
+
+
+def _group_rank_is_zero(pg: dist.ProcessGroup | None) -> bool:
+    if pg is None:
+        return dist.get_rank() == 0
+    return dist.get_rank(group=pg) == 0
+
+
+def _broadcast_object_list_from_group_root(objects: list[Any], pg: dist.ProcessGroup | None) -> None:
+    if pg is None:
+        dist.broadcast_object_list(objects, src=0)
+    else:
+        dist.broadcast_object_list(objects, group=pg, group_src=0)
+
+
+def _broadcast_tensor_from_group_root(tensor: torch.Tensor, pg: dist.ProcessGroup | None) -> None:
+    if pg is None:
+        dist.broadcast(tensor, src=0)
+    else:
+        dist.broadcast(tensor, group=pg, group_src=0)
+
+
+def _broadcast_state_dict_from_group_root(
+    full_state_dict: dict[str, Any],
+    local_state_dict: dict[str, Any],
+    *,
+    device: torch.device,
+    object_pg: dist.ProcessGroup | None,
+    tensor_pg: dist.ProcessGroup | None,
+    strict: bool,
+    cpu_offload: bool,
+) -> None:
+    ret: dict[str, Any] = {}
+    is_root = _group_rank_is_zero(object_pg)
+    if is_root:
+        for key, value in full_state_dict.items():
+            if not torch.is_tensor(value):
+                ret[key] = value
+            elif value.dim() == 0:
+                ret[key] = value.cpu()
+            else:
+                ret[key] = _TensorInfo(value.size(), value.dtype)
+
+    broadcast_list: list[Any] = [ret]
+    _broadcast_object_list_from_group_root(broadcast_list, object_pg)
+    ret = broadcast_list[0]
+
+    local_state_dict_keys = set(local_state_dict.keys())
+    global_keys = set()
+    for key, value in ret.items():
+        global_keys.add(key)
+        if not isinstance(value, _TensorInfo):
+            if key in local_state_dict:
+                local_state_dict[key] = value
+            continue
+
+        if is_root:
+            ret[key] = full_state_dict[key]
+
+        _broadcast_state_tensor_from_group_root(ret, local_state_dict, key, device, tensor_pg)
+        if cpu_offload and torch.is_tensor(local_state_dict.get(key)):
+            local_state_dict[key] = local_state_dict[key].cpu()
+
+    if strict:
+        for key in local_state_dict_keys - global_keys:
+            local_state_dict.pop(key)
+
+
+def _broadcast_state_tensor_from_group_root(
+    full_state_dict: dict[str, Any],
+    local_state_dict: dict[str, Any],
+    key: str,
+    device: torch.device,
+    pg: dist.ProcessGroup | None,
+) -> None:
+    if pg is None:
+        pg = dist.distributed_c10d._get_default_group()
+    pg_device = (
+        device
+        if device.type in {pg_device.type for pg_device in pg._device_types}
+        else pg._device_types[0]
+    )
+
+    if _group_rank_is_zero(pg):
+        full_state = full_state_dict[key]
+        if not isinstance(full_state, torch.Tensor):
+            raise AssertionError("full_state must be a torch.Tensor")
+        full_tensor = full_state.detach().to(pg_device)
+    else:
+        tensor_info = full_state_dict[key]
+        full_tensor = torch.empty(
+            size=tensor_info.size,
+            device=pg_device,
+            dtype=tensor_info.dtype,
+        )
+
+    if (local_state := local_state_dict.get(key)) is not None:
+        local_state_dict[key] = (local_state, full_tensor) if isinstance(local_state, DTensor) else full_tensor
+
+    _broadcast_tensor_from_group_root(full_tensor, pg)
+
+    if pg_device != device and (local_state := local_state_dict.get(key)) is not None:
+        local_state_dict[key] = (
+            (local_state[0], full_tensor.to(device))
+            if isinstance(local_state, tuple) and isinstance(local_state[0], DTensor)
+            else full_tensor.to(device)
+        )
+
+    _distribute_tensors(local_state_dict, [key], device, pg)
 
 
 class CheckpointRuntimeMixin:
@@ -443,11 +650,10 @@ class CheckpointRuntimeMixin:
     def _load_for_init(self, entry: _LoadEntry) -> None:
         """Weight-only init from a previous checkpoint.
 
-        Rank 0 materialises the entire DCP into a CPU flat dict once (~28 GB
-        for a 14B bf16 model — one-shot, acceptable for startup), extracts
-        and remaps weights per model, then all ranks reshard via
-        ``set_model_state_dict(broadcast_from_rank0=True)`` — the canonical
-        DCP pattern for going from a full CPU dict to an FSDP2-wrapped model.
+        The local rank 0 for this DCP group materialises the entire DCP into a
+        CPU flat dict once (~28 GB for a 14B bf16 model — one-shot, acceptable
+        for startup), extracts and remaps weights per model, then all ranks in
+        the same FSDP group reshard from that full state.
 
         EMA is *not* loaded here; it will be reinitialised once at the end of
         ``_load_checkpoint`` to track the newly-initialised model weights.
@@ -470,15 +676,16 @@ class CheckpointRuntimeMixin:
         if self.cfg.train_text_encoder and self.model.text_encoder is not None:
             model_specs.append(("text_encoder", self.model.text_encoder))
 
+        init_root = entry.shard_rank == 0
         flat: dict[str, torch.Tensor] | None = None
-        if self.rank == 0:
+        if init_root:
             flat = read_dcp_to_flat_dict(entry.path)
 
         try:
             for model_key, model in model_specs:
                 if model is None:
                     continue
-                self._broadcast_init_weights(flat, model_key, model, entry.path)
+                self._broadcast_init_weights(flat, model_key, model, entry.path, init_root=init_root)
         finally:
             # Release the full CPU dict before the next subdir's pass.
             del flat
@@ -489,12 +696,14 @@ class CheckpointRuntimeMixin:
         model_key: str,
         model: torch.nn.Module,
         source_path: Path,
+        *,
+        init_root: bool,
     ) -> None:
-        """Extract + remap on rank 0, then broadcast-reshard into ``model``."""
+        """Extract + remap on the local DCP root, then broadcast-reshard."""
         remapped: dict[str, torch.Tensor] = {}
         source_tag: str | None = None
 
-        if self.rank == 0 and flat is not None:
+        if init_root and flat is not None:
             try:
                 weights, source_tag = extract_init_weights(flat, model_key)
                 remapped = remap_for_current_model(weights, model)
@@ -505,16 +714,25 @@ class CheckpointRuntimeMixin:
                 remapped, source_tag = {}, None
 
         # Collective: every rank participates, even with an empty dict.
-        set_model_state_dict(
-            model,
-            model_state_dict=remapped,
-            options=StateDictOptions(
-                full_state_dict=True,
-                broadcast_from_rank0=True,
-                strict=False,  # tolerate lora_A/B absent from plain source
-            ),
+        options = StateDictOptions(
+            full_state_dict=True,
+            broadcast_from_rank0=True,
+            strict=False,  # tolerate lora_A/B absent from plain source
         )
-        if self.rank == 0 and source_tag is not None:
+        if self.expert_parallel:
+            object_pg = self._expert_parallel_dcp_kwargs().get("process_group")
+            tensor_pg = getattr(self, "_dp_pg", None) or object_pg
+            _set_model_state_dict_from_group_root(
+                model,
+                remapped,
+                object_pg=object_pg or tensor_pg,
+                tensor_pg=tensor_pg,
+                options=options,
+            )
+        else:
+            set_model_state_dict(model, model_state_dict=remapped, options=options)
+
+        if init_root and source_tag is not None:
             logger.info("Initialized {} from {} shadows at {}", model_key, source_tag, source_path)
 
     def _load_optimizer_shards_for(self, entry: _LoadEntry) -> list[str]:

@@ -61,6 +61,7 @@ class BaseTrainer(CheckpointRuntimeMixin):
         self.log_enabled = log_enabled
         setup_loguru(self.rank, enabled=log_enabled)
         logger.info("World size: {}", self.world_size)
+        self._configure_attention_backend(cfg)
         if self.expert_parallel:
             effective_data_replicas = self.dp_size if self._expert_parallel_duplicates_data(cfg) else self.world_size
             logger.info(
@@ -71,6 +72,7 @@ class BaseTrainer(CheckpointRuntimeMixin):
 
         # ---- Model ----
         self.model = self._build_model(cfg)
+        self._configure_model_attention_backend(cfg)
         if hasattr(self.model, "set_sync_seed"):
             self.model.set_sync_seed(cfg.seed, self.device)
         logger.info("Model loaded")
@@ -220,6 +222,32 @@ class BaseTrainer(CheckpointRuntimeMixin):
             batches_per_epoch = self.cfg.dataset_size // (dp * self.cfg.batch_size)
             return self.cfg.num_epochs * batches_per_epoch // self.cfg.gradient_accumulation_steps
         return self.cfg.num_epochs * len(self.dataloader) // self.cfg.gradient_accumulation_steps
+
+    def _configure_attention_backend(self, cfg: TrainConfig) -> None:
+        if not cfg.disable_cudnn_sdp:
+            return
+        if not torch.cuda.is_available() or not hasattr(torch.backends.cuda, "enable_cudnn_sdp"):
+            return
+        torch.backends.cuda.enable_cudnn_sdp(False)
+        logger.info(
+            "Disabled cuDNN SDPA backend (flash={}, mem_efficient={}, math={})",
+            torch.backends.cuda.flash_sdp_enabled(),
+            torch.backends.cuda.mem_efficient_sdp_enabled(),
+            torch.backends.cuda.math_sdp_enabled(),
+        )
+
+    def _configure_model_attention_backend(self, cfg: TrainConfig) -> None:
+        if cfg.attention_backend is None:
+            return
+        count = 0
+        for module in (self.model.transformer, self.model.transformer_2):
+            if module is None:
+                continue
+            for child in module.modules():
+                if hasattr(child, "set_attention_backend") and getattr(child, "processor", None) is not None:
+                    child.set_attention_backend(cfg.attention_backend)
+                    count += 1
+        logger.info("Set Diffusers attention backend to {} on {} modules", cfg.attention_backend, count)
 
     def train(self):
         """Main training loop. Must be implemented by subclass."""

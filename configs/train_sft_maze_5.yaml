@@ -1,5 +1,5 @@
 trainer: i2v
-model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
+model_path: storage/models/dcp_converted/sft_vbvr_fixed_5e-6_checkpoint-6000
 latent_webdataset_dir: data/maze/latents/maze_384x384x161_line_v1/webdataset/sft
 dataset_size: 80000
 output_dir: storage/checkpoints/sft_maze_5
@@ -18,6 +18,7 @@ seed: 42
 ema_decay: 0.0
 prompt_dropout: 0.1
 transformer_load_dtype: bfloat16
+attention_backend: _native_flash
 
 expert_parallel: true
 expert_parallel_data_mode: duplicate

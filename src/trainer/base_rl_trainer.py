@@ -68,9 +68,11 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
 
         setup_loguru(self.rank)
         logger.info("World size: {}", self.world_size)
+        self._configure_attention_backend(cfg)
 
         # ---- Model ----
         self.model = self._build_model(cfg)
+        self._configure_model_attention_backend(cfg)
 
         # ---- Subclass hook (e.g. create reference policy copies) ----
         self._pre_fsdp_setup(cfg)
@@ -213,6 +215,32 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         if self.cfg.max_steps is not None:
             total = min(total, self.cfg.max_steps)
         return total
+
+    def _configure_attention_backend(self, cfg: RLConfig) -> None:
+        if not cfg.disable_cudnn_sdp:
+            return
+        if not torch.cuda.is_available() or not hasattr(torch.backends.cuda, "enable_cudnn_sdp"):
+            return
+        torch.backends.cuda.enable_cudnn_sdp(False)
+        logger.info(
+            "Disabled cuDNN SDPA backend (flash={}, mem_efficient={}, math={})",
+            torch.backends.cuda.flash_sdp_enabled(),
+            torch.backends.cuda.mem_efficient_sdp_enabled(),
+            torch.backends.cuda.math_sdp_enabled(),
+        )
+
+    def _configure_model_attention_backend(self, cfg: RLConfig) -> None:
+        if cfg.attention_backend is None:
+            return
+        count = 0
+        for module in (self.model.transformer, self.model.transformer_2):
+            if module is None:
+                continue
+            for child in module.modules():
+                if hasattr(child, "set_attention_backend") and getattr(child, "processor", None) is not None:
+                    child.set_attention_backend(cfg.attention_backend)
+                    count += 1
+        logger.info("Set Diffusers attention backend to {} on {} modules", cfg.attention_backend, count)
 
     def train(self):
         """Main training loop. Must be implemented by subclass."""

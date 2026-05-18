@@ -124,7 +124,11 @@ class I2VTrainer(BaseTrainer):
                         f"at step={global_step} epoch={epoch} batch_idx={batch_idx}: {loss.item()}"
                     )
                 scaled_loss = loss / cfg.gradient_accumulation_steps
-                scaled_loss.backward()
+                if cfg.detect_anomaly:
+                    with torch.autograd.detect_anomaly(check_nan=True):
+                        scaled_loss.backward()
+                else:
+                    scaled_loss.backward()
 
                 if is_last_micro_step:
                     self._all_reduce_gradients()

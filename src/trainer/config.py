@@ -33,6 +33,7 @@ class TrainConfig(BaseModel):
     weight_decay: float = 0.01
     max_grad_norm: float = 1.0
     skip_nonfinite_gradients: bool = True
+    detect_anomaly: bool = False  # debug only; very slow
     warmup_steps: int = 100
     save_steps: int = 500
     log_steps: int = 10
@@ -73,6 +74,10 @@ class TrainConfig(BaseModel):
     torch_compile: bool = False
     torch_compile_backend: str = "inductor"
     torch_compile_mode: str | None = None  # e.g. "reduce-overhead", "max-autotune"
+    # cuDNN SDPA backward can return NaN for Wan low-noise training on H100/PyTorch 2.11.
+    disable_cudnn_sdp: bool = True
+    # Explicit Diffusers attention backend, e.g. "_native_flash". None uses Diffusers/PyTorch dispatch.
+    attention_backend: str | None = None
 
     # LoRA (set lora_rank > 0 to enable)
     lora_rank: int = 0
@@ -227,6 +232,21 @@ class RLConfig(TrainConfig):
     maze_line_reward_w_mask: float = 1.0
     maze_line_reward_w_goal: float = 0.5
     maze_line_reward_goal_cells: float = 1.0
+
+    # ------------------------------------------------------------------
+    # Maze tracker/eval reward (grpo_reward_fn: "maze_tracker")
+    # ------------------------------------------------------------------
+    # Mirrors src.eval.maze_tracker_score overall:
+    # 0.35*traj + 0.25*on_path + 0.25*goal + 0.15*progress.
+    maze_tracker_reward_num_frames: int = 21
+    maze_tracker_reward_search_radius: int = 96
+    maze_tracker_reward_color_slack: float = 28.0
+    maze_tracker_reward_goal_tolerance_cells: float = 1.0
+    maze_tracker_reward_max_mean_error_cells: float = 4.0
+    maze_tracker_reward_w_traj: float = 0.35
+    maze_tracker_reward_w_onpath: float = 0.25
+    maze_tracker_reward_w_goal: float = 0.25
+    maze_tracker_reward_w_progress: float = 0.15
 
     # ------------------------------------------------------------------
     # VBVR rule reward (grpo_reward_fn: "vbvr_rule")

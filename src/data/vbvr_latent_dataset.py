@@ -9,12 +9,16 @@ Usage:
     dataset = VBVRLatentDataset("data/vbvr/latents/webdataset")
 """
 
+import hashlib
 import json
 import logging
+import math
 import re
+import tarfile
 from itertools import islice
 from pathlib import Path
 
+import torch
 import torch.nn.functional as F
 import webdataset as wds
 from safetensors.torch import load as st_load
@@ -53,16 +57,117 @@ def _task_allowed(sample: dict, allowed_task_names: frozenset[str] | None) -> bo
     return task_name in allowed_task_names
 
 
+def _metadata_int(metadata: dict | None, key: str) -> int | None:
+    if metadata is None or key not in metadata:
+        return None
+    try:
+        return int(metadata[key])
+    except (TypeError, ValueError):
+        return None
+
+
+def _stable_index_from_parts(metadata: dict | None, key: str, url: str = "") -> int:
+    for name in ("split_index", "global_index"):
+        value = _metadata_int(metadata, name)
+        if value is not None:
+            return value
+
+    key_str = str(key)
+    if key_str.isdigit():
+        return int(key_str)
+
+    identity = f"{url}:{key_str}"
+    digest = hashlib.blake2b(identity.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, byteorder="big", signed=False)
+
+
+def _stable_sample_index(sample: dict) -> int:
+    key = sample.get("__key__", "")
+    if isinstance(key, bytes | bytearray):
+        key = key.decode("utf-8", errors="replace")
+    return _stable_index_from_parts(_json_metadata(sample), str(key), str(sample.get("__url__", "")))
+
+
+def _build_group_sample_index(urls: list[str]) -> dict[int, int]:
+    """Map stable sample ids in ``urls`` to contiguous positions within a shard group."""
+    group_index: dict[int, int] = {}
+    next_pos = 0
+    for url in urls:
+        with tarfile.open(url, "r") as tar:
+            for member in tar:
+                if not member.isfile() or not member.name.endswith(".json"):
+                    continue
+                f = tar.extractfile(member)
+                if f is None:
+                    continue
+                metadata = _json_metadata({"json": f.read()})
+                key = Path(member.name).stem
+                stable_index = _stable_index_from_parts(metadata, key, url)
+                group_index[stable_index] = next_pos
+                next_pos += 1
+    return group_index
+
+
+def _sample_rank_allowed(
+    sample: dict,
+    rank: int,
+    world_size: int,
+    group_index: dict[int, int] | None = None,
+) -> bool:
+    if world_size <= 1:
+        return True
+    stable_index = _stable_sample_index(sample)
+    if group_index is not None:
+        group_position = group_index.get(stable_index)
+        if group_position is None:
+            return False
+        stable_index = group_position
+    return stable_index % world_size == rank
+
+
+class _ShardSubsetSplitter:
+    """Yield one deterministic shard subset: offset, offset+stride, ..."""
+
+    def __init__(self, offset: int, stride: int, num_shards: int):
+        if num_shards <= 0:
+            raise ValueError(f"num_shards must be positive, got {num_shards}")
+        if stride <= 0:
+            raise ValueError(f"stride must be positive, got {stride}")
+        if not 0 <= offset < stride:
+            raise ValueError(f"offset must be in [0, {stride}), got {offset}")
+        self.offset = int(offset)
+        self.stride = int(stride)
+        self.num_shards = int(num_shards)
+
+    @property
+    def rank_shard_count(self) -> int:
+        if self.offset >= self.num_shards:
+            return 0
+        return (self.num_shards + self.stride - 1 - self.offset) // self.stride
+
+    def __call__(self, src, group=None):
+        yield from islice(src, self.offset, None, self.stride)
+
+
 class _RankShardSplitter:
     """Split WebDataset shards with an explicit rank/world-size pair."""
 
-    def __init__(self, rank: int, world_size: int):
+    def __init__(self, rank: int, world_size: int, num_shards: int | None = None):
         if world_size <= 0:
             raise ValueError(f"world_size must be positive, got {world_size}")
         if not 0 <= rank < world_size:
             raise ValueError(f"rank must be in [0, {world_size}), got {rank}")
+        if num_shards is not None and num_shards <= 0:
+            raise ValueError(f"num_shards must be positive when provided, got {num_shards}")
         self.rank = int(rank)
         self.world_size = int(world_size)
+        self.num_shards = int(num_shards) if num_shards is not None else None
+
+    @property
+    def rank_shard_count(self) -> int | None:
+        if self.num_shards is None:
+            return None
+        return (self.num_shards + self.world_size - 1 - self.rank) // self.world_size
 
     def __call__(self, src, group=None):
         if self.world_size > 1:
@@ -102,6 +207,9 @@ def _decode_sample(sample: dict, max_text_len: int = 512) -> dict:
         for key in ("tar", "index_in_tar", "seq_len", "prompt"):
             if key in metadata:
                 decoded[f"sample_{key}"] = metadata[key]
+        maze = metadata.get("maze")
+        if isinstance(maze, dict) and "path" in maze:
+            decoded["maze_path"] = torch.tensor(maze["path"], dtype=torch.int16)
 
     if "latents" in tensors:
         decoded["video_latents"] = tensors["latents"]
@@ -169,12 +277,34 @@ class VBVRLatentDataset(IterableDataset):
         if (node_rank is None) != (node_world_size is None):
             raise ValueError("node_rank and node_world_size must be provided together")
         rank_shard_count = None
+        sample_rank_split: tuple[int, int, dict[int, int] | None] | None = None
         if node_rank is None:
             nodesplitter = wds.split_by_node
             logger.info("VBVRLatentDataset: shard splitting by global PyTorch rank")
+        elif len(urls) < node_world_size:
+            shard_group_count = math.gcd(len(urls), node_world_size)
+            shard_group = node_rank % shard_group_count
+            sample_group_rank = node_rank // shard_group_count
+            sample_group_world_size = node_world_size // shard_group_count
+            shard_group_urls = urls[shard_group::shard_group_count]
+            nodesplitter = _ShardSubsetSplitter(shard_group, shard_group_count, len(urls))
+            rank_shard_count = nodesplitter.rank_shard_count
+            group_index = _build_group_sample_index(shard_group_urls)
+            sample_rank_split = (sample_group_rank, sample_group_world_size, group_index)
+            if node_rank == 0:
+                logger.warning(
+                    "VBVRLatentDataset: only %d shards for %d ranks; using %d shard groups and "
+                    "sample-level splitting across %d ranks per group. Each rank reads about %d shards. "
+                    "Reshard to at least the training world size for more sequential I/O.",
+                    len(urls),
+                    node_world_size,
+                    shard_group_count,
+                    sample_group_world_size,
+                    rank_shard_count,
+                )
         else:
-            nodesplitter = _RankShardSplitter(node_rank, node_world_size)
-            rank_shard_count = (len(urls) + node_world_size - 1 - node_rank) // node_world_size
+            nodesplitter = _RankShardSplitter(node_rank, node_world_size, num_shards=len(urls))
+            rank_shard_count = nodesplitter.rank_shard_count
             logger.info(
                 "VBVRLatentDataset: shard splitting rank=%d/%d (%d shards)",
                 node_rank,
@@ -185,10 +315,14 @@ class VBVRLatentDataset(IterableDataset):
         pipeline = wds.WebDataset(
             urls,
             nodesplitter=nodesplitter,
+            workersplitter=wds.split_by_worker,
             shardshuffle=len(urls),
             seed=seed,
             empty_check=False,
         )
+        if sample_rank_split is not None:
+            rank, world_size, group_index = sample_rank_split
+            pipeline = pipeline.select(lambda sample: _sample_rank_allowed(sample, rank, world_size, group_index))
         allowed_tasks = frozenset(allowed_task_names) if allowed_task_names is not None else None
         if allowed_tasks is not None:
             logger.info("VBVRLatentDataset: filtering to %d allowed task names", len(allowed_tasks))
