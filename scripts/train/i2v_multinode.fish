@@ -55,10 +55,58 @@ end
 
 source (dirname (status filename))/../lib/env.fish
 
+set -l master_port (set -q MASTER_PORT; and echo $MASTER_PORT; or echo 29500)
+
+set -x NCCL_DEBUG INFO
+set -x NCCL_DEBUG_SUBSYS INIT,NET,ENV
+
+function __log_env_var
+    set -l key $argv[1]
+    if set -q $key
+        echo "  $key="(string join " " $$key)
+    else
+        echo "  $key=<unset>"
+    end
+end
+
+echo "Launching I2V multi-node training: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$master_port"
+echo "NCCL/IB diagnostics before torchrun:"
+for key in NCCL_DEBUG NCCL_DEBUG_SUBSYS NCCL_IB_DISABLE NCCL_IB_HCA NCCL_SOCKET_IFNAME NCCL_NET_GDR_LEVEL NCCL_IB_GID_INDEX
+    __log_env_var $key
+end
+
+if test -d /sys/class/infiniband
+    set -l ib_devices (command ls -1 /sys/class/infiniband 2>/dev/null)
+    if test (count $ib_devices) -gt 0
+        echo "  /sys/class/infiniband: "(string join ", " $ib_devices)
+    else
+        echo "  /sys/class/infiniband: no devices"
+    end
+else
+    echo "  /sys/class/infiniband: not present"
+end
+
+if type -q ibv_devinfo
+    echo "ibv_devinfo:"
+    ibv_devinfo
+else if type -q ibstat
+    echo "ibstat:"
+    ibstat
+else
+    echo "  ibv_devinfo/ibstat: not found"
+end
+
+if type -q nvidia-smi
+    echo "nvidia-smi topo -m:"
+    nvidia-smi topo -m
+end
+
+echo "NCCL runtime network selection will be visible below; look for NET/IB or NET/Socket."
+
 torchrun \
     --nnodes=$WORLD_SIZE \
     --nproc_per_node=$nproc \
     --node_rank=$RANK \
     --master_addr=$MASTER_ADDR \
-    --master_port=$MASTER_PORT \
+    --master_port=$master_port \
     -m src.cli.train_i2v $train_args

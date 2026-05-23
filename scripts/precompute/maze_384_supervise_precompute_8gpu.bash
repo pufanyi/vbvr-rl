@@ -45,6 +45,8 @@ NUM_FRAMES="${NUM_FRAMES:-81}"
 DIFFICULTY_NAMES="${DIFFICULTY_NAMES:-easy,mid,hard,xhard}"
 DIFFICULTY_GEOMETRIES="${DIFFICULTY_GEOMETRIES:-}"
 RENDER_MODE="${RENDER_MODE:-moving_ball}"
+COS_CHAIN_MODE="${COS_CHAIN_MODE:-single}"
+LINE_COMPLETION_FRACTION="${LINE_COMPLETION_FRACTION:-0.5}"
 TAR_TAG="${TAR_TAG:-maze_384x384x81_perfect_v2}"
 
 VAE_BATCH_SIZE="${VAE_BATCH_SIZE:-8}"
@@ -73,6 +75,10 @@ if [[ -n "$DIFFICULTY_GEOMETRIES" ]]; then
     echo "  diff geometries:   $DIFFICULTY_GEOMETRIES"
 fi
 echo "  render mode:       $RENDER_MODE"
+echo "  cos chain mode:    $COS_CHAIN_MODE"
+if [[ "$COS_CHAIN_MODE" != "single" && "$COS_CHAIN_MODE" != "none" && "$COS_CHAIN_MODE" != "off" ]]; then
+    echo "  line completion:   $LINE_COMPLETION_FRACTION"
+fi
 echo "  batch sizes:       vae=$VAE_BATCH_SIZE text=$TEXT_BATCH_SIZE"
 echo "  log:               $RUN_LOG"
 echo
@@ -125,6 +131,8 @@ PYTHONUNBUFFERED=1 \
     --difficulty_names "$DIFFICULTY_NAMES" \
     "${GEOMETRY_ARGS[@]}" \
     --render_mode "$RENDER_MODE" \
+    --cos_chain_mode "$COS_CHAIN_MODE" \
+    --line_completion_fraction "$LINE_COMPLETION_FRACTION" \
     --vae_batch_size "$VAE_BATCH_SIZE" \
     --text_batch_size "$TEXT_BATCH_SIZE" \
     --num_preview_videos "$NUM_PREVIEW_VIDEOS" \

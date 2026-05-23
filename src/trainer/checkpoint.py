@@ -242,24 +242,13 @@ def load_dcp_into_pipeline(pipe, checkpoint_path: str, use_ema: bool = False) ->
         if model is None:
             continue
         flat = read_dcp_to_flat_dict(dcp_path)
-        weights, source_tag = None, None
-        if use_ema:
-            try:
-                weights, source_tag = extract_init_weights(flat, name, prefer="ema")
-            except RuntimeError:
-                logger.warning(
-                    "No EMA shadow for {} in {}; falling back to raw train_state weights.",
-                    name,
-                    dcp_path,
-                )
-        if weights is None:
-            try:
-                weights, source_tag = extract_init_weights(flat, name, prefer="raw")
-            except RuntimeError as e:
-                logger.debug("No {} data in {}: {}", name, dcp_path, e)
-                del flat
-                gc.collect()
-                continue
+        try:
+            weights, source_tag = _extract_pipeline_weights(flat, name, model, use_ema=use_ema)
+        except RuntimeError as e:
+            logger.debug("No {} data in {}: {}", name, dcp_path, e)
+            del flat
+            gc.collect()
+            continue
         remapped = remap_for_current_model(weights, model)
         missing, unexpected = model.load_state_dict(remapped, strict=False)
         logger.info(
@@ -272,6 +261,49 @@ def load_dcp_into_pipeline(pipe, checkpoint_path: str, use_ema: bool = False) ->
         )
         del flat, weights, remapped
         gc.collect()
+
+
+def _extract_pipeline_weights(
+    flat: dict[str, torch.Tensor],
+    model_key: str,
+    model: torch.nn.Module,
+    *,
+    use_ema: bool,
+) -> tuple[dict[str, torch.Tensor], str]:
+    """Select checkpoint weights for inference export/eval.
+
+    For LoRA training, EMA tracks only trainable ``lora_*`` tensors.  The
+    frozen base layers still live in ``train_state`` and may themselves come
+    from a previous SFT checkpoint.  Loading EMA alone would therefore apply
+    the LoRA delta to the original base model.  For LoRA-wrapped models, use
+    raw train_state as the complete base and overlay EMA LoRA tensors.
+    """
+    if not use_ema:
+        return extract_init_weights(flat, model_key, prefer="raw")
+
+    try:
+        ema_weights, _ = extract_init_weights(flat, model_key, prefer="ema")
+    except RuntimeError:
+        logger.warning(
+            "No EMA shadow for {} in checkpoint; falling back to raw train_state weights.",
+            model_key,
+        )
+        return extract_init_weights(flat, model_key, prefer="raw")
+
+    if not getattr(model, "peft_config", None):
+        return ema_weights, "EMA"
+
+    try:
+        raw_weights, _ = extract_init_weights(flat, model_key, prefer="raw")
+    except RuntimeError:
+        logger.warning(
+            "LoRA EMA shadow for {} has no raw train_state base; loading EMA tensors only.",
+            model_key,
+        )
+        return ema_weights, "EMA"
+
+    raw_weights.update(ema_weights)
+    return raw_weights, "raw+EMA"
 
 
 def _detect_layout(checkpoint_path: str) -> dict[str, str]:

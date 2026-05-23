@@ -33,6 +33,8 @@ set -q NNODES; or set NNODES 1
 set -q NODE_RANK; or set NODE_RANK 0
 set -q MASTER_ADDR; or set MASTER_ADDR 127.0.0.1
 set -q MASTER_PORT; or set MASTER_PORT 29500
+set -q COS_CHAIN_MODE; or set COS_CHAIN_MODE single
+set -q LINE_COMPLETION_FRACTION; or set LINE_COMPLETION_FRACTION 0.5
 
 echo "[gen_maze_webdataset] nnodes=$NNODES node_rank=$NODE_RANK nproc_per_node=$NPROC master=$MASTER_ADDR:$MASTER_PORT"
 
@@ -61,6 +63,8 @@ torchrun \
     --seed 42 \
     --split_seed 42 \
     --difficulty_names easy,mid,hard,xhard \
+    --cos_chain_mode $COS_CHAIN_MODE \
+    --line_completion_fraction $LINE_COMPLETION_FRACTION \
     --num_preview_videos 100 \
     --skip_existing \
     $argv

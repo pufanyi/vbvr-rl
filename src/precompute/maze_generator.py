@@ -613,10 +613,21 @@ def _path_start_cap_radius(cell_px: int) -> int:
     return max(2, int(round(cell_px * 0.22)))
 
 
+def _completion_frame(num_frames: int, completion_fraction: float) -> int:
+    """Frame index where a progressive path should be complete."""
+    if not 0.0 < completion_fraction <= 1.0:
+        raise ValueError(f"completion_fraction must be in (0, 1], got {completion_fraction}")
+    if num_frames <= 1:
+        return 0
+    return max(1, min(num_frames - 1, int(round((num_frames - 1) * completion_fraction))))
+
+
 def interpolate_ball_positions(
     path: list[tuple[int, int]],
     num_frames: int,
     cell_px: int,
+    *,
+    completion_frame: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Linearly interpolate the ball along ``path`` over ``num_frames`` frames.
 
@@ -626,10 +637,16 @@ def interpolate_ball_positions(
     """
     assert len(path) >= 1
     L = len(path)
+    if completion_frame is None:
+        completion_frame = num_frames - 1
+    completion_frame = max(0, min(num_frames - 1, int(completion_frame)))
     frame_positions_cell = np.zeros((num_frames, 2), dtype=np.float32)
     frame_positions_pix = np.zeros((num_frames, 2), dtype=np.float32)
     for f in range(num_frames):
-        t = 0.0 if num_frames == 1 else f * (L - 1) / (num_frames - 1)
+        if completion_frame <= 0:
+            t = float(L - 1)
+        else:
+            t = min(float(L - 1), f * (L - 1) / completion_frame)
         k = int(np.floor(t))
         alpha = float(t - k)
         if k >= L - 1:
@@ -758,6 +775,7 @@ def render_path_line_video(
     line_width_px: int | None = None,
     start_cap_radius_px: int | None = None,
     goal_marker_half_extent_px: float | None = None,
+    line_completion_frame: int | None = None,
 ) -> np.ndarray:
     """Render a video where the solution path is drawn progressively."""
     line_color = palette.ball_rgb if line_rgb is None else line_rgb
@@ -774,10 +792,16 @@ def render_path_line_video(
 
     frames: list[np.ndarray] = []
     n_frames = int(frame_positions_pix.shape[0])
+    if line_completion_frame is None:
+        line_completion_frame = n_frames - 1
+    line_completion_frame = max(0, min(n_frames - 1, int(line_completion_frame)))
     for frame_idx, cur_xy in enumerate(frame_positions_pix):
         img = base.copy()
         draw = ImageDraw.Draw(img)
-        t = 0.0 if n_frames == 1 else frame_idx * (len(path_centers) - 1) / (n_frames - 1)
+        if line_completion_frame <= 0:
+            t = float(len(path_centers) - 1)
+        else:
+            t = min(float(len(path_centers) - 1), frame_idx * (len(path_centers) - 1) / line_completion_frame)
         k = int(np.floor(t))
         cur = (float(cur_xy[0]), float(cur_xy[1]))
         points = path_centers[: max(1, k + 1)]
@@ -834,6 +858,11 @@ def render_video_from_metadata(maze: dict[str, Any]) -> np.ndarray:
             goal_marker_half_extent_px=float(
                 render_metadata.get("goal_marker_half_extent_px", _goal_marker_half_extent(cell_px))
             ),
+            line_completion_frame=(
+                int(render_metadata["line_completion_frame"])
+                if "line_completion_frame" in render_metadata
+                else None
+            ),
         )
 
     raise AssertionError(f"Unhandled render mode: {render_mode}")
@@ -882,6 +911,63 @@ def build_line_prompt(palette: MazePalette, difficulty: MazeDifficulty, rng: np.
         goal=palette.goal_name,
         difficulty=difficulty.prompt_adjective,
     )
+
+
+def build_line_waypoint_from_sample(
+    sample: MazeSample,
+    *,
+    completion_fraction: float = 0.5,
+) -> tuple[np.ndarray, MazeSample]:
+    """Build a path-line waypoint for COS training from an existing maze sample.
+
+    The waypoint uses the same maze, palette, and prompt as the final sample,
+    but its path line reaches the goal by ``completion_fraction`` of the video.
+    """
+    line_completion_frame = _completion_frame(sample.num_frames, completion_fraction)
+    frame_positions_cell, frame_positions_pix = interpolate_ball_positions(
+        sample.path,
+        sample.num_frames,
+        sample.cell_px,
+        completion_frame=line_completion_frame,
+    )
+    line_width_px = _path_line_width(sample.cell_px)
+    start_cap_radius_px = int(round(_moving_ball_radius(sample.cell_px)))
+    goal_marker_half_extent_px = _goal_marker_half_extent(sample.cell_px)
+    grid = np.asarray(sample.grid, dtype=np.uint8)
+    video = render_path_line_video(
+        grid,
+        frame_positions_pix,
+        sample.path,
+        sample.goal,
+        sample.palette,
+        sample.cell_px,
+        line_width_px=line_width_px,
+        start_cap_radius_px=start_cap_radius_px,
+        goal_marker_half_extent_px=goal_marker_half_extent_px,
+        line_completion_frame=line_completion_frame,
+    )
+    waypoint = sample.model_copy(
+        deep=True,
+        update={
+            "frame_positions_cell": [tuple(row) for row in frame_positions_cell.tolist()],
+            "frame_positions_pix": [tuple(row) for row in frame_positions_pix.tolist()],
+            "render_mode": RENDER_MODE_GROWING_PATH_LINE,
+            "render_metadata": {
+                "renderer_version": 1,
+                "mode": RENDER_MODE_GROWING_PATH_LINE,
+                "line_rgb": list(sample.palette.ball_rgb),
+                "line_width_px": line_width_px,
+                "start_cap_shape": "circle",
+                "start_cap_radius_px": start_cap_radius_px,
+                "goal_rgb": list(sample.palette.goal_rgb),
+                "goal_marker_shape": "square",
+                "goal_marker_half_extent_px": goal_marker_half_extent_px,
+                "line_completion_fraction": completion_fraction,
+                "line_completion_frame": line_completion_frame,
+            },
+        },
+    )
+    return video, waypoint
 
 
 # ---------------------------------------------------------------------------

@@ -143,6 +143,37 @@ Notes:
 - Full latent generation requires GPU. It loads Wan VAE for video/condition latents and UMT5 for prompt embeddings.
 - The script should keep `--skip_existing` behavior so interrupted runs can resume by rerunning the same command.
 
+## COS Line-To-Ball Variant
+
+For Chain-of-Step training where the high-noise waypoint is a path-line plan
+and the final target is the moving ball, generate a separate latent root:
+
+```bash
+GPUS=0,1,2,3,4,5,6,7 \
+OUTPUT_ROOT=data/maze/latents/maze_384x384x161_line_to_ball_v1 \
+TAR_TAG=maze_384x384x161_line_to_ball_v1 \
+NUM_SAMPLES=100000 \
+SFT_RATIO=0.8 \
+SAMPLES_PER_SHARD=1000 \
+SHARD_WRITE_BATCH_SIZE=64 \
+SEED=4242 \
+SPLIT_SEED=4242 \
+NUM_FRAMES=161 \
+NUM_PREVIEW_VIDEOS=100 \
+DIFFICULTY_NAMES=easy,mid,hard,xhard \
+DIFFICULTY_GEOMETRIES=easy:8x8x24,mid:12x12x16,hard:16x16x12,xhard:16x16x12 \
+RENDER_MODE=moving_ball \
+COS_CHAIN_MODE=line_to_moving_ball \
+LINE_COMPLETION_FRACTION=0.5 \
+bash scripts/precompute/maze_384_supervise_precompute_8gpu.bash
+```
+
+Each sample stores `latents_0` for the path-line waypoint and `latents_1` for
+the moving-ball final target. `LINE_COMPLETION_FRACTION=0.5` makes the line
+reach the goal halfway through the video frames. Train it with
+`configs/train_cos_maze_line_to_ball_100k.yaml`, whose `cos_tau_sigma: 0.5`
+allocates roughly half of the denoising path to the line-planning waypoint.
+
 ## Validation
 
 After generation, verify shard counts:

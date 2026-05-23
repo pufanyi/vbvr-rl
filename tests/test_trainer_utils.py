@@ -1,8 +1,44 @@
 import torch
 
+from src.trainer.checkpoint import _extract_pipeline_weights
 from src.trainer.rewards.maze_line import _goal_region_score, _soft_color_mask
 from src.trainer.rewards.maze import _as_batched_tensor
 from src.trainer.utils import collate
+
+
+class _PlainModule(torch.nn.Module):
+    pass
+
+
+class _LoraModule(torch.nn.Module):
+    peft_config = {"default": object()}
+
+
+def test_extract_pipeline_weights_overlays_lora_ema_on_raw_base():
+    flat = {
+        "train_state.transformer.blocks.0.attn.to_q.base_layer.weight": torch.tensor([1.0]),
+        "train_state.transformer.blocks.0.attn.to_q.lora_A.default.weight": torch.tensor([2.0]),
+        "ema.shadow.transformer.blocks.0.attn.to_q.lora_A.default.weight": torch.tensor([3.0]),
+    }
+
+    weights, source = _extract_pipeline_weights(flat, "transformer", _LoraModule(), use_ema=True)
+
+    assert source == "raw+EMA"
+    assert torch.equal(weights["blocks.0.attn.to_q.base_layer.weight"], torch.tensor([1.0]))
+    assert torch.equal(weights["blocks.0.attn.to_q.lora_A.default.weight"], torch.tensor([3.0]))
+
+
+def test_extract_pipeline_weights_plain_model_uses_ema_directly():
+    flat = {
+        "train_state.transformer.blocks.0.attn.to_q.weight": torch.tensor([1.0]),
+        "ema.shadow.transformer.blocks.0.attn.to_q.weight": torch.tensor([2.0]),
+    }
+
+    weights, source = _extract_pipeline_weights(flat, "transformer", _PlainModule(), use_ema=True)
+
+    assert source == "EMA"
+    assert list(weights) == ["blocks.0.attn.to_q.weight"]
+    assert torch.equal(weights["blocks.0.attn.to_q.weight"], torch.tensor([2.0]))
 
 
 def test_collate_preserves_variable_shape_tensor_metadata():
