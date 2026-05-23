@@ -643,10 +643,11 @@ def interpolate_ball_positions(
     frame_positions_cell = np.zeros((num_frames, 2), dtype=np.float32)
     frame_positions_pix = np.zeros((num_frames, 2), dtype=np.float32)
     for f in range(num_frames):
-        if completion_frame <= 0:
-            t = float(L - 1)
-        else:
-            t = min(float(L - 1), f * (L - 1) / completion_frame)
+        t = (
+            float(L - 1)
+            if completion_frame <= 0
+            else min(float(L - 1), f * (L - 1) / completion_frame)
+        )
         k = int(np.floor(t))
         alpha = float(t - k)
         if k >= L - 1:
@@ -886,7 +887,8 @@ PROMPT_TEMPLATES: tuple[str, ...] = (
 
 LINE_PROMPT_TEMPLATES: tuple[str, ...] = (
     "A {ball} path line is drawn through a {difficulty} {wall} maze to the {goal} goal.",
-    "Top-down view of a {difficulty} {passage} maze with {wall} walls; a {ball} line traces the path to the {goal} exit.",
+    "Top-down view of a {difficulty} {passage} maze with {wall} walls; a {ball} line "
+    "traces the path to the {goal} exit.",
     "A {ball} solution line grows step-by-step through a {difficulty} grid maze toward the {goal} target.",
 )
 

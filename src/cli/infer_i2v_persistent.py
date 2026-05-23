@@ -7,7 +7,12 @@ Examples:
         --model_path storage/models/dcp_converted/sft_maze_4_checkpoint-epoch0 \
         --max_area 147456 --num_frames 161 --num_inference_steps 50
 
-    {"image":"./image.png","prompt":"A red solution line grows step-by-step through a maze.","output":"out.mp4","seed":0}
+    {
+      "image": "./image.png",
+      "prompt": "A red solution line grows step-by-step through a maze.",
+      "output": "out.mp4",
+      "seed": 0
+    }
 """
 
 from __future__ import annotations
@@ -68,7 +73,12 @@ def parse_args() -> argparse.Namespace:
         choices=list(SCHEDULERS.keys()),
         help="Override the scheduler",
     )
-    parser.add_argument("--jobs", type=str, default=None, help="JSON, JSONL, or {jobs:[...]} file. Omit for stdin JSONL.")
+    parser.add_argument(
+        "--jobs",
+        type=str,
+        default=None,
+        help="JSON, JSONL, or {jobs:[...]} file. Omit for stdin JSONL.",
+    )
     parser.add_argument("--output_dir", type=str, default="storage/eval_out/i2v_persistent")
     parser.add_argument("--prompt", type=str, default=None, help="Default prompt when a job omits prompt")
     parser.add_argument("--negative_prompt", type=str, default=DEFAULT_NEGATIVE_PROMPT)
@@ -133,7 +143,12 @@ def _output_path_for(job: dict[str, Any], args: argparse.Namespace, index: int, 
     return Path(args.output_dir) / f"{stem}_seed{seed}.mp4"
 
 
-def _resize_image(pipe: WanImageToVideoPipeline, image: Any, job: dict[str, Any], args: argparse.Namespace) -> tuple[Any, int, int]:
+def _resize_image(
+    pipe: WanImageToVideoPipeline,
+    image: Any,
+    job: dict[str, Any],
+    args: argparse.Namespace,
+) -> tuple[Any, int, int]:
     height = job.get("height", args.height)
     width = job.get("width", args.width)
     if height is not None and width is not None:
@@ -149,7 +164,12 @@ def _resize_image(pipe: WanImageToVideoPipeline, image: Any, job: dict[str, Any]
     return image.resize((width, height)), height, width
 
 
-def _run_job(pipe: WanImageToVideoPipeline, job: dict[str, Any], args: argparse.Namespace, index: int) -> dict[str, Any]:
+def _run_job(
+    pipe: WanImageToVideoPipeline,
+    job: dict[str, Any],
+    args: argparse.Namespace,
+    index: int,
+) -> dict[str, Any]:
     image_path = str(job["image"])
     prompt = job.get("prompt") or args.prompt
     if not prompt:

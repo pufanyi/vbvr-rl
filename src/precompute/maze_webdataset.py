@@ -59,11 +59,11 @@ from tqdm import tqdm
 from src.precompute.maze_generator import (
     DEFAULT_DIFFICULTIES,
     DEFAULT_PALETTES,
+    RENDER_MODE_MOVING_BALL,
     MazeSample,
     MazeSpec,
-    RENDER_MODE_MOVING_BALL,
-    build_maze_sample,
     build_line_waypoint_from_sample,
+    build_maze_sample,
     normalize_render_mode,
 )
 
@@ -484,7 +484,10 @@ def _sample_to_json_blob(sample: MazeSample, *, fps: int | None = None) -> dict:
         "metadata_schema_version": 2,
         "reconstruction": {
             "python_function": "src.precompute.maze_generator.render_video_from_metadata",
-            "note": "This maze blob contains the grid, path, per-frame positions, palette, geometry, and render settings needed to reconstruct the RGB video frames.",
+            "note": (
+                "This maze blob contains the grid, path, per-frame positions, palette, geometry, "
+                "and render settings needed to reconstruct the RGB video frames."
+            ),
         },
         "generation": sample.generation,
         "difficulty": sample.difficulty,

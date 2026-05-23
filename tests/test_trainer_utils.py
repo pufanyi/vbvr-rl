@@ -1,8 +1,8 @@
 import torch
 
 from src.trainer.checkpoint import _extract_pipeline_weights
-from src.trainer.rewards.maze_line import _goal_region_score, _soft_color_mask
 from src.trainer.rewards.maze import _as_batched_tensor
+from src.trainer.rewards.maze_line import _goal_region_score, _soft_color_mask
 from src.trainer.utils import collate
 
 

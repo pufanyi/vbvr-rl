@@ -50,8 +50,8 @@ import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 import torch.distributed.checkpoint.state_dict as dcp_state_dict
-from torch.distributed._state_dict_utils import _TensorInfo, _distribute_tensors
 from loguru import logger
+from torch.distributed._state_dict_utils import _distribute_tensors, _TensorInfo
 from torch.distributed.checkpoint.state_dict import StateDictOptions, set_model_state_dict
 from torch.distributed.checkpoint.state_dict_saver import _save_state_dict, _stateful_to_state_dict
 from torch.distributed.tensor import DTensor

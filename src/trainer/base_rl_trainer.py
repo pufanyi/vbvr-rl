@@ -207,7 +207,9 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
 
     def _compute_total_steps(self) -> int:
         """Total optimizer steps. Override for different accumulation strategies."""
-        dataset_size = self._effective_dataset_size if self._effective_dataset_size is not None else self.cfg.dataset_size
+        dataset_size = self._effective_dataset_size
+        if dataset_size is None:
+            dataset_size = self.cfg.dataset_size
         if dataset_size is not None:
             dp = self.dp_size if self._expert_parallel_duplicates_data(self.cfg) else self.world_size
             total = self.cfg.num_epochs * (dataset_size // (dp * self.cfg.batch_size))

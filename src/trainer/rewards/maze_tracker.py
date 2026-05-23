@@ -82,7 +82,12 @@ def _track_color_object(
     return positions, confidences
 
 
-def _path_progress_score(det_xy: torch.Tensor, path_ij: torch.Tensor, path_len: torch.Tensor, cell_px: torch.Tensor) -> torch.Tensor:
+def _path_progress_score(
+    det_xy: torch.Tensor,
+    path_ij: torch.Tensor,
+    path_len: torch.Tensor,
+    cell_px: torch.Tensor,
+) -> torch.Tensor:
     B, K, _ = det_xy.shape
     _, P, _ = path_ij.shape
     path_len = path_len.long().clamp(min=1, max=P)

@@ -16,13 +16,12 @@ import os
 import shlex
 import signal
 import subprocess
-import sys
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
-
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CHECKPOINT_ROOT = REPO_ROOT / "storage/checkpoints"
@@ -164,7 +163,7 @@ class FileLock:
         self.path = path
         self.fd: int | None = None
 
-    def __enter__(self) -> "FileLock":
+    def __enter__(self) -> FileLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
             try:
@@ -413,7 +412,10 @@ def markdown_table(rows: list[ResultRow], title: str) -> str:
         "",
         f"Generated at: {datetime.now().isoformat(timespec='seconds')}",
         "",
-        "| checkpoint | status | overall | in | out | abs | know | perc | spat | trans | n | duration | finished_at | output | note |",
+        (
+            "| checkpoint | status | overall | in | out | abs | know | perc | spat | trans | n | "
+            "duration | finished_at | output | note |"
+        ),
         "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
     ]
     for row in rows:
@@ -489,8 +491,7 @@ def gpu_memory_used() -> list[int]:
         proc = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=True,
         )
     except Exception:
