@@ -42,6 +42,42 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max_mean_error_cells", type=float, default=4.0)
     p.add_argument("--min_mean_tracker_confidence", type=float, default=0.30)
     p.add_argument(
+        "--min_ball_like_fraction",
+        type=float,
+        default=0.80,
+        help="Minimum fraction of scored frames whose tracked foreground is compact enough to be a ball.",
+    )
+    p.add_argument(
+        "--min_ball_component_area_multiplier",
+        type=float,
+        default=0.10,
+        help="Minimum tracked color-component area as a multiple of the expected rendered ball area.",
+    )
+    p.add_argument(
+        "--max_ball_component_area_multiplier",
+        type=float,
+        default=6.0,
+        help="Maximum tracked color-component area as a multiple of the expected rendered ball area.",
+    )
+    p.add_argument(
+        "--max_ball_component_axis_cells",
+        type=float,
+        default=2.0,
+        help="Maximum tracked color-component width/height in maze-cell units.",
+    )
+    p.add_argument(
+        "--changed_pixel_threshold",
+        type=float,
+        default=40.0,
+        help="RGB L2 threshold used to measure how much each frame differs from the first generated frame.",
+    )
+    p.add_argument(
+        "--max_changed_area_multiplier",
+        type=float,
+        default=12.0,
+        help="Maximum changed-pixel area as a multiple of the expected rendered ball area.",
+    )
+    p.add_argument(
         "--expected_guided_tracking",
         action="store_true",
         help="Debug mode: search near the expected trajectory instead of only using temporal continuity.",
@@ -183,6 +219,107 @@ def _track_ball(
     )
 
 
+def _nearest_mask_pixel(mask: np.ndarray, xy: np.ndarray) -> tuple[int, int] | None:
+    h, w = mask.shape
+    x = int(round(float(xy[0])))
+    y = int(round(float(xy[1])))
+    if 0 <= x < w and 0 <= y < h and bool(mask[y, x]):
+        return y, x
+
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
+        return None
+    d2 = (xs.astype(np.float32) - float(xy[0])) ** 2 + (ys.astype(np.float32) - float(xy[1])) ** 2
+    idx = int(d2.argmin())
+    return int(ys[idx]), int(xs[idx])
+
+
+def _component_stats_at_xy(mask: np.ndarray, xy: np.ndarray) -> tuple[int, int, int] | None:
+    """Return area, width, height for the mask component nearest ``xy``."""
+    seed = _nearest_mask_pixel(mask, xy)
+    if seed is None:
+        return None
+
+    h, w = mask.shape
+    visited = np.zeros(mask.shape, dtype=bool)
+    stack = [seed]
+    visited[seed] = True
+    area = 0
+    min_y = max_y = seed[0]
+    min_x = max_x = seed[1]
+
+    while stack:
+        y, x = stack.pop()
+        area += 1
+        min_y = min(min_y, y)
+        max_y = max(max_y, y)
+        min_x = min(min_x, x)
+        max_x = max(max_x, x)
+        for yy in range(max(0, y - 1), min(h, y + 2)):
+            for xx in range(max(0, x - 1), min(w, x + 2)):
+                if yy == y and xx == x:
+                    continue
+                if not visited[yy, xx] and mask[yy, xx]:
+                    visited[yy, xx] = True
+                    stack.append((yy, xx))
+
+    return area, max_x - min_x + 1, max_y - min_y + 1
+
+
+def _ball_component_metrics(
+    args: argparse.Namespace,
+    frames: np.ndarray,
+    det_xy: np.ndarray,
+    ball_rgb: np.ndarray,
+    color_error: np.ndarray,
+    cell_px: float,
+) -> dict:
+    expected_area = math.pi * (cell_px / 3.0) ** 2
+    area_ratios: list[float] = []
+    axis_cells: list[float] = []
+    ball_like: list[bool] = []
+
+    for frame, xy, err in zip(frames, det_xy, color_error, strict=True):
+        dist = np.sum((frame - ball_rgb.reshape(1, 1, 3)) ** 2, axis=-1)
+        mask = dist <= float(err * err + args.color_slack * args.color_slack)
+        stats = _component_stats_at_xy(mask, xy)
+        if stats is None:
+            area_ratio = 0.0
+            max_axis_cells = float("inf")
+        else:
+            area, width, height = stats
+            area_ratio = float(area / max(expected_area, 1e-6))
+            max_axis_cells = float(max(width, height) / max(cell_px, 1e-6))
+
+        area_ratios.append(area_ratio)
+        axis_cells.append(max_axis_cells)
+        ball_like.append(
+            args.min_ball_component_area_multiplier <= area_ratio <= args.max_ball_component_area_multiplier
+            and max_axis_cells <= args.max_ball_component_axis_cells
+        )
+
+    finite_axes = [x for x in axis_cells if math.isfinite(x)]
+    return {
+        "ball_like_fraction": float(np.mean(ball_like)) if ball_like else 0.0,
+        "mean_ball_component_area_ratio": float(np.mean(area_ratios)) if area_ratios else 0.0,
+        "max_ball_component_area_ratio": float(np.max(area_ratios)) if area_ratios else 0.0,
+        "max_ball_component_axis_cells": float(np.max(finite_axes)) if finite_axes else float("inf"),
+    }
+
+
+def _changed_area_metrics(args: argparse.Namespace, frames: np.ndarray, cell_px: float) -> dict:
+    expected_area = math.pi * (cell_px / 3.0) ** 2
+    diff = np.linalg.norm(frames - frames[0:1], axis=-1)
+    changed_ratios = (diff > args.changed_pixel_threshold).sum(axis=(1, 2)) / max(expected_area, 1e-6)
+    max_changed = float(np.max(changed_ratios)) if len(changed_ratios) else 0.0
+    compact_motion_score = min(1.0, args.max_changed_area_multiplier / max(max_changed, 1e-6))
+    return {
+        "compact_motion_score": compact_motion_score,
+        "mean_changed_area_ratio": float(np.mean(changed_ratios)) if len(changed_ratios) else 0.0,
+        "max_changed_area_ratio": max_changed,
+    }
+
+
 def _score_one(args: argparse.Namespace, row: dict, video_path: Path) -> dict:
     maze = row["maze"]
     video = _load_video(video_path)
@@ -236,7 +373,12 @@ def _score_one(args: argparse.Namespace, row: dict, video_path: Path) -> dict:
     traj_score = max(0.0, 1.0 - mean_error_px / (args.max_mean_error_cells * cell_px))
     goal_score = 1.0 if goal_success else 0.0
     progress_score = progress * monotonic_fraction
-    overall = 0.35 * traj_score + 0.25 * on_path_fraction + 0.25 * goal_score + 0.15 * progress_score
+    overall_raw = 0.35 * traj_score + 0.25 * on_path_fraction + 0.25 * goal_score + 0.15 * progress_score
+    ball_metrics = _ball_component_metrics(args, video[frame_idxs], det_xy, ball_rgb, color_error, cell_px)
+    changed_metrics = _changed_area_metrics(args, video[frame_idxs], cell_px)
+    ball_like_fraction = ball_metrics["ball_like_fraction"]
+    compact_motion_score = changed_metrics["compact_motion_score"]
+    overall = overall_raw * ball_like_fraction * compact_motion_score
     mean_tracker_confidence = float(confidence.mean())
     passed = bool(
         goal_success
@@ -244,6 +386,8 @@ def _score_one(args: argparse.Namespace, row: dict, video_path: Path) -> dict:
         and progress >= 0.85
         and mean_error_px <= args.max_mean_error_cells * cell_px
         and mean_tracker_confidence >= args.min_mean_tracker_confidence
+        and ball_like_fraction >= args.min_ball_like_fraction
+        and changed_metrics["max_changed_area_ratio"] <= args.max_changed_area_multiplier
     )
 
     return {
@@ -252,11 +396,14 @@ def _score_one(args: argparse.Namespace, row: dict, video_path: Path) -> dict:
         "video": str(video_path),
         "passed": passed,
         "overall": overall,
+        "overall_raw": overall_raw,
         "traj_score": traj_score,
         "on_path_fraction": on_path_fraction,
         "goal_success": goal_success,
         "progress": progress,
         "monotonic_fraction": monotonic_fraction,
+        **ball_metrics,
+        **changed_metrics,
         "mean_error_px": mean_error_px,
         "max_error_px": max_error_px,
         "end_error_px": end_error_px,
