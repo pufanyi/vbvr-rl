@@ -67,6 +67,15 @@ def parse_args():
     p.add_argument("--model_path", required=True, help="Path to Wan2.2 diffusers model")
     p.add_argument("--output_dir", required=True, help="Directory to write output safetensors files")
     p.add_argument("--batch_size", type=int, default=64, help="Batch size for T5 encoding")
+    p.add_argument(
+        "--encode_micro_batch_size",
+        type=int,
+        default=0,
+        help=(
+            "Optional prompt count per T5 forward inside each saved batch. "
+            "Use this to avoid OOM while keeping output batch filenames stable."
+        ),
+    )
     p.add_argument("--tars", nargs="*", default=None, help="Process only these tar files (basenames). Default: all.")
     p.add_argument("--skip_existing", action="store_true", help="Skip samples whose output already exists")
     p.add_argument("--compile", action="store_true", help="Use torch.compile on text encoder")
@@ -108,7 +117,12 @@ def load_text_encoder(model_path: str, device: str):
 
 
 @torch.no_grad()
-def encode_text(components, prompts: list[str], device: str) -> torch.Tensor:
+def encode_text(
+    components,
+    prompts: list[str],
+    device: str,
+    micro_batch_size: int = 0,
+) -> list[torch.Tensor]:
     import html
 
     import ftfy
@@ -122,27 +136,30 @@ def encode_text(components, prompts: list[str], device: str) -> torch.Tensor:
         text = re.sub(r"\s+", " ", text).strip()
         return text
 
-    prompts = [clean(p) for p in prompts]
-    # Dynamic padding: pad to longest in batch, not max_length — saves compute
-    tokens = components["tokenizer"](
-        prompts,
-        padding="longest",
-        max_length=max_length,
-        truncation=True,
-        add_special_tokens=True,
-        return_attention_mask=True,
-        return_tensors="pt",
-    )
-    input_ids = tokens.input_ids.to(device)
-    mask = tokens.attention_mask.to(device)
-    embeds = components["text_encoder"](input_ids, mask).last_hidden_state
-    embeds = embeds.to(torch.bfloat16)
-
-    # Trim each sample to its actual token length (variable-length output)
-    seq_lens = mask.sum(dim=1).tolist()
     results = []
-    for i, length in enumerate(seq_lens):
-        results.append(embeds[i, :length].contiguous())
+    prompts = [clean(p) for p in prompts]
+    step = micro_batch_size if micro_batch_size and micro_batch_size > 0 else len(prompts)
+    for start in range(0, len(prompts), step):
+        chunk = prompts[start : start + step]
+        # Dynamic padding: pad to longest in microbatch, not max_length.
+        tokens = components["tokenizer"](
+            chunk,
+            padding="longest",
+            max_length=max_length,
+            truncation=True,
+            add_special_tokens=True,
+            return_attention_mask=True,
+            return_tensors="pt",
+        )
+        input_ids = tokens.input_ids.to(device)
+        mask = tokens.attention_mask.to(device)
+        embeds = components["text_encoder"](input_ids, mask).last_hidden_state
+        embeds = embeds.to(torch.bfloat16)
+
+        # Trim each sample to its actual token length (variable-length output).
+        seq_lens = mask.sum(dim=1).tolist()
+        for i, length in enumerate(seq_lens):
+            results.append(embeds[i, :length].contiguous())
 
     return results
 
@@ -245,7 +262,7 @@ def main():
 
         prompts = [s["prompt"] for s in batch]
 
-        embeds_list = encode_text(components, prompts, device)
+        embeds_list = encode_text(components, prompts, device, args.encode_micro_batch_size)
         embeds_cpu = [e.cpu() for e in embeds_list]
 
         if save_future is not None:

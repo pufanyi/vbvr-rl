@@ -13,7 +13,7 @@ from pathlib import Path
 import torch
 import torch.distributed as dist
 from loguru import logger
-from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 from torch.utils.data import DistributedSampler
 from torchdata.stateful_dataloader import StatefulDataLoader
@@ -51,24 +51,42 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         self._dist_timeout = timedelta(minutes=cfg.distributed_timeout_minutes)
         dist_backend = os.environ.get("TORCH_DISTRIBUTED_BACKEND", "nccl")
         dist.init_process_group(dist_backend, timeout=self._dist_timeout)
-        self.rank = dist.get_rank()
-        self.world_size = dist.get_world_size()
+        self.global_rank = dist.get_rank()
+        self.global_world_size = dist.get_world_size()
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        self.local_rank = local_rank
+        self.local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", torch.cuda.device_count()))
         self.device = torch.device(f"cuda:{local_rank}")
         torch.cuda.set_device(self.device)
-        torch.manual_seed(cfg.seed + self.rank)
-        self._dcp_pg = None
-        self._checkpoint_pg = dist.new_group(
-            ranks=list(range(self.world_size)),
-            backend="gloo",
-            timeout=self._dist_timeout,
-        )
+        self._init_rl_split_groups(cfg, dist_backend)
+        torch.manual_seed(cfg.seed + self.global_rank)
 
         # ---- Expert parallel (must run before model build) ----
         self._init_expert_parallel(cfg)
 
-        setup_loguru(self.rank)
-        logger.info("World size: {}", self.world_size)
+        split_debug_logs = bool(getattr(cfg, "rl_split_debug_logs", False))
+        self.log_enabled = (
+            self._is_train_root()
+            or (self.rl_split_enabled and split_debug_logs and self.local_rank == 0)
+            or (self.expert_parallel and getattr(self, "dp_rank", -1) == 0)
+        )
+        setup_loguru(self.global_rank, enabled=self.log_enabled)
+        if self.rl_split_enabled:
+            hostname = os.uname().nodename if hasattr(os, "uname") else "unknown"
+            logger.info(
+                "RL split: train_ranks={} inference_ranks={} role={} local_train_world_size={} "
+                "global_rank={} local_rank={} host={} split_debug_logs={}",
+                self.train_global_ranks,
+                self.inference_global_ranks,
+                self.rl_role,
+                self.world_size,
+                self.global_rank,
+                self.local_rank,
+                hostname,
+                split_debug_logs,
+            )
+        else:
+            logger.info("World size: {}", self.world_size)
         self._configure_attention_backend(cfg)
 
         # ---- Model ----
@@ -79,24 +97,32 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         self._pre_fsdp_setup(cfg)
 
         # ---- FSDP2 ----
-        if cfg.fsdp:
+        if cfg.fsdp and self.is_train_rank:
             self.mesh, self.mp_policy = self._create_device_mesh(cfg)
             self.sync_modules = self._setup_fsdp(cfg)
         else:
-            if cfg.expert_parallel:
+            if cfg.expert_parallel and self.is_train_rank:
                 raise ValueError("expert_parallel requires fsdp=True")
-            # Move transformers to GPU (FSDP normally handles this via fully_shard)
+            # Move transformers to GPU (FSDP normally handles this via fully_shard).
+            # Rollout-only ranks intentionally keep a full, unsharded policy copy.
             for m in [self.model.transformer, self.model.transformer_2]:
                 if m is not None:
                     m.to(self.device)
             self.mesh, self.mp_policy = None, None
             self.sync_modules = []
             self._dp_pg = None
-            self._dcp_pg = None
-            logger.info("FSDP disabled — using manual gradient all-reduce")
+            if self.is_train_rank:
+                self._dcp_pg = None
+                logger.info("FSDP disabled — using manual gradient all-reduce")
+            else:
+                for m in [self.model.transformer, self.model.transformer_2]:
+                    if m is not None:
+                        m.requires_grad_(False)
+                        m.eval()
+                logger.info("Rollout actor rank initialized with an unsharded policy copy")
 
         # ---- EMA ----
-        self.ema = self._setup_ema(cfg)
+        self.ema = self._setup_ema(cfg) if self.is_train_rank else None
 
         # ---- torch.compile ----
         if cfg.torch_compile:
@@ -108,16 +134,22 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         self.dataloader = self._build_dataloader(self.dataset, cfg)
 
         # ---- Optimizer ----
-        (
-            self.params,
-            self.optimizers,
-            self.optimizer_te,
-            self.optimizer_1,
-            self.optimizer_2,
-            self.fallback_te,
-            self.fallback_1,
-            self.fallback_2,
-        ) = self._build_optimizers(cfg)
+        if self.is_train_rank:
+            (
+                self.params,
+                self.optimizers,
+                self.optimizer_te,
+                self.optimizer_1,
+                self.optimizer_2,
+                self.fallback_te,
+                self.fallback_1,
+                self.fallback_2,
+            ) = self._build_optimizers(cfg)
+        else:
+            self.params = []
+            self.optimizers = []
+            self.optimizer_te = self.optimizer_1 = self.optimizer_2 = None
+            self.fallback_te = self.fallback_1 = self.fallback_2 = None
 
         # ---- Total steps ----
         self.total_steps = self._compute_total_steps()
@@ -135,19 +167,22 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
             )
 
         # ---- DCP state ----
-        self.train_state = TrainState(
-            text_encoder=self.model.text_encoder
-            if (cfg.train_text_encoder and self.model.text_encoder is not None)
-            else None,
-            transformer=self.model.transformer,
-            transformer_2=self.model.transformer_2,
-        )
+        if self.is_train_rank:
+            self.train_state = TrainState(
+                text_encoder=self.model.text_encoder
+                if (cfg.train_text_encoder and self.model.text_encoder is not None)
+                else None,
+                transformer=self.model.transformer,
+                transformer_2=self.model.transformer_2,
+            )
+        else:
+            self.train_state = TrainState(None, None, None)
 
         # ---- Subclass hook (e.g. MFU monitor) ----
         self._post_init(cfg)
 
         # ---- Wandb ----
-        self.use_wandb = cfg.wandb_project is not None and self.rank == 0
+        self.use_wandb = cfg.wandb_project is not None and self._is_train_root()
         if self.use_wandb:
             import wandb
 
@@ -162,11 +197,110 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
                 self._reset_on_load = not is_auto_resume
             else:
                 self._reset_on_load = cfg.reset_dataloader
-            self._load_checkpoint(resume_path)
+            if self.is_train_rank:
+                self._load_checkpoint(resume_path)
+            elif self.rl_split_enabled:
+                prefer = "auto" if self._reset_on_load else "raw"
+                self._load_actor_checkpoint(resume_path, prefer=prefer)
+                if not self._reset_on_load:
+                    self._load_actor_dataloader_state(resume_path)
 
     # ------------------------------------------------------------------
     # Hooks for subclasses
     # ------------------------------------------------------------------
+
+    def _init_rl_split_groups(self, cfg: RLConfig, dist_backend: str) -> None:
+        """Partition global ranks into train and rollout roles for split RL."""
+        self.rl_split_enabled = cfg.rl_train_node_count > 0 or cfg.rl_train_rank_count > 0
+        self.rl_role = "train"
+        self.is_train_rank = True
+        self.is_inference_rank = False
+        self.train_global_ranks = list(range(self.global_world_size))
+        self.inference_global_ranks: list[int] = []
+        self.rollout_rank = -1
+        self.rollout_world_size = 0
+        self._train_pg = None
+        self._train_gloo_pg = None
+        self._dcp_pg = None
+        self._split_actor_pgs: dict[int, dist.ProcessGroup] = {}
+
+        if not self.rl_split_enabled:
+            self.rank = self.global_rank
+            self.world_size = self.global_world_size
+            self._checkpoint_pg = dist.new_group(
+                ranks=list(range(self.world_size)),
+                backend="gloo",
+                timeout=self._dist_timeout,
+            )
+            return
+
+        if cfg.expert_parallel:
+            raise ValueError("rl_train_node_count split mode does not support expert_parallel")
+        if cfg.lora_rank <= 0 and cfg.rl_actor_weight_sync != "none":
+            raise ValueError("split RL actor weight sync currently requires lora_rank > 0")
+        if self.local_world_size <= 0:
+            raise ValueError("Could not determine LOCAL_WORLD_SIZE for split RL")
+        if self.global_world_size % self.local_world_size != 0:
+            raise ValueError(
+                f"global_world_size={self.global_world_size} must be divisible by "
+                f"local_world_size={self.local_world_size}"
+            )
+
+        if cfg.rl_train_rank_count > 0:
+            train_world_size = cfg.rl_train_rank_count
+            if train_world_size >= self.global_world_size:
+                raise ValueError(
+                    "rl_train_rank_count must leave at least one rollout rank; "
+                    f"got train_ranks={train_world_size}, total_ranks={self.global_world_size}"
+                )
+        else:
+            node_count = self.global_world_size // self.local_world_size
+            if cfg.rl_train_node_count >= node_count:
+                raise ValueError(
+                    "rl_train_node_count must leave at least one rollout node; "
+                    f"got train_nodes={cfg.rl_train_node_count}, total_nodes={node_count}"
+                )
+            train_world_size = cfg.rl_train_node_count * self.local_world_size
+        self.train_global_ranks = list(range(train_world_size))
+        self.inference_global_ranks = list(range(train_world_size, self.global_world_size))
+        self.rollout_world_size = len(self.inference_global_ranks)
+        self._train_pg = dist.new_group(
+            ranks=self.train_global_ranks,
+            backend=dist_backend,
+            timeout=self._dist_timeout,
+        )
+        self._train_gloo_pg = dist.new_group(
+            ranks=self.train_global_ranks,
+            backend="gloo",
+            timeout=self._dist_timeout,
+        )
+        train_root = self.train_global_ranks[0]
+        for actor_rank in self.inference_global_ranks:
+            pg = dist.new_group(
+                ranks=[train_root, actor_rank],
+                backend="gloo",
+                timeout=self._dist_timeout,
+            )
+            if self.global_rank in (train_root, actor_rank):
+                self._split_actor_pgs[actor_rank] = pg
+
+        if self.global_rank in self.train_global_ranks:
+            self.rank = dist.get_rank(self._train_pg)
+            self.world_size = train_world_size
+            self._checkpoint_pg = self._train_gloo_pg
+        else:
+            self.rl_role = "inference"
+            self.is_train_rank = False
+            self.is_inference_rank = True
+            self.rank = self.global_rank
+            # In split mode ``world_size`` means the train mesh size. Rollout
+            # fan-out is tracked separately by ``rollout_world_size``.
+            self.world_size = train_world_size
+            self.rollout_rank = self.global_rank - train_world_size
+            self._checkpoint_pg = None
+
+    def _is_train_root(self) -> bool:
+        return self.is_train_rank and self.global_rank == self.train_global_ranks[0]
 
     def _pre_fsdp_setup(self, cfg: RLConfig) -> None:
         """Called after model build, before FSDP. Override to create ref models etc."""
@@ -211,12 +345,15 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         if dataset_size is None:
             dataset_size = self.cfg.dataset_size
         if dataset_size is not None:
-            dp = self.dp_size if self._expert_parallel_duplicates_data(self.cfg) else self.world_size
+            if self.rl_split_enabled:
+                dp = 1
+            else:
+                dp = self.dp_size if self._expert_parallel_duplicates_data(self.cfg) else self.world_size
             total = self.cfg.num_epochs * (dataset_size // (dp * self.cfg.batch_size))
         else:
             total = self.cfg.num_epochs * len(self.dataloader)
         if self.cfg.max_steps is not None:
-            total = min(total, self.cfg.max_steps)
+            total = self.cfg.max_steps if total <= 0 else min(total, self.cfg.max_steps)
         return total
 
     def _configure_attention_backend(self, cfg: RLConfig) -> None:
@@ -348,7 +485,20 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
     # ------------------------------------------------------------------
 
     def _create_device_mesh(self, cfg: RLConfig):
-        if self.expert_parallel and cfg.hsdp:
+        if self.rl_split_enabled and not self.expert_parallel:
+            if self._train_pg is None:
+                raise RuntimeError("split RL train rank is missing its train process group")
+            if cfg.hsdp and self.world_size > self.local_world_size:
+                logger.warning("split RL currently uses a 1D train FSDP mesh; ignoring hsdp=True")
+            mesh = DeviceMesh.from_group(
+                self._train_pg,
+                "cuda",
+                mesh=torch.arange(self.world_size, device="cpu"),
+                mesh_dim_names=("dp",),
+            )
+            self._dp_pg = self._train_pg
+            self._dcp_pg = self._train_gloo_pg
+        elif self.expert_parallel and cfg.hsdp:
             local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", torch.cuda.device_count()))
             # On a single node, both expert groups share the node, so each
             # expert's shard group only owns half of LOCAL_WORLD_SIZE.
@@ -506,15 +656,25 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
 
     def _build_dataset(self, cfg: RLConfig) -> tuple:
         if cfg.latent_webdataset_dir is not None:
-            if self._expert_parallel_duplicates_data(cfg):
-                data_rank = self.dp_rank
-                data_world_size = self.dp_size
+            if self.rl_split_enabled:
+                # Split DanceGRPO intentionally feeds the same prompt batch to
+                # every train/rollout rank. Rollout ranks partition G across
+                # cards, so batch_size is the effective global prompt batch.
+                data_rank = 0
+                data_world_size = 1
+                data_seed = cfg.seed
             else:
-                data_rank = self.rank
-                data_world_size = self.world_size
-            data_seed = (
-                self._get_expert_parallel_sampler_seed(cfg) if self._expert_parallel_duplicates_data(cfg) else cfg.seed
-            )
+                if self._expert_parallel_duplicates_data(cfg):
+                    data_rank = self.dp_rank
+                    data_world_size = self.dp_size
+                else:
+                    data_rank = self.rank
+                    data_world_size = self.world_size
+                data_seed = (
+                    self._get_expert_parallel_sampler_seed(cfg)
+                    if self._expert_parallel_duplicates_data(cfg)
+                    else cfg.seed
+                )
             epoch_length = None
             if cfg.dataset_size is not None:
                 epoch_length = cfg.dataset_size // data_world_size
@@ -575,7 +735,15 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
                 width=cfg.width,
                 fps=cfg.fps,
             )
-        if self.expert_parallel:
+        if self.rl_split_enabled:
+            sampler = DistributedSampler(
+                dataset,
+                num_replicas=1,
+                rank=0,
+                shuffle=True,
+                seed=cfg.seed,
+            )
+        elif self.expert_parallel:
             seed = self._get_expert_parallel_sampler_seed(cfg)
             replicas = self.dp_size if self._expert_parallel_duplicates_data(cfg) else self.world_size
             rank = self.dp_rank if self._expert_parallel_duplicates_data(cfg) else self.rank
@@ -679,12 +847,16 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
             return
         for p in self.params:
             if p.grad is not None:
-                dist.all_reduce(p.grad, op=dist.ReduceOp.AVG)
+                dist.all_reduce(p.grad, op=dist.ReduceOp.AVG, group=self._train_pg)
 
     def _barrier(self) -> None:
+        if self._checkpoint_pg is None:
+            return
         dist.barrier(group=self._checkpoint_pg)
 
     def _checkpoint_rank(self) -> int:
+        if self.rl_split_enabled:
+            return self.rank
         if self.expert_parallel:
             return self.dp_rank
         if self.mesh is not None and self.mesh.ndim == 2:
@@ -702,6 +874,67 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
             timeout=self._dist_timeout,
         )
         return high_pg if self.expert_group == 0 else low_pg
+
+    # ------------------------------------------------------------------
+    # Split actor checkpoint init
+    # ------------------------------------------------------------------
+
+    def _load_actor_checkpoint(self, path: str, *, prefer: str = "auto") -> None:
+        """Weight-only checkpoint load for rollout actors.
+
+        Actors are not part of the train FSDP/DCP process group, so they read
+        the checkpoint as a single-process CPU state dict and load it into the
+        local unsharded policy copy. Per-step LoRA sync then keeps actors on
+        the latest train policy.
+        """
+        from src.trainer.checkpoint import extract_init_weights, read_dcp_to_flat_dict, remap_for_current_model
+
+        ckpt = Path(path)
+        layout = []
+        if (ckpt / "high" / ".metadata").exists():
+            layout.append(("transformer", ckpt / "high"))
+        if (ckpt / "low" / ".metadata").exists():
+            layout.append(("transformer_2", ckpt / "low"))
+        if not layout and (ckpt / ".metadata").exists():
+            layout = [("transformer", ckpt), ("transformer_2", ckpt)]
+        if not layout:
+            raise ValueError(f"Checkpoint at {path} has no DCP metadata for actor initialization")
+
+        logger.info("Actor initializing weights from {} (prefer={})", path, prefer)
+        for model_key, dcp_path in layout:
+            model = getattr(self.model, model_key, None)
+            if model is None:
+                continue
+            flat = read_dcp_to_flat_dict(dcp_path)
+            try:
+                weights, source_tag = extract_init_weights(flat, model_key, prefer=prefer)
+            except RuntimeError as e:
+                logger.debug("No {} data in {}: {}", model_key, dcp_path, e)
+                continue
+            remapped = remap_for_current_model(weights, model)
+            missing, unexpected = model.load_state_dict(remapped, strict=False)
+            logger.info(
+                "Actor loaded {} {} weights from {} (missing={}, unexpected={})",
+                model_key,
+                source_tag,
+                dcp_path,
+                len(missing),
+                len(unexpected),
+            )
+
+    def _load_actor_dataloader_state(self, path: str) -> None:
+        ckpt = Path(path)
+        candidates = [
+            ckpt / "high" / "dataloader_rank0.pt",
+            ckpt / "low" / "dataloader_rank0.pt",
+            ckpt / "dataloader_rank0.pt",
+        ]
+        dl_state_path = next((p for p in candidates if p.exists()), None)
+        if dl_state_path is None:
+            logger.warning("Actor found no dataloader_rank0.pt under {}; starting dataloader fresh.", ckpt)
+            return
+        self.dataloader.load_state_dict(torch.load(dl_state_path, weights_only=False))
+        logger.info("Actor restored dataloader state from {}", dl_state_path)
 
     # ------------------------------------------------------------------
     # DCP checkpointing — provided by CheckpointRuntimeMixin

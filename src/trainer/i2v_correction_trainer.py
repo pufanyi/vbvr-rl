@@ -65,11 +65,17 @@ class I2VCorrectionTrainer(BaseTrainer):
         bi = self.model.boundary_idx
         N = self.model.num_train_timesteps
         experts: list[tuple[float, object]] = []
-        if self.model.transformer is not None:
-            prob = bi / N if self._effective_train_experts == "both" else 1.0
+        # A single-transformer model (e.g. 5B TI2V) routes every sample through the
+        # one transformer; only a true dual-expert model (A14B) splits samples between
+        # experts by timestep, so apply the boundary-fraction weighting only then.
+        both = self._effective_train_experts == "both"
+        has_high = self.model.transformer is not None
+        has_low = self.model.transformer_2 is not None
+        if has_high:
+            prob = (bi / N) if (both and has_low) else 1.0
             experts.append((prob, self.model.transformer))
-        if self.model.transformer_2 is not None:
-            prob = (N - bi) / N if self._effective_train_experts == "both" else 1.0
+        if has_low:
+            prob = ((N - bi) / N) if (both and has_high) else 1.0
             experts.append((prob, self.model.transformer_2))
 
         # Resolve latent seq_len (same logic as I2VTrainer._setup_mfu)

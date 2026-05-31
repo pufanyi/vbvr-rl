@@ -1,7 +1,7 @@
-"""Wan2.2 I2V Flow-GRPO training entry point.
+"""Wan2.2 I2V DanceGRPO training entry point.
 
 Usage:
-    .venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_grpo --config configs/train_grpo.yaml
+    .venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_grpo --config configs/train_dancegrpo_maze.yaml
 """
 
 import argparse
@@ -9,11 +9,11 @@ from pathlib import Path
 
 import yaml
 
-from src.trainer import DanceGRPOTrainer, GRPOTrainer, RLConfig
+from src.trainer import DanceGRPOTrainer, RLConfig
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Wan2.2 I2V Flow-GRPO Training")
+    parser = argparse.ArgumentParser(description="Wan2.2 I2V DanceGRPO Training")
     parser.add_argument("--config", type=str, default=None, help="YAML/JSON config file")
     # CLI overrides (auto-generated from RLConfig fields)
     for name, field_info in RLConfig.model_fields.items():
@@ -37,8 +37,7 @@ def main():
             cfg_dict[name] = v
 
     cfg = RLConfig(**cfg_dict)
-    trainer_cls = DanceGRPOTrainer if cfg.trainer == "dancegrpo" else GRPOTrainer
-    trainer = trainer_cls(cfg)
+    trainer = DanceGRPOTrainer(cfg)
     trainer.train()
 
 

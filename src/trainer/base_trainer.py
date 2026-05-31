@@ -220,8 +220,12 @@ class BaseTrainer(CheckpointRuntimeMixin):
         if self.cfg.dataset_size is not None:
             dp = self.dp_size if self._expert_parallel_duplicates_data(self.cfg) else self.world_size
             batches_per_epoch = self.cfg.dataset_size // (dp * self.cfg.batch_size)
-            return self.cfg.num_epochs * batches_per_epoch // self.cfg.gradient_accumulation_steps
-        return self.cfg.num_epochs * len(self.dataloader) // self.cfg.gradient_accumulation_steps
+            total = self.cfg.num_epochs * batches_per_epoch // self.cfg.gradient_accumulation_steps
+        else:
+            total = self.cfg.num_epochs * len(self.dataloader) // self.cfg.gradient_accumulation_steps
+        if self.cfg.max_steps is not None:
+            total = self.cfg.max_steps if total <= 0 else min(total, self.cfg.max_steps)
+        return total
 
     def _configure_attention_backend(self, cfg: TrainConfig) -> None:
         if not cfg.disable_cudnn_sdp:

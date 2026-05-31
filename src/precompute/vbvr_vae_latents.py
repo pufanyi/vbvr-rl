@@ -21,6 +21,7 @@ Output: one safetensors per sample: {tar_stem}_{idx}.safetensors
 
 import argparse
 import io
+import json
 import os
 import tarfile
 import tempfile
@@ -76,6 +77,7 @@ def parse_args():
     p.add_argument("--width", type=int, default=None, help="Target width (computed from max_area if not set)")
     p.add_argument("--max_area", type=int, default=480 * 832, help="Max pixel area (used when height/width not set)")
     p.add_argument("--tars", nargs="*", default=None, help="Process only these tar files (basenames). Default: all.")
+    p.add_argument("--max_samples", type=int, default=None, help="Optional cap for smoke/partial precompute runs")
     p.add_argument("--skip_existing", action="store_true", help="Skip samples whose output already exists")
     p.add_argument("--compile", action="store_true", help="Use torch.compile on VAE encoder")
     return p.parse_args()
@@ -90,6 +92,11 @@ def load_vae(model_path: str, device: str):
     from diffusers import AutoencoderKLWan
 
     model_dir = Path(model_path)
+    model_index_path = model_dir / "model_index.json"
+    if model_index_path.exists():
+        model_index = json.loads(model_index_path.read_text())
+    else:
+        model_index = {}
 
     vae = AutoencoderKLWan.from_pretrained(model_dir / "vae", torch_dtype=torch.float32)
     vae.to(device).eval().requires_grad_(False)
@@ -107,6 +114,7 @@ def load_vae(model_path: str, device: str):
         "latents_std_inv": latents_std_inv,
         "scale_spatial": scale_spatial,
         "scale_temporal": scale_temporal,
+        "expand_timesteps": bool(model_index.get("expand_timesteps", False)),
     }
 
 
@@ -131,6 +139,15 @@ def prepare_condition(components, image: torch.Tensor, num_frames: int, height: 
     scale_temporal = components["scale_temporal"]
 
     B = image.shape[0]
+
+    if components.get("expand_timesteps", False):
+        cond_latents = vae.encode(image.unsqueeze(2).to(vae.dtype)).latent_dist.mode()
+        mean = components["latents_mean"].to(dtype=cond_latents.dtype)
+        std_inv = components["latents_std_inv"].to(dtype=cond_latents.dtype)
+        cond_latents = ((cond_latents - mean) * std_inv).to(torch.bfloat16)
+        latent_frames = (num_frames - 1) // scale_temporal + 1
+        return cond_latents.expand(B, -1, latent_frames, -1, -1).contiguous()
+
     cond_video = image.new_zeros((B, 3, num_frames, height, width))
     cond_video[:, :, 0] = image
 
@@ -332,6 +349,12 @@ def main():
         idx = tar_counters.get(s["tar_name"], 0)
         s["index_in_tar"] = idx
         tar_counters[s["tar_name"]] = idx + 1
+
+    if args.max_samples is not None:
+        all_samples = all_samples[: args.max_samples]
+        tar_counters = {}
+        for s in all_samples:
+            tar_counters[s["tar_name"]] = max(tar_counters.get(s["tar_name"], 0), s["index_in_tar"] + 1)
 
     if rank == 0:
         logger.info("Total samples: {}, across {} tars", len(all_samples), len(tar_counters))

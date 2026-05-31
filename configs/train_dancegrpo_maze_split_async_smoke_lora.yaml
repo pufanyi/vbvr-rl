@@ -2,17 +2,23 @@ trainer: dancegrpo
 model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
 
 latent_webdataset_dir: data/maze/latents/maze_384x384x161_line_v1/webdataset/rl
-dataset_size: 8
+dataset_size: 512
 
-output_dir: storage/checkpoints/dancegrpo_maze_4_rl_smoke_8gpu
-resume_from: storage/checkpoints/sft_maze_4/checkpoint-2000
+output_dir: storage/checkpoints/dancegrpo_maze_split_async_smoke_lora
+resume_from: null
 reset_dataloader: true
 auto_resume: false
+
+rl_train_node_count: 0
+rl_train_rank_count: 4
+rl_actor_weight_sync: lora
+rl_async_rollout: true
+rl_async_rollout_prefetch_steps: 0
 
 batch_size: 1
 gradient_accumulation_steps: 1
 num_epochs: 1
-max_steps: 1
+max_steps: 100
 save_steps: 0
 save_epoch_checkpoints: false
 learning_rate: 1.0e-5
@@ -29,22 +35,21 @@ persistent_workers: false
 prefetch_factor: 2
 
 expert_parallel: false
-expert_parallel_data_mode: duplicate
-hsdp: true
+hsdp: false
 train_experts: both
 lora_rank: 32
 lora_alpha: 32
 
 grpo_group_size: 2
 grpo_sample_batch_size: 1
-grpo_num_sampling_steps: 4
+grpo_num_sampling_steps: 2
 grpo_clip_range: 1.0e-4
 grpo_kl_coeff: 0.0
 grpo_reward_fn: maze_line
 grpo_sde_noise_scale: 0.3
 grpo_cfg_scale: 1.0
 dancegrpo_share_group_init_noise: true
-dancegrpo_timestep_selection_ratio: 0.6
+dancegrpo_timestep_selection_ratio: 1.0
 
 maze_line_reward_num_frames: 2
 maze_line_reward_color_threshold: 90.0

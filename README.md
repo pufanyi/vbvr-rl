@@ -1,6 +1,6 @@
 # Wan-Trainer
 
-Wan-Trainer is a research training stack for **Wan2.2 Image-to-Video** models. The current codebase supports supervised flow-matching fine-tuning, Chain-of-Step (COS) path training, on-policy correction, Flow-GRPO, DanceGRPO-style replay, latent WebDataset training, DCP checkpointing, LoRA extraction/loading, and VBVR-style evaluation.
+Wan-Trainer is a research training stack for **Wan2.2 Image-to-Video** models. The current codebase supports supervised flow-matching fine-tuning, Chain-of-Step (COS) path training, on-policy correction, DanceGRPO-style replay, latent WebDataset training, DCP checkpointing, LoRA extraction/loading, and VBVR-style evaluation.
 
 The detailed English documentation lives in [`docs/`](docs/README.md). Start there if you need the full architecture and code-path analysis.
 
@@ -32,11 +32,12 @@ fish scripts/train/i2v.fish --nproc 8 -- --config configs/train_cos_maze_cos_pat
 fish scripts/train/i2v.fish --nproc 8 -- --config configs/train_sft_maze_lr_5e-6.yaml
 ```
 
-Flow-GRPO / DanceGRPO:
+DanceGRPO:
 
 ```fish
 fish scripts/train/grpo.fish --nproc 8 --config configs/train_grpo_maze.yaml
 fish scripts/train/grpo.fish --nproc 8 --config configs/train_dancegrpo_maze.yaml
+fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8
 ```
 
 On-policy correction:
@@ -134,7 +135,7 @@ Use `--checkpoint <checkpoint-dir> --use_ema` with `src.cli.eval_i2v` to generat
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md): system architecture and code-path analysis.
-- [`docs/training.md`](docs/training.md): SFT, COS, correction, Flow-GRPO, and DanceGRPO behavior.
+- [`docs/training.md`](docs/training.md): SFT, COS, correction, and DanceGRPO behavior.
 - [`docs/data.md`](docs/data.md): raw and latent dataset contracts.
 - [`docs/evaluation.md`](docs/evaluation.md): generation, VBVR, VLM/rule scoring.
 - [`docs/checkpoints.md`](docs/checkpoints.md): DCP, resume/init, LoRA, EMA.

@@ -39,6 +39,15 @@ MASTER_PORT_BASE="${MASTER_PORT_BASE:-29630}"
 LOG_DIR="${LOG_DIR:-logs}"
 mkdir -p "$LOG_DIR" "$SFT_WEBDATASET_DIR" "$RL_WEBDATASET_DIR"
 
+PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
+if [[ ! -x "$PYTHON_BIN" ]]; then
+    PYTHON_BIN="$(command -v python3 || command -v python || true)"
+fi
+if [[ -z "$PYTHON_BIN" ]]; then
+    echo "[error] python not found; set PYTHON_BIN=/path/to/python" >&2
+    exit 1
+fi
+
 SUPERVISOR_LOG="${SUPERVISOR_LOG:-$LOG_DIR/vbvr_384_supervisor_$(date +%Y%m%d_%H%M%S).log}"
 PID_FILE="${PID_FILE:-$LOG_DIR/vbvr_384_supervisor.pid}"
 VAE_PID_FILE="${VAE_PID_FILE:-$LOG_DIR/vbvr_384_supervised_vae.pid}"
@@ -215,7 +224,7 @@ build_split() {
     split_log="$LOG_DIR/vbvr_384_build_split_$(date +%Y%m%d_%H%M%S).log"
     log "starting split build log=$split_log"
     (
-        exec python -m src.precompute.build_webdataset_split \
+        exec "$PYTHON_BIN" -m src.precompute.build_webdataset_split \
             --prompt_embeds_dir "$PROMPT_EMBEDS_DIR" \
             --vae_latents_dir "$VAE_LATENTS_DIR" \
             --sft_output_dir "$SFT_WEBDATASET_DIR" \

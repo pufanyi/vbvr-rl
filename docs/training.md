@@ -1,6 +1,6 @@
 # Training
 
-Wan-Trainer implements five training modes on top of the same Wan2.2 I2V wrapper: SFT, COS, correction, Flow-GRPO, and DanceGRPO-style replay.
+Wan-Trainer implements four training modes on top of the same Wan2.2 I2V wrapper: SFT, COS, correction, and DanceGRPO-style replay.
 
 ## Shared Flow-Matching Base
 
@@ -99,41 +99,31 @@ Current correction code explicitly forbids expert parallel because the teacher r
 
 Operational warning: if `ema_decay <= 0`, the code logs that the teacher will use live student weights. That defeats much of the intended teacher-stability effect.[^correction-trainer]
 
-## Flow-GRPO
+## RL Objective Background
 
-The GRPO stack adapts policy-gradient optimization to flow-matching video generation. The code follows the Flow-GRPO idea of converting deterministic flow ODE sampling into a stochastic SDE transition so that rollout steps have tractable log probabilities.[^flowgrpo][^wan-sde]
+The RL stack adapts policy-gradient optimization to flow-matching video generation. The code keeps the Flow-GRPO idea of converting deterministic flow ODE sampling into a stochastic SDE transition so rollout steps have tractable log probabilities, but the supported trainer path is DanceGRPO.[^flowgrpo][^wan-sde]
 
-Single-group GRPO does:
+DanceGRPO does:
 
 1. encode one batch;
 2. sample `G` videos per prompt in chunks of `grpo_sample_batch_size`;
 3. compute reward for final generated latents;
 4. compute group-relative z-score advantages;
-5. replay each denoising step, recompute log probabilities, apply PPO-style clipped policy loss, and optionally add a KL penalty to a reference policy.[^grpo-trainer][^ppo][^grpo]
+5. replay selected denoising steps, recompute log probabilities, apply PPO-style clipped policy loss, and optionally add a KL penalty to a reference policy.[^dancegrpo-trainer][^ppo][^grpo]
 
 For LoRA runs, the reference policy is the base model with adapters disabled. For full fine-tuning, frozen reference transformer copies are created before FSDP sharding.[^base-grpo]
 
-Expert-parallel GRPO is cooperative:
-
-- high-expert ranks sample the high-noise prefix;
-- high sends the boundary latent to the low peer;
-- low-expert ranks finish the low-noise suffix;
-- low computes the final reward and asks high to contribute any high-expert reward component when needed;
-- low sends advantages back to high;
-- both groups replay only their local trajectory segments.[^grpo-trainer][^base-grpo]
-
-The expert-parallel path requires a schedule with a single high-prefix to low-suffix transition and both experts present in the sampling steps.[^base-grpo]
-
 ## DanceGRPO-Style Replay
 
-`DanceGRPOTrainer` keeps the standard single-group execution path but adopts two ideas from DanceGRPO:
+`DanceGRPOTrainer` keeps the standard single-group execution path for normal launches and can also split
+rollout/reward actors from the smaller training FSDP group for multi-node launches. It adopts two ideas from DanceGRPO:
 
 - all samples in a prompt group can share the same initial noise;
 - policy replay can use only a selected subset of denoising timesteps.[^dancegrpo][^dancegrpo-trainer]
 
-The timestep subset is generated on rank 0 and broadcast so all FSDP ranks call the same expert modules in the same order. This is necessary because per-rank divergence in expert routing can deadlock FSDP collectives.[^dancegrpo-trainer]
+The timestep subset is generated consistently across ranks so all FSDP ranks call the same expert modules in the same order. This is necessary because per-rank divergence in expert routing can deadlock FSDP collectives.[^dancegrpo-trainer]
 
-DanceGRPO currently rejects expert parallel.[^dancegrpo-trainer]
+DanceGRPO currently rejects expert parallel. For split RL, `rl_train_node_count: 1` means node 0 trains and the remaining nodes run rollout/reward actors; rollout actors partition `grpo_group_size` across cards.[^dancegrpo-trainer]
 
 ## Reward Functions
 
@@ -153,11 +143,12 @@ fish scripts/train/i2v.fish --nproc 8 -- --config configs/train_sft_vbvr.yaml
 fish scripts/train/i2v.fish --nproc 8 -- --config configs/train_cos_maze_cos_path_all_bfs_w_color_latent.yaml
 ```
 
-Use the GRPO launcher for `trainer: grpo` or `trainer: dancegrpo`:
+Use the GRPO launcher for DanceGRPO:
 
 ```fish
 fish scripts/train/grpo.fish --nproc 8 --config configs/train_grpo_maze.yaml
 fish scripts/train/grpo.fish --nproc 8 --config configs/train_dancegrpo_maze.yaml
+fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8
 ```
 
 Use the correction launcher for `CorrectionConfig`:
@@ -186,7 +177,6 @@ fish scripts/train/i2v_correction.fish --nproc 8 -- --config configs/train_corre
 [^correction-trainer]: [`src/trainer/i2v_correction_trainer.py`](../src/trainer/i2v_correction_trainer.py)
 [^flowgrpo]: Liu et al., "Flow-GRPO: Training Flow Matching Models via Online RL", arXiv:2505.05470, https://arxiv.org/abs/2505.05470
 [^wan-sde]: [`src/models/wan_i2v.py`](../src/models/wan_i2v.py)
-[^grpo-trainer]: [`src/trainer/grpo_trainer.py`](../src/trainer/grpo_trainer.py)
 [^ppo]: Schulman et al., "Proximal Policy Optimization Algorithms", arXiv:1707.06347, https://arxiv.org/abs/1707.06347
 [^grpo]: Shao et al., "DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models", arXiv:2402.03300, https://arxiv.org/abs/2402.03300
 [^base-grpo]: [`src/trainer/base_grpo_trainer.py`](../src/trainer/base_grpo_trainer.py)

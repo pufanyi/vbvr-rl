@@ -299,6 +299,19 @@ class CheckpointRuntimeMixin:
         pg = getattr(self, "_dcp_pg", None) or self._dp_pg
         return {"process_group": pg}
 
+    def _flat_dcp_kwargs(self) -> dict:
+        """Return DCP kwargs for non-EP trainers.
+
+        In split RL, only train ranks participate in checkpoint collectives,
+        so DCP must use the train-only process group instead of the default
+        world group that also contains rollout actors.
+        """
+        if getattr(self, "rl_split_enabled", False):
+            pg = getattr(self, "_dcp_pg", None) or getattr(self, "_train_gloo_pg", None)
+            if pg is not None:
+                return {"process_group": pg}
+        return {}
+
     # ------------------------------------------------------------------
     # Discovery
     # ------------------------------------------------------------------
@@ -403,7 +416,7 @@ class CheckpointRuntimeMixin:
                 transformer_model=model,
                 transformer_optimizer=optimizer,
                 shard_rank=self.rank,
-                dcp_kwargs={},
+                dcp_kwargs=self._flat_dcp_kwargs(),
                 dcp_group_size=self.world_size,
                 dcp_coordinator_rank=self._resolve_dcp_coordinator_rank(self.world_size),
             )
@@ -562,7 +575,7 @@ class CheckpointRuntimeMixin:
                 path=ckpt,
                 filter_keys=None,  # load everything that matches what's in TrainState
                 shard_rank=self._checkpoint_rank(),
-                dcp_kwargs=self._expert_parallel_dcp_kwargs(),
+                dcp_kwargs=self._expert_parallel_dcp_kwargs() if self.expert_parallel else self._flat_dcp_kwargs(),
                 transformer_key=None,
             )
             return
@@ -586,7 +599,7 @@ class CheckpointRuntimeMixin:
                 path=sub_path,
                 filter_keys=self._subdir_filter_keys(key),
                 shard_rank=self.dp_rank if self.expert_parallel else self.rank,
-                dcp_kwargs=self._expert_parallel_dcp_kwargs(),
+                dcp_kwargs=self._expert_parallel_dcp_kwargs() if self.expert_parallel else self._flat_dcp_kwargs(),
                 transformer_key=key,
             )
 
@@ -721,6 +734,16 @@ class CheckpointRuntimeMixin:
         )
         if self.expert_parallel:
             object_pg = self._expert_parallel_dcp_kwargs().get("process_group")
+            tensor_pg = getattr(self, "_dp_pg", None) or object_pg
+            _set_model_state_dict_from_group_root(
+                model,
+                remapped,
+                object_pg=object_pg or tensor_pg,
+                tensor_pg=tensor_pg,
+                options=options,
+            )
+        elif getattr(self, "rl_split_enabled", False):
+            object_pg = self._flat_dcp_kwargs().get("process_group")
             tensor_pg = getattr(self, "_dp_pg", None) or object_pg
             _set_model_state_dict_from_group_root(
                 model,

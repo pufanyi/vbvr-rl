@@ -25,11 +25,17 @@ class I2VTrainer(BaseTrainer):
         bi = self.model.boundary_idx
         N = self.model.num_train_timesteps
         experts = []
-        if self.model.transformer is not None:
-            prob = bi / N if self._effective_train_experts == "both" else 1.0
+        # A single-transformer model (e.g. 5B TI2V) routes every sample through the
+        # one transformer; only a true dual-expert model (A14B) splits samples between
+        # experts by timestep, so apply the boundary-fraction weighting only then.
+        both = self._effective_train_experts == "both"
+        has_high = self.model.transformer is not None
+        has_low = self.model.transformer_2 is not None
+        if has_high:
+            prob = (bi / N) if (both and has_low) else 1.0
             experts.append((prob, self.model.transformer))
-        if self.model.transformer_2 is not None:
-            prob = (N - bi) / N if self._effective_train_experts == "both" else 1.0
+        if has_low:
+            prob = ((N - bi) / N) if (both and has_high) else 1.0
             experts.append((prob, self.model.transformer_2))
 
         # Determine seq_len: from dataset config or latent shape
@@ -106,8 +112,12 @@ class I2VTrainer(BaseTrainer):
         start_batch_idx = self.train_state.batch_idx
         train_start_time = time.monotonic()
         train_start_step = global_step
+        stop_training = False
 
         for epoch in range(start_epoch, cfg.num_epochs):
+            if cfg.max_steps is not None and global_step >= cfg.max_steps:
+                stop_training = True
+                break
             if self.sampler is not None:
                 self.sampler.set_epoch(epoch)
             for opt in self.optimizers:
@@ -139,6 +149,9 @@ class I2VTrainer(BaseTrainer):
                         global_step += 1
                         if self.mfu_monitor is not None:
                             self.mfu_monitor.step()
+                        if cfg.max_steps is not None and global_step >= cfg.max_steps:
+                            stop_training = True
+                            break
                         continue
                     self._last_grad_norm = self._clip_grad_norm_or_raise(cfg.max_grad_norm, context=context)
 
@@ -211,6 +224,20 @@ class I2VTrainer(BaseTrainer):
                         self.train_state.epoch = epoch
                         self.train_state.batch_idx = batch_idx + 1
                         self._save_checkpoint(output_dir / f"checkpoint-{global_step}")
+
+                    if cfg.max_steps is not None and global_step >= cfg.max_steps:
+                        stop_training = True
+                        break
+
+            if stop_training:
+                self.train_state.step = global_step
+                self.train_state.epoch = epoch
+                self.train_state.batch_idx = batch_idx + 1 if "batch_idx" in locals() else 0
+                ckpt_path = output_dir / f"checkpoint-{global_step}"
+                if global_step > 0 and not ckpt_path.exists():
+                    self._save_checkpoint(ckpt_path)
+                logger.info("Reached max_steps={} at step={}.", cfg.max_steps, global_step)
+                break
 
             # End-of-epoch save
             self.train_state.step = global_step

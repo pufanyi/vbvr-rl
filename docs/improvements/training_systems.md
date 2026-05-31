@@ -94,7 +94,6 @@ Recommended work:
 [^base-trainer]: [`src/trainer/base_trainer.py`](../../src/trainer/base_trainer.py)
 [^base-rl]: [`src/trainer/base_rl_trainer.py`](../../src/trainer/base_rl_trainer.py)
 [^cos-trainer]: [`src/trainer/cos_trainer.py`](../../src/trainer/cos_trainer.py)
-[^grpo-trainer]: [`src/trainer/grpo_trainer.py`](../../src/trainer/grpo_trainer.py)
 [^wan-wrapper]: [`src/models/wan_i2v.py`](../../src/models/wan_i2v.py)
 [^dancegrpo-trainer]: [`src/trainer/dancegrpo_trainer.py`](../../src/trainer/dancegrpo_trainer.py)
 [^checkpoint-runtime]: [`src/trainer/checkpoint_runtime.py`](../../src/trainer/checkpoint_runtime.py)

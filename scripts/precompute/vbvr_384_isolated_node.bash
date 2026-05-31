@@ -135,6 +135,7 @@ VAE_BATCH_SIZE="${VAE_BATCH_SIZE:-22}"
 COMPILE="${COMPILE:-0}"
 
 LOG_DIR="${LOG_DIR:-logs}"
+RUN_TAG="${RUN_TAG:-vbvr_384}"
 MASTER_ADDR="${LOCAL_MASTER_ADDR:-127.0.0.1}"
 MASTER_PORT="${LOCAL_MASTER_PORT:-$((29680 + MACHINE_RANK))}"
 mkdir -p "$LOG_DIR" "$PROMPT_EMBEDS_DIR" "$VAE_LATENTS_DIR"
@@ -169,8 +170,8 @@ if [[ -z "$TORCHRUN_BIN" ]]; then
     exit 1
 fi
 
-TAR_LIST_FILE="${TAR_LIST_FILE:-$LOG_DIR/vbvr_384_rank${MACHINE_RANK}_of_${NUM_MACHINES}_tars.txt}"
-MANIFEST_FILE="${MANIFEST_FILE:-$LOG_DIR/vbvr_384_rank${MACHINE_RANK}_of_${NUM_MACHINES}_manifest.json}"
+TAR_LIST_FILE="${TAR_LIST_FILE:-$LOG_DIR/${RUN_TAG}_rank${MACHINE_RANK}_of_${NUM_MACHINES}_tars.txt}"
+MANIFEST_FILE="${MANIFEST_FILE:-$LOG_DIR/${RUN_TAG}_rank${MACHINE_RANK}_of_${NUM_MACHINES}_manifest.json}"
 
 "$PYTHON_BIN" - "$METADATA" "$NUM_MACHINES" "$MACHINE_RANK" "$TAR_LIST_FILE" "$MANIFEST_FILE" <<'PY'
 import json
@@ -231,7 +232,7 @@ fi
 run_torch_stage() {
     local name="$1"
     shift
-    local run_log="$LOG_DIR/vbvr_384_isolated_rank${MACHINE_RANK}_${name}_$(date +%Y%m%d_%H%M%S).log"
+    local run_log="$LOG_DIR/${RUN_TAG}_isolated_rank${MACHINE_RANK}_${name}_$(date +%Y%m%d_%H%M%S).log"
 
     echo
     echo "==> running $name; log=$run_log"
@@ -265,7 +266,7 @@ run_torch_stage() {
 }
 
 echo
-echo "VBVR 384x384x81 isolated-node precompute"
+echo "${RUN_TAG} isolated-node precompute"
 echo "  rank:              $MACHINE_RANK / $NUM_MACHINES (one-indexed)"
 echo "  assigned:          ${#NODE_TARS[@]} tars; manifest=$MANIFEST_FILE"
 echo "  gpus:              $GPUS (nproc=$NPROC)"

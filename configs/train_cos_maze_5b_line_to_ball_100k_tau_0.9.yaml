@@ -1,0 +1,52 @@
+trainer: cos
+model_path: storage/models/Wan2.2-TI2V-5B-Diffusers
+latent_webdataset_dir: storage/latents/maze_5b_line_to_ball_v1/webdataset/sft
+dataset_size: 80000
+output_dir: storage/checkpoints/cos_maze_5b_line_to_ball_100k_tau_0.9
+
+# cos extends SFT. The 5B vbvr SFT checkpoint isn't produced yet; once it is,
+# point resume_from at it (e.g. storage/checkpoints/sft_vbvr_5b_256x256x161_full/checkpoint-NNNN).
+# Until then we start from the base 5B weights.
+# resume_from: storage/checkpoints/sft_vbvr_5b_256x256x161_full/checkpoint-4000
+
+# 5B at 384x384x161 (latent 24x24x41) under FSDP: keep micro-batch small and
+# checkpoint activations; raise gradient_accumulation_steps for a larger effective batch.
+batch_size: 16
+gradient_accumulation_steps: 1
+num_epochs: 5
+learning_rate: 5.0e-6
+weight_decay: 0.01
+max_grad_norm: 1.0
+warmup_steps: 50
+save_steps: 1000
+log_steps: 1
+seed: 42
+
+# Chain-of-Step target: latents_0 = path-line waypoint, latents_1 = moving-ball final.
+# 2-step chain -> a single tau boundary (len = num_latents - 1).
+cos_tau_sigma: 0.9
+cos_boundary_noise_std: 0.02
+cos_path_type: target_cosine
+
+ema_decay: 0.0
+prompt_dropout: 0.1
+
+# 5B is a dense single-transformer model (no MoE high/low experts), so expert
+# parallelism does not apply — shard the model with FSDP2 instead.
+expert_parallel: false
+train_experts: both
+fsdp: true
+param_dtype: bfloat16
+reduce_dtype: float32
+transformer_load_dtype: float32
+gradient_checkpointing: true
+
+lora_rank: 0
+
+auto_resume: true
+num_workers: 8
+prefetch_factor: 2
+persistent_workers: true
+
+wandb_project: wan-cos-maze
+wandb_run_name: cos_maze_5b_line_to_ball_100k_tau_0.9

@@ -1,7 +1,7 @@
 #!/usr/bin/env fish
-# Wan2.2 I2V Flow-GRPO training launcher
+# Wan2.2 I2V DanceGRPO training launcher
 # Usage: fish scripts/train/grpo.fish [--nproc N] [training args...]
-#   e.g. fish scripts/train/grpo.fish --config configs/train_grpo.yaml
+#   e.g. fish scripts/train/grpo.fish --config configs/train_dancegrpo_maze.yaml
 
 set -l nproc 8
 
@@ -42,6 +42,6 @@ cd $project_root
 
 source (dirname (status filename))/../lib/env.fish
 
-echo "Launching Flow-GRPO training with $nproc GPUs..."
+echo "Launching DanceGRPO training with $nproc GPUs..."
 
 torchrun --nproc_per_node=$nproc -m src.cli.train_grpo $train_args

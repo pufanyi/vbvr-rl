@@ -19,7 +19,7 @@ CLI or fish launcher
 | `src.cli.train_i2v` | `SFTConfig` | `I2VTrainer` or `COSTrainer` | Dispatches on `trainer: i2v` vs `trainer: cos`.[^train-i2v] |
 | `src.cli.train_cos` | `SFTConfig` | `COSTrainer` | Dedicated COS entry point, equivalent to `trainer: cos`.[^train-cos] |
 | `src.cli.train_i2v_correction` | `CorrectionConfig` | `I2VCorrectionTrainer` | SFT plus teacher-rollout correction; forbids expert parallel.[^train-correction] |
-| `src.cli.train_grpo` | `RLConfig` | `GRPOTrainer` or `DanceGRPOTrainer` | Dispatches on `trainer: grpo` vs `trainer: dancegrpo`.[^train-grpo] |
+| `src.cli.train_grpo` | `RLConfig` | `DanceGRPOTrainer` | RL entry point; split rollout/train execution is controlled by `rl_train_node_count`.[^train-grpo] |
 | `src.cli.eval_i2v` | argparse | Diffusers pipeline | Batch generation; can load DCP checkpoint weights.[^eval-i2v] |
 | `src.cli.eval_vbvr` | argparse | VLM judge + runner | Scores already-generated VBVR videos.[^eval-vbvr] |
 
@@ -57,11 +57,10 @@ The RL side is deliberately separate:
 ```text
 BaseRLTrainer
   BaseGRPOTrainer
-    GRPOTrainer
     DanceGRPOTrainer
 ```
 
-`BaseRLTrainer` duplicates much of the SFT infrastructure because the RL pipeline may evolve toward different sampling/training GPU layouts. `BaseGRPOTrainer` adds reference policy handling, reward construction, group-relative advantage computation, SDE schedule helpers, and the outer GRPO training loop.[^base-rl][^base-grpo]
+`BaseRLTrainer` duplicates much of the SFT infrastructure because the RL pipeline supports different sampling/training GPU layouts. `BaseGRPOTrainer` adds reference policy handling, reward construction, group-relative advantage computation, SDE schedule helpers, and the outer DanceGRPO training loop.[^base-rl][^base-grpo]
 
 ## Distributed Execution
 

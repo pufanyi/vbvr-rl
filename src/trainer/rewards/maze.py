@@ -21,10 +21,9 @@ because the palette is fixed per-sample and the background is flat.
 GRPO z-scores rewards within each group, so only the *ordering* of rewards
 matters — raw scale is not load-bearing.
 
-Expert-parallel (``grpo_trainer._grpo_step_expert_parallel``) sums the
-rewards returned on the ``low`` and ``high`` branches, so model-free rewards
-must only emit a full signal on one branch to avoid doubling.  This reward
-emits zeros when ``expert_filter == 'high'``.
+Legacy expert-parallel reward callers summed the rewards returned on the
+``low`` and ``high`` branches, so model-free rewards keep emitting zeros when
+``expert_filter == 'high'`` to avoid doubling if that path is revived.
 """
 
 from __future__ import annotations

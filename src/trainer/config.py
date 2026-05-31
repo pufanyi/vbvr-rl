@@ -29,6 +29,7 @@ class TrainConfig(BaseModel):
     batch_size: int = 1
     gradient_accumulation_steps: int = 4
     num_epochs: int = 1
+    max_steps: int | None = None  # optional hard cap on optimizer steps
     learning_rate: float = 1e-5
     weight_decay: float = 0.01
     max_grad_norm: float = 1.0
@@ -182,11 +183,30 @@ class RLConfig(TrainConfig):
     save_epoch_checkpoints: bool = True
 
     # Trainer selection
-    trainer: Literal["grpo", "dancegrpo"] = "grpo"
+    trainer: Literal["dancegrpo"] = "dancegrpo"
+
+    # Split RL execution: first N nodes train with FSDP, remaining nodes run
+    # rollout/reward actors. 0 keeps the legacy all-ranks-train path.
+    rl_train_node_count: int = 0
+    # Optional rank-level override for single-node smoke runs or non-node-aligned
+    # layouts. 0 means derive train ranks from rl_train_node_count.
+    rl_train_rank_count: int = 0
+    rl_actor_weight_sync: Literal["lora", "none"] = "lora"
+    # Async split rollout keeps each optimizer step's prompt batch unchanged,
+    # but lets rollout actors pre-generate future steps through a bounded queue.
+    rl_async_rollout: bool = False
+    # 0 = auto: enough future steps to give every rollout actor at least one
+    # task when rollout_world_size > grpo_group_size.
+    rl_async_rollout_prefetch_steps: int = 0
+    # Emit per-node split-RL progress logs from local_rank=0 on every node.
+    rl_split_debug_logs: bool = False
 
     # GRPO (set grpo_group_size > 0 to enable Flow-GRPO training)
     grpo_group_size: int | None = None  # G: number of samples per prompt. None = SFT mode
-    grpo_sample_batch_size: int = 1  # how many G samples to batch together (tune for GPU memory)
+    grpo_sample_batch_size: int = 1  # how many G samples to batch together during rollout
+    # How many already-generated G samples to replay together during the train
+    # update. This does not increase prompt batch size or rollout work per step.
+    grpo_train_sample_batch_size: int = 1
     grpo_num_sampling_steps: int = 10  # T: denoising steps during SDE sampling
     grpo_clip_range: float = 1e-3  # PPO clipping epsilon
     grpo_kl_coeff: float = 0.004  # beta: KL penalty coefficient against reference policy
@@ -206,6 +226,34 @@ class RLConfig(TrainConfig):
     def _validate_dancegrpo_timestep_selection_ratio(cls, v: float):
         if not (0.0 < v <= 1.0):
             raise ValueError(f"dancegrpo_timestep_selection_ratio must be in (0, 1], got {v}")
+        return v
+
+    @field_validator("rl_train_node_count")
+    @classmethod
+    def _validate_rl_train_node_count(cls, v: int):
+        if v < 0:
+            raise ValueError(f"rl_train_node_count must be >= 0, got {v}")
+        return v
+
+    @field_validator("rl_train_rank_count")
+    @classmethod
+    def _validate_rl_train_rank_count(cls, v: int):
+        if v < 0:
+            raise ValueError(f"rl_train_rank_count must be >= 0, got {v}")
+        return v
+
+    @field_validator("rl_async_rollout_prefetch_steps")
+    @classmethod
+    def _validate_rl_async_rollout_prefetch_steps(cls, v: int):
+        if v < 0:
+            raise ValueError(f"rl_async_rollout_prefetch_steps must be >= 0, got {v}")
+        return v
+
+    @field_validator("grpo_train_sample_batch_size")
+    @classmethod
+    def _validate_grpo_train_sample_batch_size(cls, v: int):
+        if v <= 0:
+            raise ValueError(f"grpo_train_sample_batch_size must be > 0, got {v}")
         return v
 
     # ------------------------------------------------------------------

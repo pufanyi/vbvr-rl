@@ -5,7 +5,7 @@ This directory documents the current Wan-Trainer codebase from source, not from 
 ## Reading Order
 
 1. [Architecture](architecture.md) explains the execution model, trainer hierarchy, model wrapper, distributed setup, and checkpointing.
-2. [Training](training.md) explains SFT, COS, correction, Flow-GRPO, and DanceGRPO-style training.
+2. [Training](training.md) explains SFT, COS, correction, and DanceGRPO-style training.
 3. [Data](data.md) explains raw Parquet inputs, latent WebDataset shards, and precompute pipelines.
 4. [Evaluation](evaluation.md) explains inference, VBVR generation, VLM scoring, and rule scoring.
 5. [Checkpoints](checkpoints.md) explains the unified high/low DCP layout, EMA, LoRA sidecars, and resume semantics.
@@ -18,7 +18,7 @@ Wan-Trainer is centered on a Wan2.2 image-to-video training wrapper that loads t
 The training stack has two parallel base hierarchies:
 
 - `BaseTrainer` serves SFT-like objectives: I2V, COS, and correction.[^base-trainer]
-- `BaseRLTrainer` / `BaseGRPOTrainer` serve RL-style objectives: GRPO and DanceGRPO.[^base-rl][^base-grpo]
+- `BaseRLTrainer` / `BaseGRPOTrainer` serve the DanceGRPO RL objective.[^base-rl][^base-grpo]
 
 Both stacks share the same model wrapper, optimizer factory, EMA implementation, FSDP2 sharding style, WebDataset latent loader, and DCP checkpoint runtime.
 

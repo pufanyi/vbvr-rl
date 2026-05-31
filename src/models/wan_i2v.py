@@ -1,7 +1,8 @@
-"""Wan2.2 I2V model wrapper for training.
+"""Wan2.2 I2V/TI2V model wrapper for training.
 
-Wraps frozen (text_encoder, vae) and trainable (transformer, transformer_2)
-components from the WanImageToVideoPipeline.
+Wraps frozen (text_encoder, vae) and trainable transformer components from the
+Wan pipelines. Wan2.2 A14B uses high/low expert transformers; Wan2.2 5B uses a
+single transformer with expanded per-token timesteps.
 """
 
 import html
@@ -83,10 +84,10 @@ def _make_autocast_checkpoint_func(dtype: torch.dtype):
 
 
 class WanI2VForTraining:
-    """Wan2.2 I2V model for flow-matching training.
+    """Wan2.2 I2V/TI2V model for flow-matching training.
 
     Frozen: text_encoder, vae.
-    Trainable: transformer (high-noise expert), transformer_2 (low-noise expert).
+    Trainable: transformer and, for A14B, optional transformer_2 low-noise expert.
     """
 
     def __init__(
@@ -109,11 +110,19 @@ class WanI2VForTraining:
 
         model_dir = Path(model_path)
 
-        # ---- Read pipeline config for boundary_ratio ----
+        # ---- Read pipeline config for model topology ----
         with open(model_dir / "model_index.json") as f:
             pipe_config = json.load(f)
         self.num_train_timesteps = 1000
-        boundary_ratio = pipe_config.get("boundary_ratio", 0.9)
+        self.expand_timesteps = bool(pipe_config.get("expand_timesteps", False))
+        transformer_2_entry = pipe_config.get("transformer_2")
+        self.has_low_noise_expert = (model_dir / "transformer_2").exists() and transformer_2_entry not in (
+            None,
+            [None, None],
+        )
+        boundary_ratio = pipe_config.get("boundary_ratio")
+        if boundary_ratio is None:
+            boundary_ratio = 0.9
         self.boundary_timestep = int(boundary_ratio * self.num_train_timesteps)  # 900
         # boundary_idx is computed below after shifted_timesteps is built.
         self.flow_shift = _read_flow_shift(model_dir)
@@ -152,16 +161,19 @@ class WanI2VForTraining:
         # ---- Transformers (only load what we need) ----
         self.transformer: WanTransformer3DModel | None = None
         self.transformer_2: WanTransformer3DModel | None = None
-        if train_experts in ("both", "high"):
+        load_primary_transformer = train_experts in ("both", "high") or not self.has_low_noise_expert
+        if load_primary_transformer:
             self.transformer = WanTransformer3DModel.from_pretrained(
                 model_dir / "transformer", torch_dtype=transformer_dtype
             )
             logger.info("Loaded transformer")
-        if train_experts in ("both", "low"):
+        if train_experts in ("both", "low") and self.has_low_noise_expert:
             self.transformer_2 = WanTransformer3DModel.from_pretrained(
                 model_dir / "transformer_2", torch_dtype=transformer_dtype
             )
             logger.info("Loaded transformer_2")
+        elif train_experts in ("both", "low") and not self.has_low_noise_expert:
+            logger.info("Model has no transformer_2; routing requested '{}' training through transformer", train_experts)
 
         # ---- LoRA or full fine-tuning ----
         self.lora_config = lora_config
@@ -237,11 +249,13 @@ class WanI2VForTraining:
         # Compute boundary_idx from shifted schedule (accounts for nonlinear shift)
         self.boundary_idx = int((self.shifted_timesteps >= self.boundary_timestep).sum().item())
         logger.info(
-            "Flow schedule: flow_shift={} boundary_timestep={} boundary_idx={}/{}",
+            "Flow schedule: flow_shift={} boundary_timestep={} boundary_idx={}/{} expand_timesteps={} low_expert={}",
             self.flow_shift,
             self.boundary_timestep,
             self.boundary_idx,
             self.num_train_timesteps,
+            self.expand_timesteps,
+            self.has_low_noise_expert,
         )
 
         # ---- BSMNTW loss weighting (Gaussian centered at t=500) ----
@@ -251,6 +265,7 @@ class WanI2VForTraining:
         self._latent_stat_cache: dict[tuple[str, str], tuple[torch.Tensor, torch.Tensor]] = {}
         self._training_buffer_cache: dict[str, tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = {}
         self._condition_mask_cache: dict[tuple[str, int, int, int, torch.dtype], torch.Tensor] = {}
+        self._first_frame_mask_cache: dict[tuple[str, int, int, int, torch.dtype], torch.Tensor] = {}
         # Rank-synchronized generator for timestep sampling. Under non-EP FSDP,
         # both experts live on every rank; per-rank timestep sampling can route
         # all samples to one expert and skip the other, desyncing FSDP
@@ -322,6 +337,122 @@ class WanI2VForTraining:
         self._condition_mask_cache[key] = cached
         return cached
 
+    def _get_first_frame_latent_mask_template(
+        self,
+        device: torch.device,
+        dtype: torch.dtype,
+        latent_frames: int,
+        latent_height: int,
+        latent_width: int,
+    ) -> torch.Tensor:
+        key = (str(device), latent_frames, latent_height, latent_width, dtype)
+        cached = self._first_frame_mask_cache.get(key)
+        if cached is not None:
+            return cached
+        mask = torch.ones(1, 1, latent_frames, latent_height, latent_width, device=device, dtype=dtype)
+        mask[:, :, 0] = 0
+        self._first_frame_mask_cache[key] = mask
+        return mask
+
+    def _reference_transformer(self) -> WanTransformer3DModel:
+        transformer = self.transformer if self.transformer is not None else self.transformer_2
+        if transformer is None:
+            raise RuntimeError("No transformer is loaded")
+        return transformer
+
+    @staticmethod
+    def _transformer_input_dtype(transformer: WanTransformer3DModel) -> torch.dtype:
+        for param in transformer.parameters():
+            if param.is_floating_point():
+                return param.dtype
+        return torch.bfloat16
+
+    def _prepare_transformer_call(
+        self,
+        transformer: WanTransformer3DModel,
+        hidden_states: torch.Tensor,
+        timestep: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        dtype = self._transformer_input_dtype(transformer)
+        return (
+            hidden_states.to(dtype=dtype),
+            timestep,
+            encoder_hidden_states.to(device=hidden_states.device, dtype=dtype),
+        )
+
+    def _build_model_input(self, latent: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
+        """Build transformer hidden_states for A14B concat conditioning or 5B TI2V masking."""
+        if not self.expand_timesteps:
+            return torch.cat([latent, condition.to(device=latent.device, dtype=latent.dtype)], dim=1)
+
+        if condition.shape[1] != latent.shape[1]:
+            raise ValueError(
+                "expand_timesteps models expect condition channels to match latent channels "
+                f"({latent.shape[1]}), got condition shape {tuple(condition.shape)}. "
+                "Recompute latents/condition with the 5B model."
+            )
+        mask = self._get_first_frame_latent_mask_template(
+            latent.device,
+            latent.dtype,
+            latent.shape[2],
+            latent.shape[3],
+            latent.shape[4],
+        )
+        return (1.0 - mask) * condition.to(device=latent.device, dtype=latent.dtype) + mask * latent
+
+    def _build_timestep_input(
+        self,
+        timesteps: torch.Tensor,
+        latent: torch.Tensor,
+        transformer: WanTransformer3DModel | None = None,
+    ) -> torch.Tensor:
+        if not self.expand_timesteps:
+            return timesteps.to(torch.bfloat16)
+
+        transformer = transformer or self._reference_transformer()
+        p_t, p_h, p_w = transformer.config.patch_size
+        mask = self._get_first_frame_latent_mask_template(
+            latent.device,
+            timesteps.dtype,
+            latent.shape[2],
+            latent.shape[3],
+            latent.shape[4],
+        )
+        token_mask = mask[0, 0, ::p_t, ::p_h, ::p_w].flatten()
+        return (token_mask.unsqueeze(0) * timesteps.view(-1, 1)).to(torch.bfloat16)
+
+    def _iter_transformer_selections(
+        self,
+        timesteps: torch.Tensor,
+    ) -> list[tuple[str, torch.Tensor, WanTransformer3DModel]]:
+        device = timesteps.device
+        all_selected = torch.arange(timesteps.shape[0], device=device)
+        if self.transformer_2 is None:
+            return [("single", all_selected, self._reference_transformer())]
+
+        experts: list[tuple[str, torch.Tensor, WanTransformer3DModel]] = []
+        if self.transformer is not None:
+            experts.append(
+                ("high", (timesteps >= self.boundary_timestep).nonzero(as_tuple=False).flatten(), self.transformer)
+            )
+        if self.transformer_2 is not None:
+            experts.append(
+                ("low", (timesteps < self.boundary_timestep).nonzero(as_tuple=False).flatten(), self.transformer_2)
+            )
+        return experts
+
+    def latent_shape_from_condition(self, condition: torch.Tensor) -> tuple[int, int, int, int, int]:
+        """Infer rollout latent shape from a condition tensor."""
+        if self.expand_timesteps:
+            if condition.shape[2] <= 1:
+                raise ValueError(
+                    "Cannot infer full latent sequence length from a single-frame 5B condition. "
+                    "Pass initial_latent or precompute condition expanded to the target latent length."
+                )
+            return (condition.shape[0], condition.shape[1], *condition.shape[2:])
+        return (condition.shape[0], condition.shape[1] - 4, *condition.shape[2:])
+
     # ------------------------------------------------------------------
     # Encoding helpers (all run under torch.no_grad)
     # ------------------------------------------------------------------
@@ -369,7 +500,11 @@ class WanI2VForTraining:
         height: int,
         width: int,
     ) -> torch.Tensor:
-        """Build the channel-concatenated condition tensor [mask, cond_latents].
+        """Build the model condition tensor.
+
+        A14B I2V returns the channel-concatenated condition tensor [mask, cond_latents].
+        5B TI2V (``expand_timesteps``) returns first-frame latents expanded to
+        the target latent sequence length; masking happens in ``_build_model_input``.
 
         Replicates the WanImageToVideoPipeline.prepare_latents condition path:
         - Encodes [first_frame, zeros...] with VAE (mode, not sample)
@@ -383,9 +518,18 @@ class WanI2VForTraining:
             width: Pixel width.
 
         Returns:
-            (B, 4 + z_dim, T', H', W') condition tensor.
+            A14B: (B, 4 + z_dim, T', H', W') condition tensor.
+            5B:  (B, z_dim, T', H', W') first-frame latent condition.
         """
         B = image.shape[0]
+
+        if self.expand_timesteps:
+            with torch.no_grad():
+                cond_latents = self.vae.encode(image.unsqueeze(2).to(self.vae.dtype)).latent_dist.mode()
+            mean, std_inv = self._get_latent_stats(cond_latents.device, cond_latents.dtype)
+            cond_latents = ((cond_latents - mean) * std_inv).to(torch.bfloat16)
+            latent_frames = (num_frames - 1) // self.vae_scale_factor_temporal + 1
+            return cond_latents.expand(B, -1, latent_frames, -1, -1).contiguous()
 
         # ---- Encode condition video: [first_frame, zeros...] ----
         cond_video = image.new_zeros((B, 3, num_frames, height, width))
@@ -428,7 +572,7 @@ class WanI2VForTraining:
 
         Args:
             video_latents: (B, z_dim, T', H', W') normalized latents.
-            condition: (B, 4 + z_dim, T', H', W') from prepare_condition.
+            condition: condition tensor from prepare_condition / latent precompute.
             prompt_embeds: (B, 512, text_dim).
 
         Returns:
@@ -465,30 +609,33 @@ class WanI2VForTraining:
         # Target velocity: v = noise - x0
         target = noise - video_latents
 
-        # Model input: [noisy_latents, condition] along channel dim -> 36 channels
-        model_input = torch.cat([noisy_latents, condition], dim=1)
+        model_input = self._build_model_input(noisy_latents, condition)
 
         # Route to the correct MoE expert(s)
-        experts = []
-        if self.transformer is not None:
-            experts.append(((timesteps >= self.boundary_timestep).nonzero(as_tuple=False).flatten(), self.transformer))
-        if self.transformer_2 is not None:
-            experts.append(((timesteps < self.boundary_timestep).nonzero(as_tuple=False).flatten(), self.transformer_2))
+        experts = self._iter_transformer_selections(timesteps)
         self._last_loss_debug["selected_counts"] = {
             "high": int((timesteps >= self.boundary_timestep).sum().item()),
             "low": int((timesteps < self.boundary_timestep).sum().item()),
+            "single": B if self.transformer_2 is None else 0,
         }
 
         loss = torch.tensor(0.0, device=device, dtype=torch.float32)
         total_weight = torch.tensor(0.0, device=device, dtype=torch.float32)
 
-        for selected, transformer in experts:
+        for _name, selected, transformer in experts:
             if selected.numel() == 0:
                 continue
+            timestep_input = self._build_timestep_input(timesteps, noisy_latents, transformer)
+            hidden_states, timestep_input, encoder_hidden_states = self._prepare_transformer_call(
+                transformer,
+                model_input.index_select(0, selected),
+                timestep_input.index_select(0, selected),
+                prompt_embeds.index_select(0, selected),
+            )
             pred = transformer(
-                hidden_states=model_input.index_select(0, selected),
-                timestep=timesteps.index_select(0, selected).to(torch.bfloat16),
-                encoder_hidden_states=prompt_embeds.index_select(0, selected),
+                hidden_states=hidden_states,
+                timestep=timestep_input,
+                encoder_hidden_states=encoder_hidden_states,
                 return_dict=False,
             )[0]
             # Per-sample MSE weighted by BSMNTW
@@ -588,22 +735,25 @@ class WanI2VForTraining:
         target = (x_sigma - video_latents) / sigmas.clamp_min(1e-4)
 
         # ---- 5) MoE-routed forward (mirrors compute_loss) ----
-        model_input = torch.cat([x_sigma, condition], dim=1)
-        experts = []
-        if self.transformer is not None:
-            experts.append(((timesteps >= self.boundary_timestep).nonzero(as_tuple=False).flatten(), self.transformer))
-        if self.transformer_2 is not None:
-            experts.append(((timesteps < self.boundary_timestep).nonzero(as_tuple=False).flatten(), self.transformer_2))
+        model_input = self._build_model_input(x_sigma, condition)
+        experts = self._iter_transformer_selections(timesteps)
 
         loss = torch.tensor(0.0, device=device, dtype=torch.float32)
         total_weight = torch.tensor(0.0, device=device, dtype=torch.float32)
-        for selected, transformer in experts:
+        for _name, selected, transformer in experts:
             if selected.numel() == 0:
                 continue
+            timestep_input = self._build_timestep_input(timesteps, x_sigma, transformer)
+            hidden_states, timestep_input, encoder_hidden_states = self._prepare_transformer_call(
+                transformer,
+                model_input.index_select(0, selected),
+                timestep_input.index_select(0, selected),
+                prompt_embeds.index_select(0, selected),
+            )
             pred = transformer(
-                hidden_states=model_input.index_select(0, selected),
-                timestep=timesteps.index_select(0, selected).to(torch.bfloat16),
-                encoder_hidden_states=prompt_embeds.index_select(0, selected),
+                hidden_states=hidden_states,
+                timestep=timestep_input,
+                encoder_hidden_states=encoder_hidden_states,
                 return_dict=False,
             )[0]
             per_sample = F.mse_loss(
@@ -665,9 +815,18 @@ class WanI2VForTraining:
         shifted_sigmas, shifted_timesteps, bsmntw = self._get_training_buffers(device)
         prompt_embeds = self._apply_prompt_dropout(prompt_embeds, prompt_dropout)
 
-        # Each available expert gets dedicated sigma in its MoE range
+        # Each available expert gets dedicated sigma in its MoE range. Single-transformer
+        # models train across the requested timestep range in one pass.
         expert_passes: list[tuple[str, torch.nn.Module, int, int]] = []
-        if self.transformer is not None:
+        if self.transformer_2 is None:
+            if self.train_experts == "high":
+                idx_lo, idx_hi = 0, self.boundary_idx
+            elif self.train_experts == "low":
+                idx_lo, idx_hi = self.boundary_idx, self.num_train_timesteps
+            else:
+                idx_lo, idx_hi = 0, self.num_train_timesteps
+            expert_passes.append(("single", self._reference_transformer(), idx_lo, idx_hi))
+        elif self.transformer is not None:
             expert_passes.append(("high", self.transformer, 0, self.boundary_idx))
         if self.transformer_2 is not None:
             expert_passes.append(("low", self.transformer_2, self.boundary_idx, self.num_train_timesteps))
@@ -696,11 +855,18 @@ class WanI2VForTraining:
             )
 
             # Forward through this expert (no MoE routing needed — sigma is in range)
-            model_input = torch.cat([x_t, condition], dim=1)
+            model_input = self._build_model_input(x_t, condition)
+            timestep_input = self._build_timestep_input(timesteps, x_t, transformer)
+            hidden_states, timestep_input, encoder_hidden_states = self._prepare_transformer_call(
+                transformer,
+                model_input,
+                timestep_input,
+                prompt_embeds,
+            )
             pred = transformer(
-                hidden_states=model_input,
-                timestep=timesteps.to(torch.bfloat16),
-                encoder_hidden_states=prompt_embeds,
+                hidden_states=hidden_states,
+                timestep=timestep_input,
+                encoder_hidden_states=encoder_hidden_states,
                 return_dict=False,
             )[0]
 
@@ -894,7 +1060,7 @@ class WanI2VForTraining:
         intermediate latents and log-probabilities needed for policy gradient.
 
         Args:
-            condition: (B, 4+z_dim, T', H', W') from prepare_condition.
+            condition: condition tensor from prepare_condition / latent precompute.
             prompt_embeds: (B, 512, text_dim) text embeddings.
             num_sampling_steps: Number of denoising steps T.
             sde_noise_scale: 'a' parameter for SDE noise.
@@ -920,7 +1086,11 @@ class WanI2VForTraining:
 
         B = condition.shape[0]
         device = condition.device
-        latent_shape = (B, condition.shape[1] - 4, *condition.shape[2:])  # (B, z_dim, T', H', W')
+        latent_shape = (
+            tuple(initial_latent.shape)
+            if initial_latent is not None
+            else self.latent_shape_from_condition(condition)
+        )
 
         # Build sigma schedule for sampling: T+1 values from 1→0
         # Use linspace in [0, 1] then apply the shifted schedule
@@ -947,25 +1117,31 @@ class WanI2VForTraining:
             # Select expert based on timestep
             transformer = self._get_expert_for_timestep(timestep_val)
 
-            # Build model input: [noisy_latents, condition]
-            model_input = torch.cat([latent, condition], dim=1)
+            model_input = self._build_model_input(latent, condition)
 
             # Forward pass through transformer
-            timestep_tensor = torch.tensor([timestep_val], device=device, dtype=torch.bfloat16).expand(B)
+            timestep_tensor = torch.tensor([timestep_val], device=device, dtype=torch.float32).expand(B)
+            timestep_input = self._build_timestep_input(timestep_tensor, latent, transformer)
+            hidden_states, timestep_input, encoder_hidden_states = self._prepare_transformer_call(
+                transformer,
+                model_input,
+                timestep_input,
+                prompt_embeds,
+            )
             model_output = transformer(
-                hidden_states=model_input,
-                timestep=timestep_tensor,
-                encoder_hidden_states=prompt_embeds,
+                hidden_states=hidden_states,
+                timestep=timestep_input,
+                encoder_hidden_states=encoder_hidden_states,
                 return_dict=False,
             )[0]
 
             # CFG (if scale > 1)
             if cfg_scale > 1.0:
                 # Unconditional forward with zero prompt
-                uncond_embeds = torch.zeros_like(prompt_embeds)
+                uncond_embeds = torch.zeros_like(encoder_hidden_states)
                 uncond_output = transformer(
-                    hidden_states=model_input,
-                    timestep=timestep_tensor,
+                    hidden_states=hidden_states,
+                    timestep=timestep_input,
                     encoder_hidden_states=uncond_embeds,
                     return_dict=False,
                 )[0]
@@ -1063,12 +1239,19 @@ class WanI2VForTraining:
             transformer.disable_adapters()
 
         # Forward pass
-        model_input = torch.cat([latent, condition], dim=1)
-        timestep_tensor = torch.tensor([timestep_val], device=device, dtype=torch.bfloat16).expand(B)
+        model_input = self._build_model_input(latent, condition)
+        timestep_tensor = torch.tensor([timestep_val], device=device, dtype=torch.float32).expand(B)
+        timestep_input = self._build_timestep_input(timestep_tensor, latent, transformer)
+        hidden_states, timestep_input, encoder_hidden_states = self._prepare_transformer_call(
+            transformer,
+            model_input,
+            timestep_input,
+            prompt_embeds,
+        )
         model_output = transformer(
-            hidden_states=model_input,
-            timestep=timestep_tensor,
-            encoder_hidden_states=prompt_embeds,
+            hidden_states=hidden_states,
+            timestep=timestep_input,
+            encoder_hidden_states=encoder_hidden_states,
             return_dict=False,
         )[0]
 

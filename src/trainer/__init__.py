@@ -20,7 +20,6 @@ from src.trainer.checkpoint import TrainState  # noqa: E402
 from src.trainer.config import CorrectionConfig, RLConfig, SFTConfig, TrainConfig  # noqa: E402
 from src.trainer.cos_trainer import COSTrainer  # noqa: E402
 from src.trainer.dancegrpo_trainer import DanceGRPOTrainer  # noqa: E402
-from src.trainer.grpo_trainer import GRPOTrainer  # noqa: E402
 from src.trainer.i2v_correction_trainer import I2VCorrectionTrainer  # noqa: E402
 from src.trainer.i2v_trainer import I2VTrainer  # noqa: E402
 
@@ -30,7 +29,6 @@ __all__ = [
     "COSTrainer",
     "CorrectionConfig",
     "DanceGRPOTrainer",
-    "GRPOTrainer",
     "I2VCorrectionTrainer",
     "I2VTrainer",
     "RLConfig",

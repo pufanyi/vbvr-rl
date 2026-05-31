@@ -330,6 +330,8 @@ def _build_maze_specs(cfg: GenConfig) -> tuple[dict[str, MazeSpec], tuple[int, i
 
 
 def _load_vae(model_path: str, device: str) -> dict:
+    import json
+
     from diffusers import AutoencoderKLWan
 
     model_dir = Path(model_path)
@@ -338,12 +340,22 @@ def _load_vae(model_path: str, device: str) -> dict:
     vae_cfg = vae.config
     mean = torch.tensor(vae_cfg.latents_mean).view(1, vae_cfg.z_dim, 1, 1, 1).to(device)
     std_inv = (1.0 / torch.tensor(vae_cfg.latents_std)).view(1, vae_cfg.z_dim, 1, 1, 1).to(device)
+
+    # 5B TI2V uses expand_timesteps first-frame conditioning (cond latents only, no
+    # mask concat); A14B I2V uses mask+cond concat. Read the flag from model_index.json.
+    model_index_path = model_dir / "model_index.json"
+    expand_timesteps = False
+    if model_index_path.exists():
+        model_index = json.loads(model_index_path.read_text())
+        expand_timesteps = bool(model_index.get("expand_timesteps", False))
+
     return {
         "vae": vae,
         "latents_mean": mean,
         "latents_std_inv": std_inv,
         "scale_spatial": vae_cfg.scale_factor_spatial,
         "scale_temporal": vae_cfg.scale_factor_temporal,
+        "expand_timesteps": expand_timesteps,
     }
 
 
@@ -387,6 +399,17 @@ def _encode_condition(
     scale_temporal = vae_bundle["scale_temporal"]
 
     B = first_frame_bf16_m1p1.shape[0]
+
+    # 5B TI2V (expand_timesteps): condition is the first-frame latent expanded across
+    # the latent temporal axis, with no mask concat (z_dim channels, matches latents).
+    if vae_bundle.get("expand_timesteps", False):
+        cond_latents = vae.encode(first_frame_bf16_m1p1.unsqueeze(2).to(vae.dtype)).latent_dist.mode()
+        mean = vae_bundle["latents_mean"].to(dtype=cond_latents.dtype)
+        std_inv = vae_bundle["latents_std_inv"].to(dtype=cond_latents.dtype)
+        cond_latents = ((cond_latents - mean) * std_inv).to(torch.bfloat16)
+        latent_frames = (num_frames - 1) // scale_temporal + 1
+        return cond_latents.expand(B, -1, latent_frames, -1, -1).contiguous()
+
     cond_video = first_frame_bf16_m1p1.new_zeros((B, 3, num_frames, height, width))
     cond_video[:, :, 0] = first_frame_bf16_m1p1
 

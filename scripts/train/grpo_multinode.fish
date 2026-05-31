@@ -1,5 +1,5 @@
 #!/usr/bin/env fish
-# Wan2.2 I2V Flow-GRPO multi-node training launcher
+# Wan2.2 I2V DanceGRPO multi-node training launcher
 #
 # Expected environment variables (typically set by the cluster scheduler):
 #   MASTER_ADDR  — hostname/IP of the master node
@@ -10,8 +10,8 @@
 #   MASTER_PORT  — port on master node (default: 29500)
 #
 # Usage: fish scripts/train/grpo_multinode.fish [--nproc N] [training args...]
-#   e.g. fish scripts/train/grpo_multinode.fish --config configs/train_grpo.yaml
-#   e.g. fish scripts/train/grpo_multinode.fish --nproc 8 --config configs/train_grpo.yaml
+#   e.g. fish scripts/train/grpo_multinode.fish --config configs/train_dancegrpo_maze.yaml
+#   e.g. fish scripts/train/grpo_multinode.fish --nproc 8 --config configs/train_dancegrpo_maze.yaml
 
 set -l nproc 8
 
@@ -66,7 +66,7 @@ set -l master_port (set -q MASTER_PORT; and echo $MASTER_PORT; or echo 29500)
 set -l project_root (realpath (dirname (status filename))/../..)
 cd $project_root
 
-echo "Launching Flow-GRPO multi-node training: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$master_port"
+echo "Launching DanceGRPO multi-node training: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$master_port"
 
 source (dirname (status filename))/../lib/env.fish
 

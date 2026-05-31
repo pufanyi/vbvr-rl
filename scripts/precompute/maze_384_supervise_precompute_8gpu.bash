@@ -22,6 +22,13 @@ GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
 NPROC="${NPROC:-$(awk -F',' '{print NF}' <<<"$GPUS")}"
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 MASTER_PORT="${MASTER_PORT:-29640}"
+# Multi-node: the scheduler sets RANK=<0-indexed node id> and WORLD_SIZE=<num nodes>
+# (same convention as scripts/train/grpo_multinode.fish), sharing one MASTER_ADDR/
+# MASTER_PORT. torchrun then spans WORLD_SIZE*NPROC global ranks; maze_webdataset
+# splits plan[rank::world_size] across them, all writing disjoint shards into the
+# shared OUTPUT_ROOT (no merge needed).
+NNODES="${WORLD_SIZE:-1}"
+NODE_RANK="${RANK:-0}"
 TORCHRUN="${TORCHRUN:-$ROOT_DIR/.venv/bin/torchrun}"
 
 OUTPUT_ROOT="${OUTPUT_ROOT:-data/maze/latents/maze_384x384x81_perfect_v2}"
@@ -107,7 +114,8 @@ PYTHONPATH="$ROOT_DIR:${PYTHONPATH:-}" \
 PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}" \
 PYTHONUNBUFFERED=1 \
 "$TORCHRUN" \
-    --nnodes=1 \
+    --nnodes="$NNODES" \
+    --node_rank="$NODE_RANK" \
     --nproc_per_node="$NPROC" \
     --master_addr="$MASTER_ADDR" \
     --master_port="$MASTER_PORT" \

@@ -53,7 +53,7 @@ Repeated logic appears in:
 - `BaseTrainer` and `BaseRLTrainer`;
 - MFU setup in I2V, COS, correction, and GRPO;
 - raw dataset logic in `src/data/i2v_dataset.py` and precompute's `ParquetI2VDataset`;
-- flow SDE transition formulas in `wan_i2v.py`, `grpo_trainer.py`, and `dancegrpo_trainer.py`.
+- flow SDE transition formulas in `wan_i2v.py` and `dancegrpo_trainer.py`.
 
 Recommended work:
 

@@ -83,7 +83,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
         """
         self.is_lora = cfg.lora_rank > 0
         self.ref_transformers: dict[str, torch.nn.Module] = {}
-        if not self.is_lora:
+        if not self.is_lora and cfg.grpo_kl_coeff > 0:
             logger.info("Full fine-tuning mode: creating frozen reference policy copies (via CPU)")
             for name, m in [("transformer", self.model.transformer), ("transformer_2", self.model.transformer_2)]:
                 if m is not None:
@@ -91,6 +91,8 @@ class BaseGRPOTrainer(BaseRLTrainer):
                     m.to(self.device)  # move training model back to GPU
                     self.ref_transformers[name] = ref
                     logger.info("Reference {} created", name)
+        elif not self.is_lora:
+            logger.info("Full fine-tuning mode with grpo_kl_coeff=0: skipping reference policy copies")
 
     def _setup_fsdp(self, cfg: RLConfig) -> list[torch.nn.Module]:
         sync_modules = super()._setup_fsdp(cfg)
@@ -104,7 +106,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
     # ------------------------------------------------------------------
 
     def _post_init(self, cfg: RLConfig) -> None:
-        self.mfu_monitor = self._setup_mfu(cfg)
+        self.mfu_monitor = None if getattr(self, "is_inference_rank", False) else self._setup_mfu(cfg)
         self.reward_fn = build_reward(cfg.grpo_reward_fn, self, cfg)
         logger.info("Reward function: {}", cfg.grpo_reward_fn)
 
@@ -357,23 +359,29 @@ class BaseGRPOTrainer(BaseRLTrainer):
             timestep_val = timestep_vals[step_idx]
 
             transformer = self._get_local_transformer(timestep_val)
-            model_input = torch.cat([latent, condition], dim=1)
-            timestep_tensor = torch.tensor([timestep_val], device=latent.device, dtype=torch.bfloat16).expand(
+            timestep_tensor = torch.tensor([timestep_val], device=latent.device, dtype=torch.float32).expand(
                 latent.shape[0]
             )
+            model_input = self.model._build_model_input(latent, condition)
+            timestep_input = self.model._build_timestep_input(timestep_tensor, latent, transformer)
+            hidden_states, timestep_input, encoder_hidden_states = self.model._prepare_transformer_call(
+                transformer,
+                model_input,
+                timestep_input,
+                prompt_embeds,
+            )
             model_output = transformer(
-                hidden_states=model_input,
-                timestep=timestep_tensor,
-                encoder_hidden_states=prompt_embeds,
+                hidden_states=hidden_states,
+                timestep=timestep_input,
+                encoder_hidden_states=encoder_hidden_states,
                 return_dict=False,
             )[0]
 
             if cfg.grpo_cfg_scale > 1.0:
-                uncond_embeds = torch.zeros_like(prompt_embeds)
                 uncond_output = transformer(
-                    hidden_states=model_input,
-                    timestep=timestep_tensor,
-                    encoder_hidden_states=uncond_embeds,
+                    hidden_states=hidden_states,
+                    timestep=timestep_input,
+                    encoder_hidden_states=torch.zeros_like(encoder_hidden_states),
                     return_dict=False,
                 )[0]
                 model_output = uncond_output + cfg.grpo_cfg_scale * (model_output - uncond_output)
@@ -425,8 +433,8 @@ class BaseGRPOTrainer(BaseRLTrainer):
         """Forward pass through reference policy. Returns velocity prediction."""
         B = latent.shape[0]
         device = latent.device
-        model_input = torch.cat([latent, condition], dim=1)
-        timestep_tensor = torch.tensor([timestep_val], device=device, dtype=torch.bfloat16).expand(B)
+        model_input = self.model._build_model_input(latent, condition)
+        timestep_tensor = torch.tensor([timestep_val], device=device, dtype=torch.float32).expand(B)
 
         if self.is_lora:
             transformer = (
@@ -434,12 +442,19 @@ class BaseGRPOTrainer(BaseRLTrainer):
                 if self.expert_parallel
                 else self.model._get_expert_for_timestep(timestep_val)
             )
+            timestep_input = self.model._build_timestep_input(timestep_tensor, latent, transformer)
+            hidden_states, timestep_input, encoder_hidden_states = self.model._prepare_transformer_call(
+                transformer,
+                model_input,
+                timestep_input,
+                prompt_embeds,
+            )
             transformer.disable_adapters()
             try:
                 out = transformer(
-                    hidden_states=model_input,
-                    timestep=timestep_tensor,
-                    encoder_hidden_states=prompt_embeds,
+                    hidden_states=hidden_states,
+                    timestep=timestep_input,
+                    encoder_hidden_states=encoder_hidden_states,
                     return_dict=False,
                 )[0]
             finally:
@@ -455,10 +470,17 @@ class BaseGRPOTrainer(BaseRLTrainer):
                 ref = self.ref_transformers.get("transformer_2")
             if ref is None:
                 ref = next(iter(self.ref_transformers.values()))
+        timestep_input = self.model._build_timestep_input(timestep_tensor, latent, ref)
+        hidden_states, timestep_input, encoder_hidden_states = self.model._prepare_transformer_call(
+            ref,
+            model_input,
+            timestep_input,
+            prompt_embeds,
+        )
         return ref(
-            hidden_states=model_input,
-            timestep=timestep_tensor,
-            encoder_hidden_states=prompt_embeds,
+            hidden_states=hidden_states,
+            timestep=timestep_input,
+            encoder_hidden_states=encoder_hidden_states,
             return_dict=False,
         )[0]
 
