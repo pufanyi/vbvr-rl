@@ -42,6 +42,11 @@ set MODEL_ARGS "$MODEL_ARGS,dit_cpu_offload=False,text_encoder_cpu_offload=True"
 set MODEL_ARGS "$MODEL_ARGS,image_encoder_cpu_offload=False,vae_cpu_offload=False"
 set MODEL_ARGS "$MODEL_ARGS,enable_torch_compile=$ENABLE_TORCH_COMPILE"
 
+set -l MODEL_DIR_LOWER (string lower -- $MODEL_DIR)
+if string match -q '*5b*' -- $MODEL_DIR_LOWER
+    set MODEL_ARGS "$MODEL_ARGS,override_pipeline_cls_name=WanPipeline,ti2v_task=True,flow_shift=5"
+end
+
 exec stdbuf -oL -eL .venv/bin/python -m lmms_eval eval \
     --model fastvideo \
     --model_args $MODEL_ARGS \

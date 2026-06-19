@@ -56,28 +56,19 @@ class NegLossReward(BaseReward):
         noise = torch.randn_like(gt_video_latents)
         noisy = sigmas * noise + (1.0 - sigmas) * gt_video_latents
         target = noise - gt_video_latents
-        model_input = torch.cat([noisy, condition], dim=1)
+        model_input = model._build_model_input(noisy, condition)
 
         rewards = torch.zeros(B, device=device, dtype=torch.float32)
 
-        if model.transformer is not None and expert_filter in (None, "high"):
-            selected = (timesteps >= model.boundary_timestep).nonzero(as_tuple=False).flatten()
+        for expert_name, selected, transformer in model._iter_transformer_selections(timesteps):
+            if expert_filter is not None and expert_name != expert_filter:
+                continue
             self._run_expert(
-                model.transformer,
+                transformer,
                 selected,
+                model,
                 model_input,
-                timesteps,
-                prompt_embeds,
-                target,
-                rewards,
-                need_dummy_forward=need_dummy_forward,
-            )
-        if model.transformer_2 is not None and expert_filter in (None, "low"):
-            selected = (timesteps < model.boundary_timestep).nonzero(as_tuple=False).flatten()
-            self._run_expert(
-                model.transformer_2,
-                selected,
-                model_input,
+                noisy,
                 timesteps,
                 prompt_embeds,
                 target,
@@ -87,11 +78,13 @@ class NegLossReward(BaseReward):
 
         return rewards
 
-    @staticmethod
     def _run_expert(
+        self,
         transformer: torch.nn.Module,
         selected: torch.Tensor,
+        model,
         model_input: torch.Tensor,
+        latent: torch.Tensor,
         timesteps: torch.Tensor,
         prompt_embeds: torch.Tensor,
         target: torch.Tensor,
@@ -106,20 +99,26 @@ class NegLossReward(BaseReward):
         FSDP we skip entirely.
         """
         if selected.numel() > 0:
-            sel_input = model_input.index_select(0, selected)
-            sel_ts = timesteps.index_select(0, selected)
-            sel_pe = prompt_embeds.index_select(0, selected)
+            forward_idx = selected
         elif need_dummy_forward:
-            sel_input = model_input[:1]
-            sel_ts = timesteps[:1]
-            sel_pe = prompt_embeds[:1]
+            forward_idx = torch.zeros(1, device=timesteps.device, dtype=torch.long)
         else:
             return
 
+        timestep_input = model._build_timestep_input(timesteps, latent, transformer)
+        sel_input = model_input.index_select(0, forward_idx)
+        sel_ts = timestep_input.index_select(0, forward_idx)
+        sel_pe = prompt_embeds.index_select(0, forward_idx)
+        hidden_states, sel_ts, encoder_hidden_states = model._prepare_transformer_call(
+            transformer,
+            sel_input,
+            sel_ts,
+            sel_pe,
+        )
         pred = transformer(
-            hidden_states=sel_input,
-            timestep=sel_ts.to(torch.bfloat16),
-            encoder_hidden_states=sel_pe,
+            hidden_states=hidden_states,
+            timestep=sel_ts,
+            encoder_hidden_states=encoder_hidden_states,
             return_dict=False,
         )[0]
         if selected.numel() > 0:

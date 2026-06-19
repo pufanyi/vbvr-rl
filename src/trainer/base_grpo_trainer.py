@@ -83,6 +83,9 @@ class BaseGRPOTrainer(BaseRLTrainer):
         """
         self.is_lora = cfg.lora_rank > 0
         self.ref_transformers: dict[str, torch.nn.Module] = {}
+        if self.rl_split_enabled and self.is_inference_rank:
+            logger.info("Split rollout actor rank: skipping frozen reference policy copies")
+            return
         if not self.is_lora and cfg.grpo_kl_coeff > 0:
             logger.info("Full fine-tuning mode: creating frozen reference policy copies (via CPU)")
             for name, m in [("transformer", self.model.transformer), ("transformer_2", self.model.transformer_2)]:
@@ -512,6 +515,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
                     stop_training = True
                     break
 
+                self.train_state.step = global_step
                 metrics = self._grpo_step(batch)
 
                 self._all_reduce_gradients()
@@ -564,7 +568,10 @@ class BaseGRPOTrainer(BaseRLTrainer):
                     if hasattr(self.dataloader.dataset, "__len__"):
                         batches = len(self.dataloader)
                     elif cfg.dataset_size is not None:
-                        dp = self.dp_size if self._expert_parallel_duplicates_data(cfg) else self.world_size
+                        if self.rl_split_enabled or cfg.grpo_shared_prompt_batch:
+                            dp = 1
+                        else:
+                            dp = self.dp_size if self._expert_parallel_duplicates_data(cfg) else self.world_size
                         dataset_size = (
                             self._effective_dataset_size
                             if getattr(self, "_effective_dataset_size", None) is not None

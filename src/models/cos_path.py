@@ -21,6 +21,7 @@ the path does NOT pass exactly through them.
 Supported path types (N-step):
   linear           Piecewise linear passthrough (C0 at boundaries).
   target_cosine    Smooth cosine target blend (C1 everywhere).
+  target_sigmoid   Smooth sigmoid target blend (C1 everywhere).
 
 Legacy 2-step-only paths (raise for N>2):
   cosine, cubic_hermite, smooth_blend, quadratic_bezier, target_linear
@@ -42,6 +43,7 @@ PathType = Literal[
     "quadratic_bezier",
     "target_linear",
     "target_cosine",
+    "target_sigmoid",
 ]
 
 
@@ -54,6 +56,7 @@ def compute_cos_path(
     *,
     boundary_noise_std: float = 0.0,
     smooth_blend_delta: float = 0.05,
+    sigmoid_steepness: float = 10.0,
 ) -> tuple[Tensor, Tensor]:
     """Compute interpolated sample *x_t* and velocity target *dx/dσ*.
 
@@ -68,6 +71,7 @@ def compute_cos_path(
             for samples below each waypoint's sigma position.
         smooth_blend_delta: Half-width of the blending window for
             ``smooth_blend`` (2-step only).
+        sigmoid_steepness: Logistic steepness for ``target_sigmoid``.
 
     Returns:
         ``(x_t, target)`` with the same shape as noise.
@@ -79,6 +83,8 @@ def compute_cos_path(
         return _linear_n(sigma, taus, noise, waypoints, boundary_noise_std)
     if path_type == "target_cosine":
         return _target_cosine_n(sigma, taus, noise, waypoints, boundary_noise_std)
+    if path_type == "target_sigmoid":
+        return _target_sigmoid_n(sigma, taus, noise, waypoints, boundary_noise_std, sigmoid_steepness)
 
     # Legacy 2-step-only paths
     if K != 1:
@@ -253,6 +259,109 @@ def _target_cosine_n(
         dalphas.append(dalpha_j)
 
     # Compute weights: w_0 = α_0, w_k = α_k − α_{k-1}, w_K = 1 − α_{K-1}
+    x_eff = torch.zeros_like(noise)
+    dx_eff = torch.zeros_like(noise)
+
+    for k in range(K + 1):
+        if k == 0:
+            w = alphas[0]
+            dw = dalphas[0]
+        elif k == K:
+            w = 1.0 - alphas[K - 1]
+            dw = -dalphas[K - 1]
+        else:
+            w = alphas[k] - alphas[k - 1]
+            dw = dalphas[k] - dalphas[k - 1]
+        x_eff = x_eff + w * waypoints[k]
+        dx_eff = dx_eff + dw * waypoints[k]
+
+    x_t = sigma * noise + (1.0 - sigma) * x_eff
+    target = noise - x_eff + (1.0 - sigma) * dx_eff
+
+    return x_t, target
+
+
+def _sigmoid_ease01(u: Tensor, steepness: float = 10.0) -> tuple[Tensor, Tensor]:
+    """Normalized sigmoid easing on [0, 1] with zero endpoint slope."""
+    u = u.clamp(0.0, 1.0)
+    s = u * u * (3.0 - 2.0 * u)
+    ds_du = 6.0 * u * (1.0 - u)
+
+    lo = torch.sigmoid(torch.as_tensor(-0.5 * steepness, dtype=u.dtype, device=u.device))
+    hi = torch.sigmoid(torch.as_tensor(0.5 * steepness, dtype=u.dtype, device=u.device))
+    denom = hi - lo
+
+    z = torch.sigmoid(steepness * (s - 0.5))
+    y = (z - lo) / denom
+    dy_du = (steepness * z * (1.0 - z) * ds_du) / denom
+    return y, dy_du
+
+
+def _target_sigmoid_n(
+    sigma: Tensor,
+    taus: list[float],
+    noise: Tensor,
+    waypoints: list[Tensor],
+    boundary_noise_std: float = 0.0,
+    sigmoid_steepness: float = 10.0,
+) -> tuple[Tensor, Tensor]:
+    r"""N-step smooth sigmoid target blend.  C1 everywhere.
+
+    This mirrors ``target_cosine`` but replaces each half-cosine transition with
+    a normalized sigmoid easing curve.  Each transition keeps exact anchor
+    values: α_j(lo_j)=0, α_j(τ_j)=0.5, α_j(hi_j)=1.
+    """
+    K = len(taus)
+    if K == 0:
+        x_eff = waypoints[0]
+        x_t = sigma * noise + (1.0 - sigma) * x_eff
+        target = noise - x_eff
+        return x_t, target
+
+    boundaries = [1.0] + taus + [0.0]
+
+    if boundary_noise_std > 0:
+        waypoints = list(waypoints)
+        for k in range(K):
+            tau_k = boundaries[k + 1]
+            below = sigma < tau_k
+            noisy = waypoints[k] + torch.randn_like(waypoints[k]) * boundary_noise_std
+            waypoints[k] = torch.where(below, noisy, waypoints[k])
+
+    alphas: list[Tensor] = []
+    dalphas: list[Tensor] = []
+
+    for j in range(K):
+        tau_j = taus[j]
+        lo = boundaries[j + 2]
+        hi = boundaries[j]
+
+        lo_len = tau_j - lo
+        hi_len = hi - tau_j
+
+        u_lower = (sigma - lo) / lo_len
+        y_lo, dy_lo = _sigmoid_ease01(u_lower, sigmoid_steepness)
+        a_lo = 0.5 * y_lo
+        da_lo = 0.5 * dy_lo / lo_len
+
+        u_upper = (sigma - tau_j) / hi_len
+        y_hi, dy_hi = _sigmoid_ease01(u_upper, sigmoid_steepness)
+        a_hi = 0.5 + 0.5 * y_hi
+        da_hi = 0.5 * dy_hi / hi_len
+
+        zero = torch.zeros_like(sigma)
+        one = torch.ones_like(sigma)
+
+        in_lower = (sigma > lo) & (sigma <= tau_j)
+        in_upper = (sigma > tau_j) & (sigma < hi)
+        above = sigma >= hi
+
+        alpha_j = torch.where(in_lower, a_lo, torch.where(in_upper, a_hi, torch.where(above, one, zero)))
+        dalpha_j = torch.where(in_lower, da_lo, torch.where(in_upper, da_hi, zero))
+
+        alphas.append(alpha_j)
+        dalphas.append(dalpha_j)
+
     x_eff = torch.zeros_like(noise)
     dx_eff = torch.zeros_like(noise)
 

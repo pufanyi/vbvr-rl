@@ -50,9 +50,16 @@ function _is_dcp_checkpoint
     end
 
     # High/low MoE checkpoints are not complete until both halves have DCP
-    # metadata. Training may create low/ first, so accepting either side can
-    # convert a partial checkpoint.
-    test -f $ckpt/high/.metadata; and test -f $ckpt/low/.metadata
+    # metadata. Single-transformer 5B checkpoints may have only high/.
+    set -l has_high_dir 0
+    set -l has_low_dir 0
+    test -d $ckpt/high; and set has_high_dir 1
+    test -d $ckpt/low; and set has_low_dir 1
+    if test $has_high_dir -eq 1; and test $has_low_dir -eq 1
+        test -f $ckpt/high/.metadata; and test -f $ckpt/low/.metadata
+        return
+    end
+    test -f $ckpt/high/.metadata; or test -f $ckpt/low/.metadata
 end
 
 function _output_for_checkpoint

@@ -542,6 +542,9 @@ class BaseTrainer(CheckpointRuntimeMixin):
             )
             return dataset, None  # IterableDataset; shard splitting handled by wds
         else:
+            raw_prefetch_stride = 1
+            if cfg.raw_remote_prefetch_lookahead > 0:
+                raw_prefetch_stride = self.dp_size if self._expert_parallel_duplicates_data(cfg) else self.world_size
             dataset = I2VDataset(
                 json_path=cfg.dataset_json,
                 num_frames=cfg.num_frames,
@@ -549,7 +552,13 @@ class BaseTrainer(CheckpointRuntimeMixin):
                 height=cfg.height,
                 width=cfg.width,
                 fps=cfg.fps,
+                shuffle_indices=cfg.shuffle_raw_indices,
+                shuffle_seed=cfg.shuffle_raw_indices_seed if cfg.shuffle_raw_indices_seed is not None else cfg.seed,
+                remote_prefetch_lookahead=cfg.raw_remote_prefetch_lookahead,
+                remote_prefetch_workers=cfg.raw_remote_prefetch_workers,
+                remote_prefetch_stride=raw_prefetch_stride,
             )
+        sampler_shuffle = not cfg.shuffle_raw_indices
         if self.expert_parallel:
             if self._expert_parallel_duplicates_data(cfg):
                 seed = self._get_expert_parallel_sampler_seed(cfg)
@@ -557,7 +566,7 @@ class BaseTrainer(CheckpointRuntimeMixin):
                     dataset,
                     num_replicas=self.dp_size,
                     rank=self.dp_rank,
-                    shuffle=True,
+                    shuffle=sampler_shuffle,
                     seed=seed,
                 )
             else:
@@ -565,7 +574,7 @@ class BaseTrainer(CheckpointRuntimeMixin):
                     dataset,
                     num_replicas=self.world_size,
                     rank=self.rank,
-                    shuffle=True,
+                    shuffle=sampler_shuffle,
                     seed=cfg.seed,
                 )
         else:
@@ -573,7 +582,7 @@ class BaseTrainer(CheckpointRuntimeMixin):
                 dataset,
                 num_replicas=self.world_size,
                 rank=self.rank,
-                shuffle=True,
+                shuffle=sampler_shuffle,
                 seed=cfg.seed,
             )
         return dataset, sampler
@@ -592,6 +601,9 @@ class BaseTrainer(CheckpointRuntimeMixin):
         if cfg.num_workers > 0:
             kwargs["persistent_workers"] = cfg.persistent_workers
             kwargs["prefetch_factor"] = cfg.prefetch_factor
+            kwargs["in_order"] = cfg.dataloader_in_order
+            if cfg.dataloader_timeout_seconds > 0:
+                kwargs["timeout"] = cfg.dataloader_timeout_seconds
         return StatefulDataLoader(**kwargs)
 
     # ------------------------------------------------------------------

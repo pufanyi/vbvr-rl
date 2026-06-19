@@ -41,6 +41,7 @@ from tqdm import tqdm
 
 from src.precompute.vbvr_prompt_embeds import encode_text, load_text_encoder
 from src.precompute.vbvr_vae_latents import encode_video, load_vae, prepare_condition
+from src.data.remote_io import localize_media_path, resolve_media_path
 
 
 def _is_distributed() -> bool:
@@ -220,11 +221,11 @@ class ParquetI2VDataset:
 
     @staticmethod
     def _resolve(path: str, root: Path) -> str:
-        p = Path(path)
-        return str(p) if p.is_absolute() else str(root / p)
+        return resolve_media_path(path, root)
 
     @staticmethod
     def _get_video_hw(video_path: str, cfg: _ItemConfig) -> tuple[int, int]:
+        video_path = localize_media_path(video_path)
         if cfg.fixed_height is not None and cfg.fixed_width is not None:
             return cfg.fixed_height, cfg.fixed_width
 
@@ -248,6 +249,7 @@ class ParquetI2VDataset:
 
     @staticmethod
     def _load_video(video_path: str, height: int, width: int, cfg: _ItemConfig) -> torch.Tensor:
+        video_path = localize_media_path(video_path)
         frames = iio.imread(video_path)
         total_frames = int(frames.shape[0])
         indices = np.linspace(0, total_frames - 1, cfg.num_frames).round().astype(int)
@@ -258,6 +260,7 @@ class ParquetI2VDataset:
 
     @staticmethod
     def _load_image(path: str, height: int, width: int) -> torch.Tensor:
+        path = localize_media_path(path)
         with Image.open(path) as img:
             img = img.convert("RGB").resize((width, height), Image.LANCZOS)
             array = np.array(img, dtype=np.uint8)

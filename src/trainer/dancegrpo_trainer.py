@@ -34,6 +34,63 @@ def _split_group_indices(group_size: int, rollout_rank: int, rollout_world_size:
     return list(range(rollout_rank, group_size, rollout_world_size))
 
 
+def _interleave_actor_ranks_by_node(actor_ranks: list[int], local_world_size: int) -> list[int]:
+    """Order actors by GPU index across nodes instead of draining one node first."""
+    if local_world_size <= 0:
+        return list(actor_ranks)
+    return sorted(actor_ranks, key=lambda rank: (rank % local_world_size, rank // local_world_size))
+
+
+def _shared_prompt_assignment(
+    rank: int,
+    world_size: int,
+    prompt_batch_size: int,
+    group_size: int,
+) -> tuple[int, int, int, list[int]]:
+    """Assign one global prompt and a subset of its GRPO groups to a rank."""
+    if prompt_batch_size <= 0:
+        raise ValueError("prompt_batch_size must be > 0")
+    if prompt_batch_size > world_size:
+        raise ValueError(
+            f"grpo_shared_prompt_batch requires batch_size <= world_size, got batch_size={prompt_batch_size} "
+            f"world_size={world_size}"
+        )
+    if world_size % prompt_batch_size != 0:
+        raise ValueError(
+            "grpo_shared_prompt_batch requires world_size to be divisible by batch_size "
+            f"so every prompt has the same number of ranks; got world_size={world_size}, batch_size={prompt_batch_size}"
+        )
+    prompt_idx = rank % prompt_batch_size
+    prompt_rank = rank // prompt_batch_size
+    prompt_world_size = (world_size - 1 - prompt_idx) // prompt_batch_size + 1
+    if group_size % prompt_world_size != 0:
+        raise ValueError(
+            "grpo_shared_prompt_batch requires grpo_group_size to be divisible by ranks per prompt "
+            f"so every rank has the same backward count; got group_size={group_size}, "
+            f"ranks_per_prompt={prompt_world_size}"
+        )
+    group_indices = list(range(prompt_rank, group_size, prompt_world_size))
+    if not group_indices:
+        raise ValueError(
+            "grpo_shared_prompt_batch requires each rank to own at least one group; "
+            f"got group_size={group_size}, prompt_world_size={prompt_world_size}. "
+            "Increase grpo_group_size or reduce batch_size/world_size."
+        )
+    return prompt_idx, prompt_rank, prompt_world_size, group_indices
+
+
+def _slice_meta(meta: dict[str, Any], index: int) -> dict[str, Any]:
+    sliced: dict[str, Any] = {}
+    for key, value in meta.items():
+        if isinstance(value, torch.Tensor):
+            sliced[key] = value[index : index + 1]
+        elif isinstance(value, list):
+            sliced[key] = value[index : index + 1]
+        else:
+            sliced[key] = value
+    return sliced
+
+
 class DanceGRPOTrainer(BaseGRPOTrainer):
     """Paper-inspired GRPO variant with shared group noise and timestep selection."""
 
@@ -50,11 +107,21 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             raise ValueError("DanceGRPO requires grpo_num_sampling_steps >= 2")
         if cfg.grpo_sde_noise_scale <= 0:
             raise ValueError("DanceGRPO requires grpo_sde_noise_scale > 0")
-        if self.rl_split_enabled and cfg.lora_rank <= 0 and cfg.rl_actor_weight_sync != "none":
-            raise ValueError("Split DanceGRPO currently requires LoRA for actor weight sync")
+        if self.rl_split_enabled and cfg.grpo_shared_prompt_batch:
+            raise ValueError("grpo_shared_prompt_batch is for non-split all-rank GRPO; disable split RL")
+        if self.expert_parallel and cfg.grpo_shared_prompt_batch:
+            raise ValueError("grpo_shared_prompt_batch does not support expert_parallel")
+        if self.rl_split_enabled and cfg.rl_actor_weight_sync == "lora" and cfg.lora_rank <= 0:
+            raise ValueError(
+                "Split DanceGRPO with rl_actor_weight_sync='lora' requires lora_rank > 0; "
+                "use rl_actor_weight_sync='full' for full-finetune split RL"
+            )
+        if self.rl_split_enabled and cfg.rl_actor_weight_sync == "full" and not cfg.rl_async_rollout:
+            raise ValueError("Split DanceGRPO full actor weight sync requires rl_async_rollout=true")
         logger.info(
-            "DanceGRPO | shared_group_init_noise={} timestep_selection_ratio={:.2f} "
+            "DanceGRPO | sde_formula={} shared_group_init_noise={} timestep_selection_ratio={:.2f} "
             "train_sample_batch_size={} split_debug_logs={}",
+            cfg.grpo_sde_formula,
             cfg.dancegrpo_share_group_init_noise,
             cfg.dancegrpo_timestep_selection_ratio,
             cfg.grpo_train_sample_batch_size,
@@ -158,6 +225,93 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         return uncond_ref_output.to(torch.float32) + self.cfg.grpo_cfg_scale * (
             ref_output.to(torch.float32) - uncond_ref_output.to(torch.float32)
         )
+
+    def _transition_mean(
+        self,
+        sample: torch.Tensor,
+        model_output: torch.Tensor,
+        sigma: float,
+        sigma_prev: float,
+    ) -> tuple[torch.Tensor, float]:
+        cfg = self.cfg
+        return self.model._sde_transition_mean(
+            sample=sample,
+            model_output=model_output,
+            sigma=sigma,
+            sigma_prev=sigma_prev,
+            sde_formula=cfg.grpo_sde_formula,
+            sde_noise_scale=cfg.grpo_sde_noise_scale,
+            sigma_min=cfg.grpo_sde_sigma_min,
+            sigma_max=cfg.grpo_sde_sigma_max,
+        )
+
+    def _transition_log_prob(
+        self,
+        sample: torch.Tensor,
+        mean: torch.Tensor,
+        noise_scale: float,
+    ) -> torch.Tensor:
+        return self.model._sde_transition_log_prob(self.cfg.grpo_sde_formula, sample, mean, noise_scale)
+
+    def _transition_kl_loss(
+        self,
+        mean: torch.Tensor,
+        ref_mean: torch.Tensor,
+        noise_scale: float,
+    ) -> torch.Tensor:
+        return self.model._sde_transition_kl_loss(self.cfg.grpo_sde_formula, mean, ref_mean, noise_scale)
+
+    def _rollout_video_root(self) -> Path:
+        if self.cfg.grpo_rollout_video_dir:
+            return Path(self.cfg.grpo_rollout_video_dir)
+        return Path(self.cfg.output_dir) / "rollout_videos"
+
+    def _maybe_save_rollout_videos(
+        self,
+        *,
+        final_latents: torch.Tensor,
+        step_idx: int,
+        prompt_idx: int,
+        groups: list[int],
+        saved_count: int,
+    ) -> int:
+        cfg = self.cfg
+        if not cfg.grpo_save_rollout_videos:
+            return saved_count
+        if self.model.vae is None:
+            raise RuntimeError("grpo_save_rollout_videos requires the VAE to be loaded")
+        if step_idx % cfg.grpo_rollout_video_every_steps != 0:
+            return saved_count
+
+        remaining = max(0, cfg.grpo_rollout_video_max_per_rank - saved_count)
+        if remaining <= 0:
+            return saved_count
+        count = min(remaining, final_latents.shape[0], len(groups))
+        if count <= 0:
+            return saved_count
+
+        out_dir = self._rollout_video_root() / f"step_{step_idx:06d}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        with torch.no_grad():
+            decoded = self.model.decode_latents(final_latents[:count])
+        decoded = ((decoded.clamp(-1.0, 1.0) + 1.0) * 127.5).round().to(torch.uint8)
+        decoded = decoded.permute(0, 2, 3, 4, 1).contiguous().cpu().numpy()
+
+        from diffusers.utils import export_to_video
+        from PIL import Image
+
+        for local_idx in range(count):
+            group_idx = int(groups[local_idx])
+            path = (
+                out_dir
+                / f"rank{self.global_rank:03d}_prompt{int(prompt_idx):03d}_group{group_idx:03d}.mp4"
+            )
+            frames = [Image.fromarray(frame) for frame in decoded[local_idx]]
+            export_to_video(frames, str(path), fps=cfg.grpo_rollout_video_fps)
+
+        del decoded
+        return saved_count + count
 
     # ------------------------------------------------------------------
     # Split train/rollout execution
@@ -331,7 +485,8 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
     def _async_prefetch_steps(self) -> int:
         if self.cfg.rl_async_rollout_prefetch_steps > 0:
             return self.cfg.rl_async_rollout_prefetch_steps
-        return max(1, math.ceil(self.rollout_world_size / self.cfg.grpo_group_size) + 1)
+        actor_jobs_per_step = max(1, math.ceil(self.cfg.grpo_group_size / self.cfg.grpo_sample_batch_size))
+        return max(1, math.ceil(self.rollout_world_size / actor_jobs_per_step) + 1)
 
     def _actor_pair_pg(self, actor_rank: int | None = None):
         rank = self.global_rank if actor_rank is None else actor_rank
@@ -339,6 +494,87 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         if pg is None:
             raise RuntimeError(f"Missing split actor process group for rank {rank}")
         return pg
+
+    @staticmethod
+    def _dtype_from_name(dtype_name: str) -> torch.dtype:
+        if dtype_name.startswith("torch."):
+            dtype_name = dtype_name.removeprefix("torch.")
+        dtype = getattr(torch, dtype_name, None)
+        if not isinstance(dtype, torch.dtype):
+            raise ValueError(f"Unsupported streamed tensor dtype: {dtype_name}")
+        return dtype
+
+    def _send_async_full_policy_state(
+        self,
+        actor_rank: int,
+        policy_state: dict[str, dict[str, torch.Tensor]],
+        pg,
+    ) -> None:
+        """Stream full actor weights tensor-by-tensor to avoid giant pickle payloads."""
+        metadata: list[dict[str, Any]] = []
+        tensors: list[torch.Tensor] = []
+        for module_name, module_state in policy_state.items():
+            for tensor_name, tensor in module_state.items():
+                if not torch.is_tensor(tensor):
+                    continue
+                tensor_cpu = tensor.detach()
+                if tensor_cpu.device.type != "cpu":
+                    tensor_cpu = tensor_cpu.cpu()
+                if not tensor_cpu.is_contiguous():
+                    tensor_cpu = tensor_cpu.contiguous()
+                metadata.append(
+                    {
+                        "module": module_name,
+                        "name": tensor_name,
+                        "shape": tuple(tensor_cpu.shape),
+                        "dtype": str(tensor_cpu.dtype),
+                    }
+                )
+                tensors.append(tensor_cpu)
+
+        modules, tensor_count, mb = self._split_policy_state_stats(policy_state)
+        send_start = time.monotonic()
+        self._split_debug_log(
+            "async_full_policy_stream_send_start actor={} modules={} tensors={} size_mb={:.1f}",
+            actor_rank,
+            modules,
+            tensor_count,
+            mb,
+        )
+        dist.send_object_list([metadata], dst=actor_rank, group=pg)
+        for tensor in tensors:
+            dist.send(tensor, dst=actor_rank, group=pg)
+        self._split_debug_log(
+            "async_full_policy_stream_send_done actor={} tensors={} seconds={:.2f}",
+            actor_rank,
+            len(tensors),
+            time.monotonic() - send_start,
+        )
+
+    def _recv_async_full_policy_state(self, pg) -> dict[str, dict[str, torch.Tensor]]:
+        train_root = self.train_global_ranks[0]
+        recv_start = time.monotonic()
+        obj = [None]
+        dist.recv_object_list(obj, src=train_root, group=pg)
+        metadata = obj[0] or []
+        policy_state: dict[str, dict[str, torch.Tensor]] = {}
+        for entry in metadata:
+            tensor = torch.empty(
+                tuple(entry["shape"]),
+                dtype=self._dtype_from_name(str(entry["dtype"])),
+                device="cpu",
+            )
+            dist.recv(tensor, src=train_root, group=pg)
+            policy_state.setdefault(str(entry["module"]), {})[str(entry["name"])] = tensor
+        modules, tensors, mb = self._split_policy_state_stats(policy_state)
+        self._split_debug_log(
+            "async_full_policy_stream_recv_done modules={} tensors={} size_mb={:.1f} seconds={:.2f}",
+            modules,
+            tensors,
+            mb,
+            time.monotonic() - recv_start,
+        )
+        return policy_state
 
     def _broadcast_train_command(self, command: dict[str, Any] | None) -> dict[str, Any]:
         obj = [command if self._is_train_root() else None]
@@ -413,7 +649,10 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 dist.destroy_process_group()
                 return
             groups = [int(g) for g in job.get("groups", [])]
+            policy_sync = bool(job.get("policy_sync", job.get("policy_state") is not None))
             policy_state = job.get("policy_state")
+            if policy_sync and job.get("policy_sync_mode") == "full":
+                policy_state = self._recv_async_full_policy_state(pg)
             if self._split_debug_enabled():
                 _modules, tensors, mb = self._split_policy_state_stats(policy_state)
                 self._split_debug_log(
@@ -422,7 +661,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                     int(job["step_id"]),
                     groups,
                     len(job.get("selected_t_idxs", [])),
-                    policy_state is not None,
+                    policy_sync,
                     tensors,
                     mb,
                     wait_seconds,
@@ -529,7 +768,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 cfg_scale=cfg.grpo_cfg_scale,
                 generator=rollout_generator,
                 initial_latent=initial_latent,
-                sde_formula="dancegrpo",
+                sde_formula=cfg.grpo_sde_formula,
             )
             generate_seconds = time.monotonic() - generate_start
 
@@ -622,15 +861,28 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         result_threads: dict[int, threading.Thread],
     ) -> None:
         pg = self._actor_pair_pg(actor_rank)
+        policy_state = job.get("policy_state")
+        stream_full_policy = self.cfg.rl_actor_weight_sync == "full" and policy_state is not None
+        policy_sync = bool(policy_state is not None)
+        if stream_full_policy:
+            job = dict(job)
+            job["policy_state"] = None
+            job["policy_sync"] = True
+            job["policy_sync_mode"] = "full"
+        else:
+            job["policy_sync"] = policy_sync
+            job["policy_sync_mode"] = self.cfg.rl_actor_weight_sync
         send_start = time.monotonic()
         dist.send_object_list([job], dst=actor_rank, group=pg)
+        if stream_full_policy:
+            self._send_async_full_policy_state(actor_rank, policy_state, pg)
         result_threads[actor_rank] = self._start_async_result_receiver(actor_rank, results)
         self._split_debug_log(
             "async_dispatch_send_done actor={} step={} groups={} policy_sync={} send={:.2f}s",
             actor_rank,
             int(job["step_id"]),
             [int(g) for g in job.get("groups", [])],
-            job.get("policy_state") is not None,
+            policy_sync,
             time.monotonic() - send_start,
         )
 
@@ -721,7 +973,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         train_start_step = global_step
         target_steps = self.total_steps
         prefetch_steps = self._async_prefetch_steps()
-        actors = list(self.inference_global_ranks)
+        actors = _interleave_actor_ranks_by_node(list(self.inference_global_ranks), self.local_world_size)
         actor_locations = {
             rank: {
                 "node": rank // self.local_world_size,
@@ -733,11 +985,14 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             raise RuntimeError("Async split rollout requires at least one inference actor")
 
         logger.info(
-            "Async split rollout enabled: actors={} G={} prefetch_steps={} max_inflight_groups={}",
+            "Async split rollout enabled: actors={} G={} prefetch_steps={} max_inflight_groups={} "
+            "actor_sync={} sync_interval={}",
             len(actors),
             cfg.grpo_group_size,
             prefetch_steps,
             prefetch_steps * cfg.grpo_group_size,
+            cfg.rl_actor_weight_sync,
+            cfg.rl_actor_weight_sync_interval,
         )
         self._split_debug_log(
             "async_train_root_start step={} target_steps={} actors={} train_ranks={} "
@@ -752,9 +1007,17 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             str(output_dir),
         )
 
-        current_policy_state = self._collect_actor_policy_state(global_step)
         current_policy_version = global_step
-        actor_versions: dict[int, int | None] = {rank: None for rank in actors}
+        if cfg.rl_actor_weight_sync == "full":
+            current_policy_state = None
+            actor_versions: dict[int, int | None] = {rank: current_policy_version for rank in actors}
+            logger.info(
+                "Skipping initial full actor sync at step={} because actors already loaded the same init/resume weights.",
+                global_step,
+            )
+        else:
+            current_policy_state = self._collect_actor_policy_state(global_step)
+            actor_versions = {rank: None for rank in actors}
 
         batch_iter = self._split_batch_records(start_epoch, start_batch_idx)
         next_step_to_create = global_step
@@ -1090,8 +1353,17 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 if global_step >= target_steps:
                     break
 
-                current_policy_state = self._collect_actor_policy_state(global_step)
-                current_policy_version = global_step
+                steps_since_start = global_step - train_start_step
+                if steps_since_start % cfg.rl_actor_weight_sync_interval == 0:
+                    current_policy_state = self._collect_actor_policy_state(global_step)
+                    current_policy_version = global_step
+                else:
+                    self._split_debug_log(
+                        "async_policy_sync_skipped step={} current_policy_version={} interval={}",
+                        global_step,
+                        current_policy_version,
+                        cfg.rl_actor_weight_sync_interval,
+                    )
                 dispatch_available()
 
             self.train_state.step = global_step
@@ -1342,7 +1614,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 cfg_scale=cfg.grpo_cfg_scale,
                 generator=rollout_generator,
                 initial_latent=initial_latent,
-                sde_formula="dancegrpo",
+                sde_formula=cfg.grpo_sde_formula,
             )
 
             reward_flat = self.reward_fn(
@@ -1557,14 +1829,13 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
                 transformer = self.model._get_expert_for_timestep(timestep_val)
                 model_output = self._policy_forward(transformer, latent, cond_s, pe_s, timestep_val)
-                prev_mean, noise_scale = self.model._dancegrpo_transition_mean(
+                prev_mean, noise_scale = self._transition_mean(
                     sample=latent,
                     model_output=model_output,
                     sigma=sigma,
                     sigma_prev=sigma_prev,
-                    eta=cfg.grpo_sde_noise_scale,
                 )
-                new_log_prob = self.model._gaussian_transition_log_prob(next_latent, prev_mean, noise_scale)
+                new_log_prob = self._transition_log_prob(next_latent, prev_mean, noise_scale)
 
                 ratio = torch.exp(new_log_prob - old_log_prob)
                 unclipped = -adv_chunk * ratio
@@ -1575,16 +1846,13 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 if cfg.grpo_kl_coeff > 0:
                     with torch.no_grad():
                         ref_output = self._ref_forward_cfg(latent, cond_s, pe_s, timestep_val)
-                    if noise_scale > 1e-8:
-                        ref_mean, _ = self.model._dancegrpo_transition_mean(
-                            sample=latent,
-                            model_output=ref_output,
-                            sigma=sigma,
-                            sigma_prev=sigma_prev,
-                            eta=cfg.grpo_sde_noise_scale,
-                        )
-                        kl_loss = ((prev_mean - ref_mean) ** 2).mean(dim=list(range(1, prev_mean.ndim))).mean()
-                        kl_loss = kl_loss / (2.0 * noise_scale**2)
+                    ref_mean, _ = self._transition_mean(
+                        sample=latent,
+                        model_output=ref_output,
+                        sigma=sigma,
+                        sigma_prev=sigma_prev,
+                    )
+                    kl_loss = self._transition_kl_loss(prev_mean, ref_mean, noise_scale)
 
                 loss = (policy_loss + cfg.grpo_kl_coeff * kl_loss) * (cur_s / metric_normalizer)
                 loss.backward()
@@ -1603,8 +1871,334 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             "active_rollout_ranks": float(rollouts["active_rollout_ranks"]),
         }
 
+    def _gather_shared_prompt_rewards(
+        self,
+        *,
+        prompt_batch_size: int,
+        prompt_idx: int,
+        groups: list[int],
+        rewards: torch.Tensor,
+    ) -> tuple[torch.Tensor, int]:
+        payload = {
+            "prompt_idx": int(prompt_idx),
+            "groups": [int(group) for group in groups],
+            "rewards": rewards.detach().cpu(),
+        }
+        gathered: list[Any] = [None for _ in range(self.world_size)]
+        dist.all_gather_object(gathered, payload, group=self._checkpoint_pg)
+
+        full_rewards = torch.full((prompt_batch_size, self.cfg.grpo_group_size), float("nan"), dtype=torch.float32)
+        active_ranks = 0
+        seen: set[tuple[int, int]] = set()
+        for item in gathered:
+            if not isinstance(item, dict):
+                continue
+            item_prompt_idx = int(item["prompt_idx"])
+            item_groups = [int(group) for group in item["groups"]]
+            item_rewards = item["rewards"].float().view(-1)
+            if item_groups:
+                active_ranks += 1
+            for local_idx, group_idx in enumerate(item_groups):
+                key = (item_prompt_idx, group_idx)
+                if key in seen:
+                    raise RuntimeError(f"Duplicate shared-prompt reward for prompt={item_prompt_idx} group={group_idx}")
+                full_rewards[item_prompt_idx, group_idx] = item_rewards[local_idx]
+                seen.add(key)
+
+        missing = torch.isnan(full_rewards).nonzero(as_tuple=False)
+        if missing.numel() > 0:
+            missing_items = [(int(row[0]), int(row[1])) for row in missing[:16]]
+            raise RuntimeError(f"Missing shared-prompt rewards, first missing prompt/group entries: {missing_items}")
+        return full_rewards, active_ranks
+
+    def _grpo_step_shared_prompt_batch(self, batch: dict) -> dict[str, float]:
+        """All-rank GRPO where ranks shard group samples for a fixed global prompt batch."""
+        cfg = self.cfg
+        G = cfg.grpo_group_size
+        S = cfg.grpo_sample_batch_size
+        T = cfg.grpo_num_sampling_steps
+        device = self.device
+        debug_logs = self._split_debug_enabled()
+
+        def debug_sync() -> None:
+            if debug_logs and device.type == "cuda":
+                torch.cuda.synchronize(device)
+
+        step_start = time.monotonic()
+
+        prompt_embeds_all, gt_video_latents_all, condition_all, meta_all = self._encode_batch_inputs(batch)
+        prompt_batch_size = int(gt_video_latents_all.shape[0])
+        prompt_idx, prompt_rank, prompt_world_size, group_indices = _shared_prompt_assignment(
+            self.rank,
+            self.world_size,
+            prompt_batch_size,
+            G,
+        )
+        selected_t_idxs = self._select_training_timesteps(T)
+        if self.rank == 0:
+            logger.info(
+                "DanceGRPO shared prompt batch: prompts={} world={} ranks_per_prompt={} groups_per_rank={} "
+                "sample_batch_size={} replay_t={}",
+                prompt_batch_size,
+                self.world_size,
+                prompt_world_size,
+                len(group_indices),
+                S,
+                selected_t_idxs,
+            )
+        self._split_debug_log(
+            "shared_prompt_step_start global_rank={} local_rank={} step={} prompt={}/{} prompt_rank={}/{} "
+            "groups={} formula={} rollout_batch={} replay_t={}",
+            self.global_rank,
+            self.local_rank,
+            int(self.train_state.step),
+            prompt_idx,
+            prompt_batch_size,
+            prompt_rank,
+            prompt_world_size,
+            group_indices,
+            cfg.grpo_sde_formula,
+            S,
+            selected_t_idxs,
+        )
+
+        prompt_embeds = prompt_embeds_all[prompt_idx : prompt_idx + 1]
+        gt_video_latents = gt_video_latents_all[prompt_idx : prompt_idx + 1]
+        condition = condition_all[prompt_idx : prompt_idx + 1]
+        meta = _slice_meta(meta_all, prompt_idx)
+
+        for m in [self.model.transformer, self.model.transformer_2]:
+            if m is not None:
+                m.eval()
+
+        local_chunks = []
+        reward_parts = []
+        saved_rollout_videos = 0
+        rollout_step_idx = int(self.train_state.step) + 1
+        init_generator = torch.Generator(device=device).manual_seed(cfg.seed + 1_000_003 * self.train_state.step + 17)
+        shared_initial_latent = self._sample_group_initial_latents(condition, generator=init_generator)
+
+        for offset in range(0, len(group_indices), S):
+            chunk_start = time.monotonic()
+            groups = group_indices[offset : offset + S]
+            cur_s = len(groups)
+            self._split_debug_log(
+                "shared_prompt_rollout_chunk_start rank={} step={} prompt={} groups={}",
+                self.global_rank,
+                int(self.train_state.step),
+                prompt_idx,
+                groups,
+            )
+            cond_s = condition.repeat_interleave(cur_s, dim=0)
+            pe_s = prompt_embeds.repeat_interleave(cur_s, dim=0)
+            gt_s = gt_video_latents.repeat_interleave(cur_s, dim=0)
+            meta_s = _repeat_meta(meta, cur_s)
+            initial_latent = (
+                shared_initial_latent.repeat_interleave(cur_s, dim=0) if shared_initial_latent is not None else None
+            )
+            rollout_seed = (
+                cfg.seed
+                + 1_000_003 * self.train_state.step
+                + 9_176 * (prompt_idx + 1)
+                + 503 * (prompt_rank + 1)
+                + 131 * offset
+            )
+            rollout_generator = torch.Generator(device=device).manual_seed(rollout_seed)
+            traj = self.model.sde_generate(
+                condition=cond_s,
+                prompt_embeds=pe_s,
+                num_sampling_steps=T,
+                sde_noise_scale=cfg.grpo_sde_noise_scale,
+                sigma_min=cfg.grpo_sde_sigma_min,
+                sigma_max=cfg.grpo_sde_sigma_max,
+                cfg_scale=cfg.grpo_cfg_scale,
+                generator=rollout_generator,
+                initial_latent=initial_latent,
+                sde_formula=cfg.grpo_sde_formula,
+            )
+            debug_sync()
+            rollout_seconds = time.monotonic() - chunk_start
+            reward_start = time.monotonic()
+            reward_flat = self.reward_fn(
+                traj["latents"][-1],
+                gt_s,
+                cond_s,
+                pe_s,
+                meta=meta_s,
+            )
+            debug_sync()
+            reward_seconds = time.monotonic() - reward_start
+            saved_rollout_videos = self._maybe_save_rollout_videos(
+                final_latents=traj["latents"][-1],
+                step_idx=rollout_step_idx,
+                prompt_idx=prompt_idx,
+                groups=groups,
+                saved_count=saved_rollout_videos,
+            )
+            reward_parts.append(reward_flat.view(-1))
+            del traj["noises"]
+            traj["latents"] = [x.to("cpu", non_blocking=True) for x in traj["latents"]]
+            traj["log_probs"] = [x.to("cpu", non_blocking=True) for x in traj["log_probs"]]
+            local_chunks.append((traj, groups))
+            debug_sync()
+            self._split_debug_log(
+                "shared_prompt_rollout_chunk_done rank={} step={} prompt={} groups={} rollout={:.2f}s "
+                "reward={:.2f}s total={:.2f}s reward_mean={:.4f}",
+                self.global_rank,
+                int(self.train_state.step),
+                prompt_idx,
+                groups,
+                rollout_seconds,
+                reward_seconds,
+                time.monotonic() - chunk_start,
+                float(reward_flat.float().mean().item()),
+            )
+
+        local_rewards = torch.cat(reward_parts, dim=0)
+        gather_start = time.monotonic()
+        self._split_debug_log(
+            "shared_prompt_reward_gather_start rank={} step={} prompt={} groups={}",
+            self.global_rank,
+            int(self.train_state.step),
+            prompt_idx,
+            group_indices,
+        )
+        rewards, active_ranks = self._gather_shared_prompt_rewards(
+            prompt_batch_size=prompt_batch_size,
+            prompt_idx=prompt_idx,
+            groups=group_indices,
+            rewards=local_rewards,
+        )
+        debug_sync()
+        self._split_debug_log(
+            "shared_prompt_reward_gather_done rank={} step={} prompt={} active_ranks={} seconds={:.2f}",
+            self.global_rank,
+            int(self.train_state.step),
+            prompt_idx,
+            active_ranks,
+            time.monotonic() - gather_start,
+        )
+        rewards = rewards.to(device=device, non_blocking=True)
+        advantages = self._compute_advantages(rewards)
+
+        for m in [self.model.transformer, self.model.transformer_2]:
+            if m is not None:
+                m.train()
+
+        for opt in self.optimizers:
+            opt.zero_grad(set_to_none=True)
+
+        local_policy_sum = 0.0
+        local_kl_sum = 0.0
+        gradient_normalizer = max(len(selected_t_idxs) * G * prompt_batch_size / self.world_size, 1.0)
+        num_chunks = len(local_chunks)
+
+        for chunk_idx, (traj, groups) in enumerate(local_chunks):
+            replay_chunk_start = time.monotonic()
+            self._split_debug_log(
+                "shared_prompt_replay_chunk_start rank={} step={} prompt={} chunk={}/{} groups={}",
+                self.global_rank,
+                int(self.train_state.step),
+                prompt_idx,
+                chunk_idx + 1,
+                num_chunks,
+                groups,
+            )
+            cur_s = len(groups)
+            cond_s = condition.repeat_interleave(cur_s, dim=0).detach()
+            pe_s = prompt_embeds.repeat_interleave(cur_s, dim=0).detach()
+            adv_chunk = advantages[prompt_idx, groups].reshape(cur_s)
+
+            traj["latents"] = [x.to(device, non_blocking=True) for x in traj["latents"]]
+            traj["log_probs"] = [x.to(device, non_blocking=True) for x in traj["log_probs"]]
+
+            for replay_idx, t_idx in enumerate(selected_t_idxs):
+                is_last = chunk_idx == num_chunks - 1 and replay_idx == len(selected_t_idxs) - 1
+                self._set_requires_gradient_sync(is_last)
+
+                sigma = traj["sigmas"][t_idx].item()
+                sigma_prev = traj["sigmas"][t_idx + 1].item()
+                latent = traj["latents"][t_idx].detach()
+                next_latent = traj["latents"][t_idx + 1].detach()
+                old_log_prob = traj["log_probs"][t_idx].detach()
+                timestep_val = traj["timesteps"][t_idx]
+
+                transformer = self.model._get_expert_for_timestep(timestep_val)
+                model_output = self._policy_forward(transformer, latent, cond_s, pe_s, timestep_val)
+                prev_mean, noise_scale = self._transition_mean(
+                    sample=latent,
+                    model_output=model_output,
+                    sigma=sigma,
+                    sigma_prev=sigma_prev,
+                )
+                new_log_prob = self._transition_log_prob(next_latent, prev_mean, noise_scale)
+
+                ratio = torch.exp(new_log_prob - old_log_prob)
+                unclipped = -adv_chunk * ratio
+                clipped = -adv_chunk * ratio.clamp(1.0 - cfg.grpo_clip_range, 1.0 + cfg.grpo_clip_range)
+                policy_loss = torch.max(unclipped, clipped).mean()
+
+                kl_loss = torch.tensor(0.0, device=device)
+                if cfg.grpo_kl_coeff > 0:
+                    with torch.no_grad():
+                        ref_output = self._ref_forward_cfg(latent, cond_s, pe_s, timestep_val)
+                    ref_mean, _ = self._transition_mean(
+                        sample=latent,
+                        model_output=ref_output,
+                        sigma=sigma,
+                        sigma_prev=sigma_prev,
+                    )
+                    kl_loss = self._transition_kl_loss(prev_mean, ref_mean, noise_scale)
+
+                loss = (policy_loss + cfg.grpo_kl_coeff * kl_loss) * (cur_s / gradient_normalizer)
+                loss.backward()
+                local_policy_sum += policy_loss.item() * cur_s
+                local_kl_sum += kl_loss.item() * cur_s
+
+            del traj["latents"], traj["log_probs"]
+            debug_sync()
+            self._split_debug_log(
+                "shared_prompt_replay_chunk_done rank={} step={} prompt={} chunk={}/{} groups={} seconds={:.2f}",
+                self.global_rank,
+                int(self.train_state.step),
+                prompt_idx,
+                chunk_idx + 1,
+                num_chunks,
+                groups,
+                time.monotonic() - replay_chunk_start,
+            )
+
+        reduce_start = time.monotonic()
+        self._split_debug_log(
+            "shared_prompt_metric_reduce_start rank={} step={}",
+            self.global_rank,
+            int(self.train_state.step),
+        )
+        metric_buf = torch.tensor([local_policy_sum, local_kl_sum], device=device, dtype=torch.float32)
+        dist.all_reduce(metric_buf, op=dist.ReduceOp.SUM)
+        debug_sync()
+        self._split_debug_log(
+            "shared_prompt_metric_reduce_done rank={} step={} seconds={:.2f} total_step_inner={:.2f}s",
+            self.global_rank,
+            int(self.train_state.step),
+            time.monotonic() - reduce_start,
+            time.monotonic() - step_start,
+        )
+        metric_normalizer = max(len(selected_t_idxs) * G * prompt_batch_size, 1)
+        return {
+            "policy_loss": (metric_buf[0] / metric_normalizer).item(),
+            "kl_loss": (metric_buf[1] / metric_normalizer).item(),
+            "reward_mean": rewards.mean().item(),
+            "reward_std": rewards.std().item(),
+            "advantage_mean": advantages.mean().item(),
+            "active_rollout_ranks": float(active_ranks),
+        }
+
     def _grpo_step(self, batch: dict) -> dict[str, float]:
         """DanceGRPO-style GRPO step on the standard single-group path."""
+        if self.cfg.grpo_shared_prompt_batch:
+            return self._grpo_step_shared_prompt_batch(batch)
+
         cfg = self.cfg
         G = cfg.grpo_group_size
         S = cfg.grpo_sample_batch_size
@@ -1651,7 +2245,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 sigma_max=cfg.grpo_sde_sigma_max,
                 cfg_scale=cfg.grpo_cfg_scale,
                 initial_latent=initial_latent,
-                sde_formula="dancegrpo",
+                sde_formula=cfg.grpo_sde_formula,
             )
 
             reward_flat = self.reward_fn(
@@ -1707,14 +2301,13 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
                 transformer = self.model._get_expert_for_timestep(timestep_val)
                 model_output = self._policy_forward(transformer, latent, cond_s, pe_s, timestep_val)
-                prev_mean, noise_scale = self.model._dancegrpo_transition_mean(
+                prev_mean, noise_scale = self._transition_mean(
                     sample=latent,
                     model_output=model_output,
                     sigma=sigma,
                     sigma_prev=sigma_prev,
-                    eta=cfg.grpo_sde_noise_scale,
                 )
-                new_log_prob = self.model._gaussian_transition_log_prob(next_latent, prev_mean, noise_scale)
+                new_log_prob = self._transition_log_prob(next_latent, prev_mean, noise_scale)
 
                 ratio = torch.exp(new_log_prob - old_log_prob)
                 unclipped = -adv_chunk * ratio
@@ -1725,16 +2318,13 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 if cfg.grpo_kl_coeff > 0:
                     with torch.no_grad():
                         ref_output = self._ref_forward_cfg(latent, cond_s, pe_s, timestep_val)
-                    if noise_scale > 1e-8:
-                        ref_mean, _ = self.model._dancegrpo_transition_mean(
-                            sample=latent,
-                            model_output=ref_output,
-                            sigma=sigma,
-                            sigma_prev=sigma_prev,
-                            eta=cfg.grpo_sde_noise_scale,
-                        )
-                        kl_loss = ((prev_mean - ref_mean) ** 2).mean(dim=list(range(1, prev_mean.ndim))).mean()
-                        kl_loss = kl_loss / (2.0 * noise_scale**2)
+                    ref_mean, _ = self._transition_mean(
+                        sample=latent,
+                        model_output=ref_output,
+                        sigma=sigma,
+                        sigma_prev=sigma_prev,
+                    )
+                    kl_loss = self._transition_kl_loss(prev_mean, ref_mean, noise_scale)
 
                 loss = (policy_loss + cfg.grpo_kl_coeff * kl_loss) * (cur_s / metric_normalizer)
                 loss.backward()

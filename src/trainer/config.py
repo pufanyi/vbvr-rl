@@ -20,9 +20,15 @@ class TrainConfig(BaseModel):
     height: int | None = None  # override dataset JSON config; fixed height
     width: int | None = None  # override dataset JSON config; fixed width
     fps: int | None = None  # override dataset JSON config; default 16
+    shuffle_raw_indices: bool = False  # one-time full index shuffle for JSON/parquet raw datasets
+    shuffle_raw_indices_seed: int | None = None  # None = use seed
+    raw_remote_prefetch_lookahead: int = 0  # bounded S3 lookahead per DataLoader worker; 0 disables
+    raw_remote_prefetch_workers: int = 1  # background downloader threads per DataLoader worker
     num_workers: int = 16
     persistent_workers: bool = True
     prefetch_factor: int = 2
+    dataloader_timeout_seconds: int = 0  # 0 keeps PyTorch's default no-timeout behavior
+    dataloader_in_order: bool = True  # False lets workers return whichever batch is ready first
 
     # Training
     output_dir: str = "storage/checkpoints"
@@ -37,6 +43,7 @@ class TrainConfig(BaseModel):
     detect_anomaly: bool = False  # debug only; very slow
     warmup_steps: int = 100
     save_steps: int = 500
+    save_final_checkpoint: bool = True
     log_steps: int = 10
     seed: int = 42
     ema_decay: float = 0.0  # 0 = disabled; typical value: 0.9999
@@ -131,15 +138,30 @@ class SFTConfig(TrainConfig):
     cos_boundary_noise_std: float = 0.02  # Gaussian perturbation std for x_tau in low stage
     cos_use_standard_formula: bool = False  # ablation: use standard sigma formula per segment (discontinuous)
     cos_path_type: Literal[
-        "linear", "cosine", "cubic_hermite", "smooth_blend", "quadratic_bezier", "target_linear", "target_cosine"
+        "linear",
+        "cosine",
+        "cubic_hermite",
+        "smooth_blend",
+        "quadratic_bezier",
+        "target_linear",
+        "target_cosine",
+        "target_sigmoid",
     ] = "linear"
     cos_smooth_blend_delta: float = 0.05  # half-width of blending window (only for smooth_blend path)
+    cos_sigmoid_steepness: float = 10.0  # logistic steepness (only for target_sigmoid path)
 
     @field_validator("cos_tau_sigma", mode="before")
     @classmethod
     def _wrap_tau_sigma(cls, v):
         if isinstance(v, (int, float)):
             return [float(v)]
+        return v
+
+    @field_validator("cos_sigmoid_steepness")
+    @classmethod
+    def _validate_cos_sigmoid_steepness(cls, v: float):
+        if v <= 0.0:
+            raise ValueError(f"cos_sigmoid_steepness must be positive, got {v}")
         return v
 
 
@@ -191,7 +213,12 @@ class RLConfig(TrainConfig):
     # Optional rank-level override for single-node smoke runs or non-node-aligned
     # layouts. 0 means derive train ranks from rl_train_node_count.
     rl_train_rank_count: int = 0
-    rl_actor_weight_sync: Literal["lora", "none"] = "lora"
+    # lora = sync only LoRA adapter tensors; full = sync all trainable policy
+    # tensors for full fine-tuning; none = actor weights stay at init/resume state.
+    rl_actor_weight_sync: Literal["lora", "full", "none"] = "lora"
+    # Sync rollout actor weights every N optimizer steps in async split mode.
+    # Full-model sync is expensive, so large full-FT jobs should use N > 1.
+    rl_actor_weight_sync_interval: int = 1
     # Async split rollout keeps each optimizer step's prompt batch unchanged,
     # but lets rollout actors pre-generate future steps through a bounded queue.
     rl_async_rollout: bool = False
@@ -203,6 +230,10 @@ class RLConfig(TrainConfig):
 
     # GRPO (set grpo_group_size > 0 to enable Flow-GRPO training)
     grpo_group_size: int | None = None  # G: number of samples per prompt. None = SFT mode
+    # Non-split multi-node GRPO mode: every rank reads the same prompt batch,
+    # then ranks shard each prompt's group samples. In this mode `batch_size`
+    # is the global prompt batch size, not per-rank prompt batch size.
+    grpo_shared_prompt_batch: bool = False
     grpo_sample_batch_size: int = 1  # how many G samples to batch together during rollout
     # How many already-generated G samples to replay together during the train
     # update. This does not increase prompt batch size or rollout work per step.
@@ -210,12 +241,18 @@ class RLConfig(TrainConfig):
     grpo_num_sampling_steps: int = 10  # T: denoising steps during SDE sampling
     grpo_clip_range: float = 1e-3  # PPO clipping epsilon
     grpo_kl_coeff: float = 0.004  # beta: KL penalty coefficient against reference policy
+    grpo_sde_formula: Literal["flowgrpo", "dancegrpo", "flowcps"] = "dancegrpo"
     grpo_sde_noise_scale: float = 0.3  # DanceGRPO eta / exploration noise level
     grpo_sde_sigma_min: float = 0.0  # noise floor for SDE std
     grpo_sde_sigma_max: float = 1.0  # noise ceiling for SDE std
     grpo_adv_clip_max: float = 5.0  # clamp advantages to [-max, max]
     grpo_reward_fn: str = "neg_loss"  # reward function name
     grpo_cfg_scale: float = 1.0  # classifier-free guidance scale during sampling
+    grpo_save_rollout_videos: bool = False  # debug: decode and save generated rollout videos
+    grpo_rollout_video_dir: str | None = None  # default: <output_dir>/rollout_videos
+    grpo_rollout_video_every_steps: int = 1
+    grpo_rollout_video_max_per_rank: int = 1
+    grpo_rollout_video_fps: int = 16
 
     # DanceGRPO (paper-inspired variant of GRPO)
     dancegrpo_share_group_init_noise: bool = True
@@ -254,6 +291,13 @@ class RLConfig(TrainConfig):
     def _validate_grpo_train_sample_batch_size(cls, v: int):
         if v <= 0:
             raise ValueError(f"grpo_train_sample_batch_size must be > 0, got {v}")
+        return v
+
+    @field_validator("grpo_rollout_video_every_steps", "grpo_rollout_video_max_per_rank", "grpo_rollout_video_fps")
+    @classmethod
+    def _validate_positive_rollout_video_fields(cls, v: int):
+        if v <= 0:
+            raise ValueError(f"rollout video fields must be > 0, got {v}")
         return v
 
     # ------------------------------------------------------------------

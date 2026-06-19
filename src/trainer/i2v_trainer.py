@@ -1,15 +1,26 @@
 """Wan2.2 I2V Trainer with FSDP2 + Distributed Checkpoint (DCP)."""
 
+import os
 import time
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 from loguru import logger
 
 from src.trainer.base_trainer import BaseTrainer
 from src.trainer.config import TrainConfig
 from src.trainer.flops import MFUMonitor, compute_wan_seq_len, estimate_wan_forward_flops, get_gpu_peak_flops_bf16
 from src.trainer.utils import cosine_lr, format_eta, to_model_pixels
+
+
+def _final_video_latents(video_latents):
+    """Return the final target latent from a single-target or chain latent batch."""
+    if isinstance(video_latents, list):
+        if not video_latents:
+            raise ValueError("video_latents list is empty")
+        return video_latents[-1]
+    return video_latents
 
 
 class I2VTrainer(BaseTrainer):
@@ -62,6 +73,7 @@ class I2VTrainer(BaseTrainer):
             try:
                 sample = next(iter(self.dataset))
                 latent = sample["video_latents"]  # (C, T', H', W')
+                latent = _final_video_latents(latent)
                 _, t_lat, h_lat, w_lat = latent.shape
                 ref_t = experts[0][1] if experts else None
                 if ref_t is not None:
@@ -125,6 +137,11 @@ class I2VTrainer(BaseTrainer):
 
             enum_start = start_batch_idx if epoch == start_epoch else 0
             for batch_idx, batch in enumerate(self.dataloader, start=enum_start):
+                profile_step = self._profile_raw_step_enabled()
+                profile_t0 = None
+                if profile_step:
+                    torch.cuda.synchronize(self.device)
+                    profile_t0 = time.perf_counter()
                 is_last_micro_step = (batch_idx + 1) % cfg.gradient_accumulation_steps == 0
                 self._set_requires_gradient_sync(is_last_micro_step)
                 loss = self._train_step(batch)
@@ -138,9 +155,20 @@ class I2VTrainer(BaseTrainer):
                     with torch.autograd.detect_anomaly(check_nan=True):
                         scaled_loss.backward()
                 else:
+                    backward_t0 = None
+                    if profile_step:
+                        torch.cuda.synchronize(self.device)
+                        backward_t0 = time.perf_counter()
                     scaled_loss.backward()
+                    if profile_step:
+                        torch.cuda.synchronize(self.device)
+                        self._last_step_profile["backward"] = time.perf_counter() - backward_t0
 
                 if is_last_micro_step:
+                    optimizer_t0 = None
+                    if profile_step:
+                        torch.cuda.synchronize(self.device)
+                        optimizer_t0 = time.perf_counter()
                     self._all_reduce_gradients()
                     context = f"at step={global_step} epoch={epoch} batch_idx={batch_idx}"
                     if cfg.skip_nonfinite_gradients and not self._gradients_are_finite_across_ranks(context=context):
@@ -165,6 +193,11 @@ class I2VTrainer(BaseTrainer):
                         opt.zero_grad(set_to_none=True)
                     if self.ema is not None:
                         self.ema.update()
+                    if profile_step:
+                        torch.cuda.synchronize(self.device)
+                        self._last_step_profile["optimizer_and_clip"] = time.perf_counter() - optimizer_t0
+                        self._last_step_profile["compute_step_total"] = time.perf_counter() - profile_t0
+                        self._log_step_profile(global_step, epoch, batch_idx)
                     global_step += 1
                     if self.mfu_monitor is not None:
                         self.mfu_monitor.step()
@@ -234,7 +267,7 @@ class I2VTrainer(BaseTrainer):
                 self.train_state.epoch = epoch
                 self.train_state.batch_idx = batch_idx + 1 if "batch_idx" in locals() else 0
                 ckpt_path = output_dir / f"checkpoint-{global_step}"
-                if global_step > 0 and not ckpt_path.exists():
+                if cfg.save_final_checkpoint and global_step > 0 and not ckpt_path.exists():
                     self._save_checkpoint(ckpt_path)
                 logger.info("Reached max_steps={} at step={}.", cfg.max_steps, global_step)
                 break
@@ -254,6 +287,66 @@ class I2VTrainer(BaseTrainer):
 
         dist.destroy_process_group()
 
+    @staticmethod
+    def _profile_raw_step_enabled() -> bool:
+        return os.environ.get("WAN_TRAINER_PROFILE_RAW_STEP", "").lower() in {"1", "true", "yes", "on"}
+
+    def _time_profile_phase(self, name: str, fn):
+        if not self._profile_raw_step_enabled():
+            return fn()
+        torch.cuda.synchronize(self.device)
+        t0 = time.perf_counter()
+        out = fn()
+        torch.cuda.synchronize(self.device)
+        self._last_step_profile[name] = time.perf_counter() - t0
+        return out
+
+    def _log_step_profile(self, global_step: int, epoch: int, batch_idx: int) -> None:
+        if not self._profile_raw_step_enabled() or not self._last_step_profile:
+            return
+        keys = [
+            "t5_encode",
+            "video_h2d",
+            "image_h2d",
+            "vae_video",
+            "vae_condition",
+            "transformer_loss",
+            "backward",
+            "optimizer_and_clip",
+            "compute_step_total",
+        ]
+        vals = torch.tensor(
+            [float(self._last_step_profile.get(k, 0.0)) for k in keys],
+            device=self.device,
+            dtype=torch.float64,
+        )
+        group = self._dp_pg if self.expert_parallel and self._dp_pg is not None else None
+        vals_sum = vals.clone()
+        vals_min = vals.clone()
+        vals_max = vals.clone()
+        dist.all_reduce(vals_sum, op=dist.ReduceOp.SUM, group=group)
+        dist.all_reduce(vals_min, op=dist.ReduceOp.MIN, group=group)
+        dist.all_reduce(vals_max, op=dist.ReduceOp.MAX, group=group)
+        denom = self.dp_size if self.expert_parallel else self.world_size
+        means = vals_sum / max(denom, 1)
+        total = max(float(vals_max[keys.index("compute_step_total")].item()), 1e-9)
+        if self.log_enabled:
+            parts = []
+            for idx, key in enumerate(keys):
+                mx = float(vals_max[idx].item())
+                mn = float(vals_min[idx].item())
+                avg = float(means[idx].item())
+                pct = 100.0 * mx / total
+                parts.append(f"{key}=max:{mx:.2f}s mean:{avg:.2f}s min:{mn:.2f}s ({pct:.1f}%)")
+            logger.info(
+                "raw_step_profile step={} epoch={} batch_idx={} group={} | {}",
+                global_step,
+                epoch,
+                batch_idx,
+                self.expert_group,
+                " | ".join(parts),
+            )
+
     def _train_step(self, batch: dict) -> torch.Tensor:
         """Single forward pass: encode frozen inputs, compute loss.
 
@@ -261,6 +354,7 @@ class I2VTrainer(BaseTrainer):
         - Raw data: batch has "videos", "image", "prompt" — encode on-the-fly.
         - Precomputed: batch has "video_latents", "condition", "prompt_embeds" tensors.
         """
+        self._last_step_profile = {}
         self._last_batch_debug = {
             key: batch[key]
             for key in (
@@ -278,13 +372,19 @@ class I2VTrainer(BaseTrainer):
         if "prompt_embeds" in batch:
             # Precomputed latents path
             prompt_embeds = batch["prompt_embeds"].to(self.device)
-            video_latents = batch["video_latents"].to(self.device)
+            video_latents = _final_video_latents(batch["video_latents"]).to(self.device)
             condition = batch["condition"].to(self.device)
         else:
             # Raw data path — encode on-the-fly
-            prompt_embeds = self.model.encode_text(batch["prompt"], self.device)
-            video = to_model_pixels(batch["videos"][-1], self.device)
-            image = to_model_pixels(batch["image"], self.device)
-            video_latents = self.model.encode_video(video)
-            condition = self.model.prepare_condition(image, video.shape[2], video.shape[-2], video.shape[-1])
-        return self.model.compute_loss(video_latents, condition, prompt_embeds, prompt_dropout=self.cfg.prompt_dropout)
+            prompt_embeds = self._time_profile_phase("t5_encode", lambda: self.model.encode_text(batch["prompt"], self.device))
+            video = self._time_profile_phase("video_h2d", lambda: to_model_pixels(batch["videos"][-1], self.device))
+            image = self._time_profile_phase("image_h2d", lambda: to_model_pixels(batch["image"], self.device))
+            video_latents = self._time_profile_phase("vae_video", lambda: self.model.encode_video(video))
+            condition = self._time_profile_phase(
+                "vae_condition",
+                lambda: self.model.prepare_condition(image, video.shape[2], video.shape[-2], video.shape[-1]),
+            )
+        return self._time_profile_phase(
+            "transformer_loss",
+            lambda: self.model.compute_loss(video_latents, condition, prompt_embeds, prompt_dropout=self.cfg.prompt_dropout),
+        )

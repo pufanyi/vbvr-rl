@@ -66,7 +66,15 @@ function _is_dcp_checkpoint
     if test -f $ckpt/.metadata
         return 0
     end
-    test -f $ckpt/high/.metadata; and test -f $ckpt/low/.metadata
+    set -l has_high_dir 0
+    set -l has_low_dir 0
+    test -d $ckpt/high; and set has_high_dir 1
+    test -d $ckpt/low; and set has_low_dir 1
+    if test $has_high_dir -eq 1; and test $has_low_dir -eq 1
+        test -f $ckpt/high/.metadata; and test -f $ckpt/low/.metadata
+        return
+    end
+    test -f $ckpt/high/.metadata; or test -f $ckpt/low/.metadata
 end
 
 function _converted_output_for_checkpoint

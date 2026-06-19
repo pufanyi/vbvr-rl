@@ -24,7 +24,7 @@ import shutil
 from pathlib import Path
 
 import torch
-from diffusers import WanImageToVideoPipeline
+from diffusers import DiffusionPipeline
 from loguru import logger
 
 from src.trainer.checkpoint import load_dcp_into_pipeline
@@ -108,9 +108,9 @@ def _resolve_device(value: str | None) -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def _load_base_pipeline(args: argparse.Namespace, dtype: torch.dtype, device: torch.device) -> WanImageToVideoPipeline:
+def _load_base_pipeline(args: argparse.Namespace, dtype: torch.dtype, device: torch.device) -> DiffusionPipeline:
     logger.info("Loading base pipeline from {} ({})", args.base_model, args.torch_dtype)
-    pipe = WanImageToVideoPipeline.from_pretrained(
+    pipe = DiffusionPipeline.from_pretrained(
         str(args.base_model),
         torch_dtype=dtype,
         low_cpu_mem_usage=True,
@@ -150,7 +150,7 @@ def _requires_clean_base(checkpoint: Path, merge_lora: bool) -> bool:
     )
 
 
-def _merge_lora_into_plain_weights(pipe: WanImageToVideoPipeline, safe_fusing: bool) -> int:
+def _merge_lora_into_plain_weights(pipe: DiffusionPipeline, safe_fusing: bool) -> int:
     merged = 0
     for name in ("transformer", "transformer_2"):
         model = getattr(pipe, name, None)
@@ -179,7 +179,7 @@ def _assert_finite_module(module: torch.nn.Module, module_name: str) -> None:
         )
 
 
-def _validate_pipeline_weights_finite(pipe: WanImageToVideoPipeline) -> None:
+def _validate_pipeline_weights_finite(pipe: DiffusionPipeline) -> None:
     for name in ("transformer", "transformer_2"):
         module = getattr(pipe, name, None)
         if module is not None:
@@ -253,6 +253,15 @@ def _write_fastvideo_compatible_configs(output: Path, base_model: Path) -> None:
                 model_index.pop(key)
                 removed = True
 
+        if model_index.get("_class_name") == "WanPipeline" and model_index.get("expand_timesteps"):
+            # Current FastVideo picks its Wan config from model_index._class_name.
+            # The TI2V 5B checkpoint still needs the image-to-video Wan config
+            # while lmms_eval overrides the executable pipeline class to WanPipeline.
+            model_index["_class_name"] = "WanImageToVideoPipeline"
+            model_index.setdefault("image_encoder", [None, None])
+            model_index.setdefault("image_processor", [None, None])
+            removed = True
+
         if removed:
             model_index_path.write_text(json.dumps(model_index, indent=2) + "\n")
             logger.info("Wrote FastVideo-compatible model_index.json at {}", model_index_path)
@@ -277,7 +286,7 @@ def _write_fastvideo_compatible_configs(output: Path, base_model: Path) -> None:
         logger.info("Wrote FastVideo-compatible scheduler_config.json at {}", scheduler_config_path)
 
 
-def _convert_one(pipe: WanImageToVideoPipeline, args: argparse.Namespace, checkpoint: Path, output: Path) -> None:
+def _convert_one(pipe: DiffusionPipeline, args: argparse.Namespace, checkpoint: Path, output: Path) -> None:
     logger.info("Loading DCP checkpoint from {} (ema={})", checkpoint, args.use_ema)
     load_dcp_into_pipeline(pipe, str(checkpoint), use_ema=args.use_ema)
     if args.merge_lora:

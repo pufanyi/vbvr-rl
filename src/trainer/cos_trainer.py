@@ -384,5 +384,6 @@ class COSTrainer(BaseTrainer):
             boundary_noise_std=cfg.cos_boundary_noise_std,
             path_type=cfg.cos_path_type,
             smooth_blend_delta=cfg.cos_smooth_blend_delta,
+            sigmoid_steepness=cfg.cos_sigmoid_steepness,
             prompt_dropout=cfg.prompt_dropout,
         )

@@ -34,6 +34,38 @@ class TestCOSPathValidation(unittest.TestCase):
         self.assertEqual(x_t.shape, noise.shape)
         self.assertEqual(target.shape, noise.shape)
 
+    def test_target_sigmoid_accepts_matching_chain_lengths(self):
+        sigma = torch.rand(2, 1, 1, 1, 1)
+        noise = torch.randn(2, 3, 2, 4, 4)
+        waypoints = [torch.randn(2, 3, 2, 4, 4) for _ in range(3)]
+
+        x_t, target = compute_cos_path("target_sigmoid", sigma, [0.9, 0.8], noise, waypoints)
+
+        self.assertEqual(x_t.shape, noise.shape)
+        self.assertEqual(target.shape, noise.shape)
+
+    def test_target_sigmoid_supports_single_waypoint_chain(self):
+        sigma = torch.rand(2, 1, 1, 1, 1)
+        noise = torch.randn(2, 3, 2, 4, 4)
+        final = torch.randn(2, 3, 2, 4, 4)
+
+        x_t, target = compute_cos_path("target_sigmoid", sigma, [], noise, [final])
+
+        self.assertEqual(x_t.shape, noise.shape)
+        self.assertEqual(target.shape, noise.shape)
+
+    def test_target_sigmoid_blends_halfway_at_tau(self):
+        sigma = torch.full((1, 1, 1, 1, 1), 0.75)
+        noise = torch.zeros(1, 1, 1, 1, 1)
+        waypoint = torch.full_like(noise, 2.0)
+        final = torch.full_like(noise, 6.0)
+
+        x_t, _target = compute_cos_path("target_sigmoid", sigma, [0.75], noise, [waypoint, final])
+
+        # At tau the effective target is the midpoint between the two waypoints,
+        # then x_t applies the standard sigma/noise blend.
+        self.assertTrue(torch.allclose(x_t, torch.full_like(noise, 1.0)))
+
 
 if __name__ == "__main__":
     unittest.main()

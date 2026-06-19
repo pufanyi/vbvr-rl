@@ -24,7 +24,9 @@ Per-dataset overrides (optional keys in the config dict):
 import bisect
 import json
 import logging
+import os
 import random
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import imageio.v3 as iio
@@ -35,6 +37,8 @@ import torch.nn.functional as F
 from PIL import Image
 from pydantic import BaseModel
 from torch.utils.data import Dataset
+
+from src.data.remote_io import is_remote_path, localize_media_path, resolve_media_path
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +73,15 @@ def compute_hw(max_area: int, aspect_ratio: float) -> tuple[int, int]:
     return height, width
 
 
+def _decord_num_threads() -> int:
+    value = os.environ.get("WAN_TRAINER_DECORD_NUM_THREADS", "1")
+    try:
+        return max(0, int(value))
+    except ValueError:
+        logger.warning("Invalid WAN_TRAINER_DECORD_NUM_THREADS=%r; using 1", value)
+        return 1
+
+
 class I2VDataset(Dataset):
     """Parquet-backed video dataset. Rows are read directly from Arrow tables."""
 
@@ -80,6 +93,11 @@ class I2VDataset(Dataset):
         height: int | None = None,
         width: int | None = None,
         fps: int | None = None,
+        shuffle_indices: bool = False,
+        shuffle_seed: int = 42,
+        remote_prefetch_lookahead: int = 0,
+        remote_prefetch_workers: int = 1,
+        remote_prefetch_stride: int = 1,
     ):
         config_path = Path(json_path)
         parent_dir = config_path.parent
@@ -130,6 +148,17 @@ class I2VDataset(Dataset):
             logger.info("Loaded %d rows from %s (root=%s)", n, data_path, root)
 
         self._len = total
+        self._index_map: np.ndarray | None = None
+        self._remote_prefetch_lookahead = max(0, int(remote_prefetch_lookahead))
+        self._remote_prefetch_workers = max(1, int(remote_prefetch_workers))
+        self._remote_prefetch_stride = max(1, int(remote_prefetch_stride))
+        self._prefetch_executor: ThreadPoolExecutor | None = None
+        self._prefetch_futures: dict[int, Future] = {}
+        if shuffle_indices:
+            self._index_map = np.arange(total, dtype=np.int64)
+            rng = np.random.default_rng(shuffle_seed)
+            rng.shuffle(self._index_map)
+            logger.info("Shuffled %d raw dataset indices with seed=%d", total, shuffle_seed)
 
     # ------------------------------------------------------------------
     # Index mapping
@@ -140,6 +169,13 @@ class I2VDataset(Dataset):
         ti = bisect.bisect_right(self._cumulative, idx)
         local = idx if ti == 0 else idx - self._cumulative[ti - 1]
         return ti, local
+
+    def _source_index(self, idx: int) -> int:
+        """Map logical shuffled index -> physical source row index."""
+        idx = int(idx)
+        if self._index_map is None:
+            return idx
+        return int(self._index_map[idx])
 
     # ------------------------------------------------------------------
     # Row reading
@@ -168,15 +204,15 @@ class I2VDataset(Dataset):
 
     @staticmethod
     def _resolve(path: str, root: Path) -> str:
-        p = Path(path)
-        return str(p) if p.is_absolute() else str(root / p)
+        return resolve_media_path(path, root)
 
     @staticmethod
     def _get_video_hw(video_path: str, cfg: _ItemConfig) -> tuple[int, int]:
         if cfg.fixed_height is not None and cfg.fixed_width is not None:
             return cfg.fixed_height, cfg.fixed_width
+        video_path = localize_media_path(video_path)
         if _HAS_DECORD:
-            vr = decord.VideoReader(video_path)
+            vr = decord.VideoReader(video_path, num_threads=_decord_num_threads())
             orig_h, orig_w = vr[0].shape[:2]
         else:
             meta = iio.immeta(video_path)
@@ -191,8 +227,9 @@ class I2VDataset(Dataset):
     @staticmethod
     def _load_video(video_path: str, height: int, width: int, cfg: _ItemConfig) -> torch.Tensor:
         """Load video frames as uint8. Returns (C, T, H, W)."""
+        video_path = localize_media_path(video_path)
         if _HAS_DECORD:
-            vr = decord.VideoReader(video_path, width=width, height=height)
+            vr = decord.VideoReader(video_path, width=width, height=height, num_threads=_decord_num_threads())
             total_frames = len(vr)
             indices = np.linspace(0, total_frames - 1, cfg.num_frames).round().astype(int).tolist()
             frames = vr.get_batch(indices)  # (T, H, W, C)
@@ -211,6 +248,7 @@ class I2VDataset(Dataset):
     @staticmethod
     def _load_image(path: str, height: int, width: int) -> torch.Tensor:
         """Load a single image as uint8. Returns (C, H, W)."""
+        path = localize_media_path(path)
         with Image.open(path) as img:
             img = img.convert("RGB").resize((width, height), Image.LANCZOS)
             array = np.array(img, dtype=np.uint8)
@@ -226,6 +264,7 @@ class I2VDataset(Dataset):
     _MAX_RETRIES = 10
 
     def __getitem__(self, idx):
+        self._schedule_remote_prefetch(int(idx))
         for attempt in range(self._MAX_RETRIES):
             try:
                 return self._load_item(idx)
@@ -240,8 +279,59 @@ class I2VDataset(Dataset):
                 idx = random.randint(0, self._len - 1)
         return self._load_item(idx)
 
+    def _ensure_prefetch_executor(self) -> ThreadPoolExecutor:
+        if self._prefetch_executor is None:
+            self._prefetch_executor = ThreadPoolExecutor(
+                max_workers=self._remote_prefetch_workers,
+                thread_name_prefix="i2v-remote-prefetch",
+            )
+        return self._prefetch_executor
+
+    def _prune_prefetch_futures(self) -> None:
+        if not self._prefetch_futures:
+            return
+        done = [idx for idx, future in self._prefetch_futures.items() if future.done()]
+        for idx in done:
+            future = self._prefetch_futures.pop(idx)
+            try:
+                future.result()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Remote prefetch failed for logical index %d: %r", idx, exc)
+
+    def _schedule_remote_prefetch(self, idx: int) -> None:
+        if self._remote_prefetch_lookahead <= 0:
+            return
+        self._prune_prefetch_futures()
+        max_pending = self._remote_prefetch_lookahead * self._remote_prefetch_workers
+        if len(self._prefetch_futures) >= max_pending:
+            return
+
+        executor = self._ensure_prefetch_executor()
+        for offset in range(1, self._remote_prefetch_lookahead + 1):
+            next_idx = idx + offset * self._remote_prefetch_stride
+            if next_idx >= self._len:
+                break
+            if next_idx in self._prefetch_futures:
+                continue
+            self._prefetch_futures[next_idx] = executor.submit(self._prefetch_remote_media_for_index, next_idx)
+            if len(self._prefetch_futures) >= max_pending:
+                break
+
+    def _prefetch_remote_media_for_index(self, idx: int) -> None:
+        source_idx = self._source_index(idx)
+        ti, row = self._locate(source_idx)
+        video_paths, _prompt, image_path = self._read_row(self._tables[ti], row)
+        root = self._roots[ti]
+        paths = [self._resolve(p, root) for p in video_paths]
+        if image_path is not None:
+            paths.append(self._resolve(image_path, root))
+        for path in paths:
+            if is_remote_path(path):
+                localize_media_path(path)
+
     def _load_item(self, idx):
-        ti, row = self._locate(idx)
+        source_idx = self._source_index(idx)
+        ti, row = self._locate(source_idx)
         video_paths, prompt, image_path = self._read_row(self._tables[ti], row)
         cfg = self._configs[ti]
         root = self._roots[ti]
@@ -260,7 +350,7 @@ class I2VDataset(Dataset):
             image = videos[-1][:, 0].clone()
 
         return {
-            "index": idx,
+            "index": source_idx,
             "videos": videos,
             "image": image,
             "prompt": prompt,

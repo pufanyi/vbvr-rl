@@ -1,0 +1,39 @@
+trainer: i2v
+model_path: storage/models/Wan2.2-TI2V-5B-Diffusers
+latent_webdataset_dir: storage/latents/maze_5b_line_to_ball_v1/webdataset/sft
+dataset_size: 80000
+output_dir: storage/checkpoints/sft_maze_5b_line_to_ball_direct
+
+# Direct SFT target: this webdataset contains latents_0=line waypoint and
+# latents_1=moving-ball final. I2VTrainer takes the final latent for SFT.
+batch_size: 16
+gradient_accumulation_steps: 1
+num_epochs: 10
+learning_rate: 1.0e-5
+weight_decay: 0.01
+max_grad_norm: 1.0
+warmup_steps: 50
+save_steps: 1000
+log_steps: 1
+seed: 42
+
+ema_decay: 0.0
+prompt_dropout: 0.1
+transformer_load_dtype: float32
+gradient_checkpointing: true
+
+# 5B TI2V is a dense single-transformer model; shard with FSDP, no expert parallel.
+fsdp: true
+param_dtype: bfloat16
+reduce_dtype: float32
+expert_parallel: false
+train_experts: both
+lora_rank: 0
+
+auto_resume: true
+num_workers: 8
+prefetch_factor: 2
+persistent_workers: true
+
+wandb_project: wan-sft-maze-5b
+wandb_run_name: sft_maze_5b_line_to_ball_direct

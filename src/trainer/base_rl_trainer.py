@@ -236,8 +236,16 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
 
         if cfg.expert_parallel:
             raise ValueError("rl_train_node_count split mode does not support expert_parallel")
-        if cfg.lora_rank <= 0 and cfg.rl_actor_weight_sync != "none":
-            raise ValueError("split RL actor weight sync currently requires lora_rank > 0")
+        if cfg.rl_actor_weight_sync == "lora" and cfg.lora_rank <= 0:
+            raise ValueError(
+                "rl_actor_weight_sync='lora' requires lora_rank > 0; "
+                "use rl_actor_weight_sync='full' for full-finetune split RL "
+                "or 'none' for stale-actor plumbing tests"
+            )
+        if cfg.rl_actor_weight_sync == "full" and not cfg.rl_async_rollout:
+            raise ValueError("rl_actor_weight_sync='full' currently requires rl_async_rollout=true")
+        if cfg.rl_actor_weight_sync_interval <= 0:
+            raise ValueError("rl_actor_weight_sync_interval must be >= 1")
         if self.local_world_size <= 0:
             raise ValueError("Could not determine LOCAL_WORLD_SIZE for split RL")
         if self.global_world_size % self.local_world_size != 0:
@@ -345,7 +353,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         if dataset_size is None:
             dataset_size = self.cfg.dataset_size
         if dataset_size is not None:
-            if self.rl_split_enabled:
+            if self.rl_split_enabled or self.cfg.grpo_shared_prompt_batch:
                 dp = 1
             else:
                 dp = self.dp_size if self._expert_parallel_duplicates_data(self.cfg) else self.world_size
@@ -426,6 +434,10 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         if self._reward_needs_vae(cfg):
             if not load_vae:
                 logger.info("Reward '{}' requires VAE — loading it despite precomputed latents", cfg.grpo_reward_fn)
+            load_vae = True
+        if cfg.grpo_save_rollout_videos:
+            if not load_vae:
+                logger.info("Rollout video saving enabled — loading VAE despite precomputed latents")
             load_vae = True
         logger.info(
             "Loading model from {} (lora_rank={}, experts={}{}, load_vae={}, load_text_encoder={}, "
@@ -656,9 +668,9 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
 
     def _build_dataset(self, cfg: RLConfig) -> tuple:
         if cfg.latent_webdataset_dir is not None:
-            if self.rl_split_enabled:
-                # Split DanceGRPO intentionally feeds the same prompt batch to
-                # every train/rollout rank. Rollout ranks partition G across
+            if self.rl_split_enabled or cfg.grpo_shared_prompt_batch:
+                # Split/shared-prompt GRPO intentionally feeds the same prompt
+                # batch to every participating rank. Ranks partition G across
                 # cards, so batch_size is the effective global prompt batch.
                 data_rank = 0
                 data_world_size = 1
@@ -727,6 +739,14 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
             )
             return dataset, None  # IterableDataset; shard splitting handled by wds
         else:
+            raw_prefetch_stride = 1
+            if cfg.raw_remote_prefetch_lookahead > 0:
+                if self.rl_split_enabled or cfg.grpo_shared_prompt_batch:
+                    raw_prefetch_stride = 1
+                elif self.expert_parallel:
+                    raw_prefetch_stride = self.dp_size if self._expert_parallel_duplicates_data(cfg) else self.world_size
+                else:
+                    raw_prefetch_stride = self.world_size
             dataset = I2VDataset(
                 json_path=cfg.dataset_json,
                 num_frames=cfg.num_frames,
@@ -734,13 +754,19 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
                 height=cfg.height,
                 width=cfg.width,
                 fps=cfg.fps,
+                shuffle_indices=cfg.shuffle_raw_indices,
+                shuffle_seed=cfg.shuffle_raw_indices_seed if cfg.shuffle_raw_indices_seed is not None else cfg.seed,
+                remote_prefetch_lookahead=cfg.raw_remote_prefetch_lookahead,
+                remote_prefetch_workers=cfg.raw_remote_prefetch_workers,
+                remote_prefetch_stride=raw_prefetch_stride,
             )
-        if self.rl_split_enabled:
+        sampler_shuffle = not cfg.shuffle_raw_indices
+        if self.rl_split_enabled or cfg.grpo_shared_prompt_batch:
             sampler = DistributedSampler(
                 dataset,
                 num_replicas=1,
                 rank=0,
-                shuffle=True,
+                shuffle=sampler_shuffle,
                 seed=cfg.seed,
             )
         elif self.expert_parallel:
@@ -751,7 +777,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
                 dataset,
                 num_replicas=replicas,
                 rank=rank,
-                shuffle=True,
+                shuffle=sampler_shuffle,
                 seed=seed,
             )
         else:
@@ -759,7 +785,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
                 dataset,
                 num_replicas=self.world_size,
                 rank=self.rank,
-                shuffle=True,
+                shuffle=sampler_shuffle,
                 seed=cfg.seed,
             )
         return dataset, sampler
@@ -778,6 +804,9 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         if cfg.num_workers > 0:
             kwargs["persistent_workers"] = cfg.persistent_workers
             kwargs["prefetch_factor"] = cfg.prefetch_factor
+            kwargs["in_order"] = cfg.dataloader_in_order
+            if cfg.dataloader_timeout_seconds > 0:
+                kwargs["timeout"] = cfg.dataloader_timeout_seconds
         return StatefulDataLoader(**kwargs)
 
     # ------------------------------------------------------------------
@@ -884,7 +913,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
 
         Actors are not part of the train FSDP/DCP process group, so they read
         the checkpoint as a single-process CPU state dict and load it into the
-        local unsharded policy copy. Per-step LoRA sync then keeps actors on
+        local unsharded policy copy. Per-step actor sync then keeps actors on
         the latest train policy.
         """
         from src.trainer.checkpoint import extract_init_weights, read_dcp_to_flat_dict, remap_for_current_model

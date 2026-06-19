@@ -1,0 +1,42 @@
+from types import SimpleNamespace
+
+import torch
+
+from src.trainer.i2v_trainer import I2VTrainer, _final_video_latents
+
+
+def test_final_video_latents_selects_chain_final_target():
+    first = torch.zeros(1)
+    final = torch.ones(1)
+
+    assert _final_video_latents([first, final]) is final
+    assert _final_video_latents(final) is final
+
+
+def test_i2v_train_step_uses_final_latent_from_cos_chain_batch():
+    class _Model:
+        def compute_loss(self, video_latents, condition, prompt_embeds, prompt_dropout=0.0):
+            self.video_latents = video_latents
+            self.condition = condition
+            self.prompt_embeds = prompt_embeds
+            self.prompt_dropout = prompt_dropout
+            return video_latents.float().mean()
+
+    trainer = I2VTrainer.__new__(I2VTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.cfg = SimpleNamespace(prompt_dropout=0.25)
+    trainer.model = _Model()
+
+    first = torch.zeros(2, 3, 4, 5, 6)
+    final = torch.ones(2, 3, 4, 5, 6)
+    batch = {
+        "prompt_embeds": torch.zeros(2, 8, 16),
+        "video_latents": [first, final],
+        "condition": torch.zeros(2, 3, 4, 5, 6),
+    }
+
+    loss = trainer._train_step(batch)
+
+    assert loss.item() == 1.0
+    assert trainer.model.video_latents is final
+    assert trainer.model.prompt_dropout == 0.25

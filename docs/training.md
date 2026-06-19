@@ -63,6 +63,7 @@ Supported path families:
 
 - `linear`: N-step piecewise linear passthrough. It passes through each waypoint at its tau boundary but is only C0 at boundaries.
 - `target_cosine`: N-step smooth target blend. It does not pass exactly through intermediate waypoints, but it makes the effective target C1 across the chain.
+- `target_sigmoid`: N-step smooth target blend using normalized sigmoid easing. Like `target_cosine`, it does not pass exactly through intermediate waypoints, but it keeps exact 0/0.5/1 blend anchors around each tau and is C1 across the chain.
 - Legacy 2-step-only paths: `cosine`, `cubic_hermite`, `smooth_blend`, `quadratic_bezier`, and `target_linear`.[^cos-path]
 
 `compute_cos_loss` runs one dedicated pass per available expert. That guarantees each expert receives a training signal every step when both experts are loaded.[^wan-cos-loss] In expert-parallel mode, each half of the world loads only its own expert while rank-0 logging receives the low-expert metrics by point-to-point communication.[^cos-trainer]
@@ -76,6 +77,9 @@ dataset_size: 300000
 cos_tau_sigma: 0.8
 cos_boundary_noise_std: 0.02
 cos_path_type: target_cosine
+# For sigmoid easing:
+# cos_path_type: target_sigmoid
+# cos_sigmoid_steepness: 10.0
 expert_parallel: true
 train_experts: both
 ```
@@ -115,15 +119,17 @@ For LoRA runs, the reference policy is the base model with adapters disabled. Fo
 
 ## DanceGRPO-Style Replay
 
-`DanceGRPOTrainer` keeps the standard single-group execution path for normal launches and can also split
-rollout/reward actors from the smaller training FSDP group for multi-node launches. It adopts two ideas from DanceGRPO:
+`DanceGRPOTrainer` keeps the standard single-group execution path for normal launches, supports a shared-prompt
+all-rank mode where `batch_size` is the global prompt batch and each prompt's `grpo_group_size` samples are sharded
+across all ranks, and can also split rollout/reward actors from the smaller training FSDP group for multi-node launches.
+It adopts two ideas from DanceGRPO:
 
 - all samples in a prompt group can share the same initial noise;
 - policy replay can use only a selected subset of denoising timesteps.[^dancegrpo][^dancegrpo-trainer]
 
 The timestep subset is generated consistently across ranks so all FSDP ranks call the same expert modules in the same order. This is necessary because per-rank divergence in expert routing can deadlock FSDP collectives.[^dancegrpo-trainer]
 
-DanceGRPO currently rejects expert parallel. For split RL, `rl_train_node_count: 1` means node 0 trains and the remaining nodes run rollout/reward actors; rollout actors partition `grpo_group_size` across cards.[^dancegrpo-trainer]
+DanceGRPO currently rejects expert parallel. For split RL, the multinode launcher defaults to half the nodes training and half running rollout/reward actors. A manual `rl_train_node_count: 1` means node 0 trains and the remaining nodes run rollout/reward actors; rollout actors partition `grpo_group_size` across cards.[^dancegrpo-trainer]
 
 ## Reward Functions
 

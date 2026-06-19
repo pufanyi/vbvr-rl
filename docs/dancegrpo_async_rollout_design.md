@@ -54,10 +54,12 @@ state version used when its jobs are created. All group samples for that step us
 the same actor policy version, so the within-step GRPO comparison is coherent.
 
 With LoRA actor sync, the train root sends LoRA trainable state to an actor only
-when that actor switches policy version. With `rl_actor_weight_sync: none`, actors
-keep their initialized weights; this is useful as a plumbing smoke test for
-non-LoRA runs, but not recommended for real split RL because rollouts become
-increasingly stale.
+when that actor switches policy version. With `rl_actor_weight_sync: full`, the
+same protocol sends the full trainable policy state for non-LoRA full fine-tuning;
+this is heavier but keeps split rollout semantically correct. With
+`rl_actor_weight_sync: none`, actors keep their initialized weights; this is useful
+as a plumbing smoke test, but not recommended for real split RL because rollouts
+become increasingly stale.
 
 ## Communication
 
@@ -67,7 +69,8 @@ cluster:
 - the launcher and DCP/FSDP process groups stay unchanged
 - each rollout rank is already one long-lived GPU actor
 - train root and each actor get a dedicated two-rank Gloo process group
-- root sends Python jobs with CPU tensors using `send_object_list`
+- root sends Python jobs with CPU tensors using `send_object_list`; full-model
+  actor sync streams weights tensor-by-tensor after the job header
 - actors return rollout tensors with `send_object_list`
 
 Ray remains a reasonable future backend if we later want elastic actors,

@@ -781,6 +781,7 @@ class WanI2VForTraining:
         boundary_noise_std: float = 0.02,
         path_type: PathType = "linear",
         smooth_blend_delta: float = 0.05,
+        sigmoid_steepness: float = 10.0,
         prompt_dropout: float = 0.0,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute N-step piecewise flow-matching loss for COS training.
@@ -796,6 +797,7 @@ class WanI2VForTraining:
             boundary_noise_std: Gaussian perturbation for intermediate waypoints.
             path_type: Interpolation strategy (see :mod:`cos_path`).
             smooth_blend_delta: Blending window half-width (``smooth_blend`` only).
+            sigmoid_steepness: Logistic steepness (``target_sigmoid`` only).
 
         Returns:
             ``(loss, debug_dict)`` — loss averaged across MoE experts, plus
@@ -852,6 +854,7 @@ class WanI2VForTraining:
                 video_latents,
                 boundary_noise_std=boundary_noise_std,
                 smooth_blend_delta=smooth_blend_delta,
+                sigmoid_steepness=sigmoid_steepness,
             )
 
             # Forward through this expert (no MoE routing needed — sigma is in range)
@@ -903,6 +906,36 @@ class WanI2VForTraining:
             return self.transformer if timestep >= self.boundary_timestep else self.transformer_2
         return self.transformer if self.transformer is not None else self.transformer_2
 
+    @staticmethod
+    def _flowgrpo_transition_mean(
+        sample: torch.Tensor,
+        model_output: torch.Tensor,
+        sigma: float,
+        sigma_prev: float,
+        sigma_min: float = 0.0,
+        sigma_max: float = 1.0,
+    ) -> tuple[torch.Tensor, float]:
+        """Flow-GRPO transition mean and effective Gaussian noise std."""
+        dt = sigma_prev - sigma  # negative (denoising direction)
+
+        # SDE noise std: interpolate between sigma_min and sigma_max based on sigma
+        std_dev_t = sigma_min + (sigma_max - sigma_min) * sigma
+
+        # Transition mean (SDE drift = ODE drift + score correction)
+        # prev_mean = x + [v + std²/(2σ) * (x + (1-σ)*v)] * dt
+        if sigma > 1e-8:
+            score_coeff = std_dev_t**2 / (2.0 * sigma)
+            prev_sample_mean = (
+                sample * (1.0 + score_coeff * dt)
+                + model_output * (1.0 + std_dev_t**2 * (1.0 - sigma) / (2.0 * sigma)) * dt
+            )
+        else:
+            # At sigma ≈ 0, skip score correction to avoid division by zero
+            prev_sample_mean = sample + model_output * dt
+
+        noise_scale = std_dev_t * math.sqrt(max(-dt, 0.0))
+        return prev_sample_mean, noise_scale
+
     def _sde_step(
         self,
         sample: torch.Tensor,
@@ -936,40 +969,20 @@ class WanI2VForTraining:
             - prev_sample_mean: deterministic mean (for KL computation)
             - log_prob: per-sample log probability, shape (B,)
         """
-        dt = sigma_prev - sigma  # negative (denoising direction)
-
-        # SDE noise std: interpolate between sigma_min and sigma_max based on sigma
-        std_dev_t = sigma_min + (sigma_max - sigma_min) * sigma
-
-        # Transition mean (SDE drift = ODE drift + score correction)
-        # prev_mean = x + [v + std²/(2σ) * (x + (1-σ)*v)] * dt
-        if sigma > 1e-8:
-            score_coeff = std_dev_t**2 / (2.0 * sigma)
-            prev_sample_mean = (
-                sample * (1.0 + score_coeff * dt)
-                + model_output * (1.0 + std_dev_t**2 * (1.0 - sigma) / (2.0 * sigma)) * dt
-            )
-        else:
-            # At sigma ≈ 0, skip score correction to avoid division by zero
-            prev_sample_mean = sample + model_output * dt
-
-        # Stochastic noise injection
-        noise_scale = std_dev_t * math.sqrt(max(-dt, 0.0))
+        prev_sample_mean, noise_scale = self._flowgrpo_transition_mean(
+            sample=sample,
+            model_output=model_output,
+            sigma=sigma,
+            sigma_prev=sigma_prev,
+            sigma_min=sigma_min,
+            sigma_max=sigma_max,
+        )
         if noise is None:
             noise = torch.randn_like(sample)
         prev_sample = prev_sample_mean + noise_scale * noise
 
         # Log probability under the Gaussian transition
-        if noise_scale > 1e-8:
-            log_prob = (
-                -((prev_sample - prev_sample_mean) ** 2) / (2.0 * noise_scale**2)
-                - math.log(noise_scale)
-                - 0.5 * math.log(2.0 * math.pi)
-            )
-            # Mean across all dims except batch → per-sample scalar
-            log_prob = log_prob.mean(dim=list(range(1, log_prob.ndim)))
-        else:
-            log_prob = torch.zeros(sample.shape[0], device=sample.device)
+        log_prob = self._sde_transition_log_prob("flowgrpo", prev_sample, prev_sample_mean, noise_scale)
 
         return prev_sample, prev_sample_mean, log_prob
 
@@ -1017,6 +1030,98 @@ class WanI2VForTraining:
 
         return prev_sample_mean, std_dev_t
 
+    @staticmethod
+    def _flowcps_transition_mean(
+        sample: torch.Tensor,
+        model_output: torch.Tensor,
+        sigma: float,
+        sigma_prev: float,
+        noise_level: float,
+    ) -> tuple[torch.Tensor, float]:
+        """Coefficients-Preserving Sampling transition mean and noise std."""
+        if not (0.0 <= noise_level <= 1.0):
+            raise ValueError(f"Flow-CPS noise_level must be in [0, 1], got {noise_level}")
+
+        sample_fp32 = sample.to(torch.float32)
+        model_output_fp32 = model_output.to(torch.float32)
+        std_dev_t = sigma_prev * math.sin(noise_level * math.pi / 2.0)
+        coeff = math.sqrt(max(sigma_prev**2 - std_dev_t**2, 0.0))
+
+        pred_original_sample = sample_fp32 - sigma * model_output_fp32
+        noise_estimate = sample_fp32 + model_output_fp32 * (1.0 - sigma)
+        prev_sample_mean = pred_original_sample * (1.0 - sigma_prev) + noise_estimate * coeff
+        return prev_sample_mean, std_dev_t
+
+    @staticmethod
+    def _flowcps_transition_log_prob(sample: torch.Tensor, mean: torch.Tensor) -> torch.Tensor:
+        """Flow-CPS log-probability surrogate used by the official implementation."""
+        log_prob = -((sample.detach().to(torch.float32) - mean.to(torch.float32)) ** 2)
+        return log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
+
+    @staticmethod
+    def _sde_transition_log_prob(
+        sde_formula: str,
+        sample: torch.Tensor,
+        mean: torch.Tensor,
+        noise_scale: float,
+    ) -> torch.Tensor:
+        if sde_formula == "flowcps":
+            return WanI2VForTraining._flowcps_transition_log_prob(sample, mean)
+        return WanI2VForTraining._gaussian_transition_log_prob(sample, mean, noise_scale)
+
+    @staticmethod
+    def _sde_transition_kl_loss(
+        sde_formula: str,
+        mean: torch.Tensor,
+        ref_mean: torch.Tensor,
+        noise_scale: float,
+    ) -> torch.Tensor:
+        mse = ((mean - ref_mean) ** 2).mean(dim=list(range(1, mean.ndim))).mean()
+        if sde_formula == "flowcps":
+            return mse
+        if noise_scale <= 1e-8:
+            return torch.zeros((), device=mean.device, dtype=mean.dtype)
+        return mse / (2.0 * noise_scale**2)
+
+    @staticmethod
+    def _sde_transition_mean(
+        sample: torch.Tensor,
+        model_output: torch.Tensor,
+        sigma: float,
+        sigma_prev: float,
+        *,
+        sde_formula: str,
+        sde_noise_scale: float = 0.7,
+        sigma_min: float = 0.0,
+        sigma_max: float = 1.0,
+    ) -> tuple[torch.Tensor, float]:
+        if sde_formula == "flowgrpo":
+            return WanI2VForTraining._flowgrpo_transition_mean(
+                sample=sample,
+                model_output=model_output,
+                sigma=sigma,
+                sigma_prev=sigma_prev,
+                sigma_min=sigma_min,
+                sigma_max=sigma_max,
+            )
+        if sde_formula == "dancegrpo":
+            return WanI2VForTraining._dancegrpo_transition_mean(
+                sample=sample,
+                model_output=model_output,
+                sigma=sigma,
+                sigma_prev=sigma_prev,
+                eta=sde_noise_scale,
+            )
+        if sde_formula == "flowcps":
+            return WanI2VForTraining._flowcps_transition_mean(
+                sample=sample,
+                model_output=model_output,
+                sigma=sigma,
+                sigma_prev=sigma_prev,
+                noise_level=sde_noise_scale,
+            )
+        raise ValueError(f"Unknown SDE formula: {sde_formula}")
+
     def _dancegrpo_sde_step(
         self,
         sample: torch.Tensor,
@@ -1037,7 +1142,30 @@ class WanI2VForTraining:
         if noise is None:
             noise = torch.randn_like(sample)
         prev_sample = (prev_sample_mean + noise.to(torch.float32) * std_dev_t).to(sample.dtype)
-        log_prob = self._gaussian_transition_log_prob(prev_sample, prev_sample_mean, std_dev_t)
+        log_prob = self._sde_transition_log_prob("dancegrpo", prev_sample, prev_sample_mean, std_dev_t)
+        return prev_sample, prev_sample_mean, log_prob
+
+    def _flowcps_sde_step(
+        self,
+        sample: torch.Tensor,
+        model_output: torch.Tensor,
+        sigma: float,
+        sigma_prev: float,
+        noise_level: float,
+        noise: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Single Flow-CPS step with the official log-probability surrogate."""
+        prev_sample_mean, std_dev_t = self._flowcps_transition_mean(
+            sample=sample,
+            model_output=model_output,
+            sigma=sigma,
+            sigma_prev=sigma_prev,
+            noise_level=noise_level,
+        )
+        if noise is None:
+            noise = torch.randn_like(sample)
+        prev_sample = (prev_sample_mean + noise.to(torch.float32) * std_dev_t).to(sample.dtype)
+        log_prob = self._sde_transition_log_prob("flowcps", prev_sample, prev_sample_mean, std_dev_t)
         return prev_sample, prev_sample_mean, log_prob
 
     @torch.no_grad()
@@ -1071,7 +1199,8 @@ class WanI2VForTraining:
             initial_latent: Optional pre-sampled x_T. When provided, all group
                 members can share the same initial noise as in DanceGRPO.
             sde_formula: ``"flowgrpo"`` keeps the existing trainer behavior;
-                ``"dancegrpo"`` uses the official DanceGRPO RF-SDE update.
+                ``"dancegrpo"`` uses the official DanceGRPO RF-SDE update;
+                ``"flowcps"`` uses Coefficients-Preserving Sampling.
 
         Returns:
             dict with keys:
@@ -1081,7 +1210,7 @@ class WanI2VForTraining:
                 - sigmas: list of T+1 sigma values
                 - noises: list of T noise vectors (for recomputation)
         """
-        if sde_formula not in {"flowgrpo", "dancegrpo"}:
+        if sde_formula not in {"flowgrpo", "dancegrpo", "flowcps"}:
             raise ValueError(f"Unknown SDE formula: {sde_formula}")
 
         B = condition.shape[0]
@@ -1145,7 +1274,7 @@ class WanI2VForTraining:
                     encoder_hidden_states=uncond_embeds,
                     return_dict=False,
                 )[0]
-                if sde_formula == "dancegrpo":
+                if sde_formula in {"dancegrpo", "flowcps"}:
                     model_output = uncond_output.to(torch.float32) + cfg_scale * (
                         model_output.to(torch.float32) - uncond_output.to(torch.float32)
                     )
@@ -1161,6 +1290,16 @@ class WanI2VForTraining:
                     sigma=sigma,
                     sigma_prev=sigma_prev,
                     eta=sde_noise_scale,
+                    noise=noise,
+                )
+            elif sde_formula == "flowcps":
+                noise = torch.randn(latent.shape, device=device, dtype=torch.float32, generator=generator)
+                latent, prev_mean, log_prob = self._flowcps_sde_step(
+                    sample=latent,
+                    model_output=model_output,
+                    sigma=sigma,
+                    sigma_prev=sigma_prev,
+                    noise_level=sde_noise_scale,
                     noise=noise,
                 )
             else:
@@ -1201,6 +1340,7 @@ class WanI2VForTraining:
         sde_noise_scale: float = 0.7,
         sigma_min: float = 0.0,
         sigma_max: float = 1.0,
+        sde_formula: str = "flowgrpo",
         use_ref: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Recompute log-probability and KL for a stored (x_t, x_{t-1}) pair.
@@ -1219,6 +1359,7 @@ class WanI2VForTraining:
             sde_noise_scale: SDE noise parameter.
             sigma_min: Noise floor.
             sigma_max: Noise ceiling.
+            sde_formula: Transition formula: flowgrpo, dancegrpo, or flowcps.
             use_ref: If True, disable LoRA adapters to use reference policy.
 
         Returns:
@@ -1259,29 +1400,17 @@ class WanI2VForTraining:
         if use_ref:
             transformer.enable_adapters()
 
-        # Compute mean from the SDE step formula
-        dt = sigma_prev - sigma
-        std_dev_t = sigma_min + (sigma_max - sigma_min) * sigma
-
-        if sigma > 1e-8:
-            prev_sample_mean = (
-                latent * (1.0 + std_dev_t**2 / (2.0 * sigma) * dt)
-                + model_output * (1.0 + std_dev_t**2 * (1.0 - sigma) / (2.0 * sigma)) * dt
-            )
-        else:
-            prev_sample_mean = latent + model_output * dt
-
-        # Log probability
-        noise_scale = std_dev_t * math.sqrt(max(-dt, 0.0))
-        if noise_scale > 1e-8:
-            log_prob = (
-                -((next_latent - prev_sample_mean) ** 2) / (2.0 * noise_scale**2)
-                - math.log(noise_scale)
-                - 0.5 * math.log(2.0 * math.pi)
-            )
-            log_prob = log_prob.mean(dim=list(range(1, log_prob.ndim)))
-        else:
-            log_prob = torch.zeros(B, device=device)
+        prev_sample_mean, noise_scale = self._sde_transition_mean(
+            sample=latent,
+            model_output=model_output,
+            sigma=sigma,
+            sigma_prev=sigma_prev,
+            sde_formula=sde_formula,
+            sde_noise_scale=sde_noise_scale,
+            sigma_min=sigma_min,
+            sigma_max=sigma_max,
+        )
+        log_prob = self._sde_transition_log_prob(sde_formula, next_latent, prev_sample_mean, noise_scale)
 
         # KL divergence placeholder (computed externally between current and ref means)
         kl_div = torch.zeros(B, device=device)
