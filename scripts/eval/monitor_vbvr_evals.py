@@ -464,9 +464,7 @@ def pending_report(checkpoints: list[Checkpoint], state: dict[str, Any], backend
             missing = backends
         converted = "yes" if (ckpt.model_dir / "model_index.json").exists() else "no"
         status = "complete" if ckpt.complete else "incomplete"
-        lines.append(
-            f"| `{ckpt.safe_name}` | {status} | {converted} | {', '.join(missing) or '-'} | {ckpt.reason} |"
-        )
+        lines.append(f"| `{ckpt.safe_name}` | {status} | {converted} | {', '.join(missing) or '-'} | {ckpt.reason} |")
     lines.append("")
     return "\n".join(lines)
 
@@ -591,7 +589,6 @@ def run_command(
             time.sleep(10)
         log_file.write(f"\n# finished_at={datetime.now().isoformat(timespec='seconds')} rc={rc}\n")
     return int(rc), time.monotonic() - started
-
 
 
 def ensure_local_tasks() -> None:

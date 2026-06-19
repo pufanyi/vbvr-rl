@@ -251,16 +251,12 @@ def _parse_difficulty_geometries(raw: str | None) -> dict[str, tuple[int, int, i
         if not item:
             continue
         if ":" not in item:
-            raise ValueError(
-                "--difficulty_geometries entries must look like name:cell_hxcell_wxcell_px; "
-                f"got {item!r}"
-            )
+            raise ValueError(f"--difficulty_geometries entries must look like name:cell_hxcell_wxcell_px; got {item!r}")
         name, spec = item.split(":", 1)
         parts = [p for p in spec.lower().replace("x", ",").split(",") if p]
         if len(parts) != 3:
             raise ValueError(
-                "--difficulty_geometries entries must provide three integers "
-                f"(cell_h, cell_w, cell_px); got {item!r}"
+                f"--difficulty_geometries entries must provide three integers (cell_h, cell_w, cell_px); got {item!r}"
             )
         cell_h, cell_w, cell_px = (int(p) for p in parts)
         if cell_h < 2 or cell_w < 2 or cell_px < 4:
@@ -290,16 +286,10 @@ def _build_maze_specs(cfg: GenConfig) -> tuple[dict[str, MazeSpec], tuple[int, i
 
     missing = [name for name in difficulty_names if name not in geometry_map]
     if missing:
-        raise ValueError(
-            "--difficulty_geometries must include every requested difficulty; "
-            f"missing {missing!r}"
-        )
+        raise ValueError(f"--difficulty_geometries must include every requested difficulty; missing {missing!r}")
     extra = sorted(set(geometry_map) - set(difficulty_names))
     if extra:
-        raise ValueError(
-            "--difficulty_geometries contains names not present in --difficulty_names: "
-            f"{extra!r}"
-        )
+        raise ValueError(f"--difficulty_geometries contains names not present in --difficulty_names: {extra!r}")
 
     specs: dict[str, MazeSpec] = {}
     image_hw: tuple[int, int] | None = None

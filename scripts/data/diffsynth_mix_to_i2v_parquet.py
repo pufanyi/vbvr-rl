@@ -12,14 +12,14 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from src.data.remote_io import resolve_media_path
-
 
 _VIDEO_KEYS = ("clip_path", "video_path", "video", "path")
 _PROMPT_KEYS = ("text_annot", "prompt", "caption")

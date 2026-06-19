@@ -744,7 +744,10 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
                 if self.rl_split_enabled or cfg.grpo_shared_prompt_batch:
                     raw_prefetch_stride = 1
                 elif self.expert_parallel:
-                    raw_prefetch_stride = self.dp_size if self._expert_parallel_duplicates_data(cfg) else self.world_size
+                    if self._expert_parallel_duplicates_data(cfg):
+                        raw_prefetch_stride = self.dp_size
+                    else:
+                        raw_prefetch_stride = self.world_size
                 else:
                     raw_prefetch_stride = self.world_size
             dataset = I2VDataset(

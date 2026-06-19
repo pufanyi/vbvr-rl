@@ -14,10 +14,9 @@ import os
 import re
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RUNS = [
@@ -32,7 +31,7 @@ BASE_MODEL = "storage/models/Wan2.2-TI2V-5B-Diffusers"
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    return datetime.now(UTC).astimezone().isoformat(timespec="seconds")
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -220,9 +219,9 @@ def main() -> int:
     state.update(
         {
             "updated_at": _now(),
-            "watch_until": datetime.fromtimestamp(time.time() + args.duration_hours * 3600.0).astimezone().isoformat(
-                timespec="seconds"
-            ),
+            "watch_until": datetime.fromtimestamp(time.time() + args.duration_hours * 3600.0)
+            .astimezone()
+            .isoformat(timespec="seconds"),
             "poll_seconds": args.poll_seconds,
             "data_parallel": data_parallel,
             "num_frames": args.num_frames,
@@ -287,10 +286,7 @@ def main() -> int:
             converted_dir = converted_root / name
             free_gpus = _free_gpu_count(args.max_used_mb_for_free)
             if free_gpus < min_free_gpus:
-                print(
-                    f"[{_now()}] waiting for GPUs: free={free_gpus} required={min_free_gpus}; "
-                    f"pending={len(pending)}"
-                )
+                print(f"[{_now()}] waiting for GPUs: free={free_gpus} required={min_free_gpus}; pending={len(pending)}")
                 time.sleep(args.poll_seconds)
                 continue
 

@@ -80,9 +80,7 @@ def _goal_region_score(
     goal_x = (goal_ij[:, 1].float() + 0.5) * cell_px.float()
     goal_y = (goal_ij[:, 0].float() + 0.5) * cell_px.float()
     radius = float(goal_cells) * cell_px.float().clamp(min=1.0)
-    dist2 = (xx.view(1, H, W) - goal_x.view(B, 1, 1)).pow(2) + (
-        yy.view(1, H, W) - goal_y.view(B, 1, 1)
-    ).pow(2)
+    dist2 = (xx.view(1, H, W) - goal_x.view(B, 1, 1)).pow(2) + (yy.view(1, H, W) - goal_y.view(B, 1, 1)).pow(2)
     in_goal = dist2 <= radius.view(B, 1, 1).pow(2)
     return final_mask.masked_fill(~in_goal, 0.0).amax(dim=(1, 2))
 

@@ -251,11 +251,7 @@ def _broadcast_state_tensor_from_group_root(
 ) -> None:
     if pg is None:
         pg = dist.distributed_c10d._get_default_group()
-    pg_device = (
-        device
-        if device.type in {pg_device.type for pg_device in pg._device_types}
-        else pg._device_types[0]
-    )
+    pg_device = device if device.type in {pg_device.type for pg_device in pg._device_types} else pg._device_types[0]
 
     if _group_rank_is_zero(pg):
         full_state = full_state_dict[key]
@@ -430,8 +426,7 @@ class CheckpointRuntimeMixin:
             rank += group_size
         if not 0 <= rank < group_size:
             raise ValueError(
-                f"checkpoint_dcp_coordinator_rank={configured} resolves to {rank}, "
-                f"outside DCP group size {group_size}",
+                f"checkpoint_dcp_coordinator_rank={configured} resolves to {rank}, outside DCP group size {group_size}",
             )
         return rank
 

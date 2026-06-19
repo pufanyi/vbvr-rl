@@ -261,8 +261,7 @@ def main():
         existing = list(out_dir.glob("shard-*.tar"))
         if existing and not args.allow_existing:
             raise FileExistsError(
-                f"{out_dir} already contains {len(existing)} shard-*.tar files; "
-                "remove them or pass --allow_existing"
+                f"{out_dir} already contains {len(existing)} shard-*.tar files; remove them or pass --allow_existing"
             )
 
     all_samples = _scan_prompt_samples(prompt_dir)

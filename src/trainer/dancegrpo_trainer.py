@@ -82,9 +82,7 @@ def _shared_prompt_assignment(
 def _slice_meta(meta: dict[str, Any], index: int) -> dict[str, Any]:
     sliced: dict[str, Any] = {}
     for key, value in meta.items():
-        if isinstance(value, torch.Tensor):
-            sliced[key] = value[index : index + 1]
-        elif isinstance(value, list):
+        if isinstance(value, (torch.Tensor, list)):
             sliced[key] = value[index : index + 1]
         else:
             sliced[key] = value
@@ -303,10 +301,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
         for local_idx in range(count):
             group_idx = int(groups[local_idx])
-            path = (
-                out_dir
-                / f"rank{self.global_rank:03d}_prompt{int(prompt_idx):03d}_group{group_idx:03d}.mp4"
-            )
+            path = out_dir / f"rank{self.global_rank:03d}_prompt{int(prompt_idx):03d}_group{group_idx:03d}.mp4"
             frames = [Image.fromarray(frame) for frame in decoded[local_idx]]
             export_to_video(frames, str(path), fps=cfg.grpo_rollout_video_fps)
 
@@ -400,9 +395,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 module_state = get_model_state_dict(module, options=options)
             else:
                 module_state = {
-                    name: param.detach().cpu()
-                    for name, param in module.named_parameters()
-                    if param.requires_grad
+                    name: param.detach().cpu() for name, param in module.named_parameters() if param.requires_grad
                 }
             if self._is_train_root():
                 state[module_name] = module_state
@@ -736,16 +729,9 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             gt_s = gt_video_latents.repeat_interleave(cur_s, dim=0)
             meta_s = _repeat_meta(meta, cur_s)
             initial_latent = (
-                shared_initial_latent.repeat_interleave(cur_s, dim=0)
-                if shared_initial_latent is not None
-                else None
+                shared_initial_latent.repeat_interleave(cur_s, dim=0) if shared_initial_latent is not None else None
             )
-            rollout_seed = (
-                cfg.seed
-                + 1_000_003 * global_step
-                + 9_176 * (min(groups) + 1)
-                + 131 * offset
-            )
+            rollout_seed = cfg.seed + 1_000_003 * global_step + 9_176 * (min(groups) + 1) + 131 * offset
             rollout_generator = torch.Generator(device=self.device).manual_seed(rollout_seed)
 
             chunk_start = time.monotonic()
@@ -902,7 +888,6 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         return self._run_async_split_train_root_loop()
 
     def _run_async_split_train_follower_loop(self) -> None:
-        cfg = self.cfg
         self._split_debug_log(
             "async_train_follower_loop_start rank={} local_rank={} train_root={}",
             self.global_rank,
@@ -1012,7 +997,8 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             current_policy_state = None
             actor_versions: dict[int, int | None] = {rank: current_policy_version for rank in actors}
             logger.info(
-                "Skipping initial full actor sync at step={} because actors already loaded the same init/resume weights.",
+                "Skipping initial full actor sync at step={} because actors already loaded the same "
+                "init/resume weights.",
                 global_step,
             )
         else:
@@ -1109,7 +1095,8 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                     "policy_state": policy_state,
                 }
                 self._split_debug_log(
-                    "async_dispatch_actor_start actor={} actor_node={} actor_local_rank={} step={} groups={} policy_version={} "
+                    "async_dispatch_actor_start actor={} actor_node={} actor_local_rank={} step={} groups={} "
+                    "policy_version={} "
                     "policy_sync={} free={} busy={} queued_steps={} unassigned_groups={}",
                     actor_rank,
                     actor_locations[actor_rank]["node"],
@@ -1592,16 +1579,9 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             gt_s = gt_video_latents.repeat_interleave(cur_s, dim=0)
             meta_s = _repeat_meta(meta, cur_s)
             initial_latent = (
-                shared_initial_latent.repeat_interleave(cur_s, dim=0)
-                if shared_initial_latent is not None
-                else None
+                shared_initial_latent.repeat_interleave(cur_s, dim=0) if shared_initial_latent is not None else None
             )
-            rollout_seed = (
-                cfg.seed
-                + 1_000_003 * global_step
-                + 9_176 * (self.rollout_rank + 1)
-                + 131 * offset
-            )
+            rollout_seed = cfg.seed + 1_000_003 * global_step + 9_176 * (self.rollout_rank + 1) + 131 * offset
             rollout_generator = torch.Generator(device=self.device).manual_seed(rollout_seed)
 
             traj = self.model.sde_generate(
@@ -1689,8 +1669,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         missing = [idx for idx in range(G) if idx not in seen]
         if missing:
             raise RuntimeError(
-                f"Missing rollout group indices {missing}; "
-                f"rollout_world_size={self.rollout_world_size}, group_size={G}"
+                f"Missing rollout group indices {missing}; rollout_world_size={self.rollout_world_size}, group_size={G}"
             )
         chunks.sort(key=lambda chunk: min(chunk["groups"]))
         return {
@@ -2231,9 +2210,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             gt_s = gt_video_latents.repeat_interleave(cur_s, dim=0)
             meta_s = _repeat_meta(meta, cur_s)
             initial_latent = (
-                shared_initial_latent.repeat_interleave(cur_s, dim=0)
-                if shared_initial_latent is not None
-                else None
+                shared_initial_latent.repeat_interleave(cur_s, dim=0) if shared_initial_latent is not None else None
             )
 
             traj = self.model.sde_generate(

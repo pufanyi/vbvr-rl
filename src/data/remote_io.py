@@ -7,6 +7,7 @@ import json
 import os
 import re
 import time
+from contextlib import suppress
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
@@ -79,18 +80,15 @@ def _download_s3_to_cache(uri: str) -> Path:
         tmp_path.replace(local_path)
         return local_path
     finally:
-        try:
+        with suppress(FileNotFoundError):
             lock_dir.rmdir()
-        except FileNotFoundError:
-            pass
 
 
 def _get_aoss_client(uri: str):
     conf_path = _select_aoss_conf(uri)
     if conf_path is None:
         raise RuntimeError(
-            "S3 media requires WAN_TRAINER_AOSS_CONF_PATH or "
-            "WAN_TRAINER_AOSS_CONF_RULES to select an AOSS config"
+            "S3 media requires WAN_TRAINER_AOSS_CONF_PATH or WAN_TRAINER_AOSS_CONF_RULES to select an AOSS config"
         )
     return _get_aoss_client_for_conf(conf_path)
 

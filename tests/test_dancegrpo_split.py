@@ -2,14 +2,16 @@ from types import SimpleNamespace
 
 import torch
 
+from src.models.wan_i2v import WanI2VForTraining
 from src.trainer.base_grpo_trainer import BaseGRPOTrainer
 from src.trainer.config import RLConfig
-from src.trainer.dancegrpo_trainer import _interleave_actor_ranks_by_node
-from src.trainer.dancegrpo_trainer import _shared_prompt_assignment
-from src.trainer.dancegrpo_trainer import _split_group_indices
-from src.trainer.dancegrpo_trainer import DanceGRPOTrainer
+from src.trainer.dancegrpo_trainer import (
+    DanceGRPOTrainer,
+    _interleave_actor_ranks_by_node,
+    _shared_prompt_assignment,
+    _split_group_indices,
+)
 from src.trainer.rewards.neg_loss import NegLossReward
-from src.models.wan_i2v import WanI2VForTraining
 
 
 def test_split_group_indices_exact_fanout():

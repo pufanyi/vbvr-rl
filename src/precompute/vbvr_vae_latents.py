@@ -93,10 +93,7 @@ def load_vae(model_path: str, device: str):
 
     model_dir = Path(model_path)
     model_index_path = model_dir / "model_index.json"
-    if model_index_path.exists():
-        model_index = json.loads(model_index_path.read_text())
-    else:
-        model_index = {}
+    model_index = json.loads(model_index_path.read_text()) if model_index_path.exists() else {}
 
     vae = AutoencoderKLWan.from_pretrained(model_dir / "vae", torch_dtype=torch.float32)
     vae.to(device).eval().requires_grad_(False)

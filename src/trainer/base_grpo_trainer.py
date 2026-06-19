@@ -213,9 +213,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
         }
     )
 
-    def _encode_batch_inputs(
-        self, batch: dict
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
+    def _encode_batch_inputs(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
         """Encode one GRPO batch, supporting both raw and precomputed paths.
 
         Returns ``(prompt_embeds, gt_video_latents, condition, meta)`` where

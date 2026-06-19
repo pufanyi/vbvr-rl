@@ -173,7 +173,10 @@ class WanI2VForTraining:
             )
             logger.info("Loaded transformer_2")
         elif train_experts in ("both", "low") and not self.has_low_noise_expert:
-            logger.info("Model has no transformer_2; routing requested '{}' training through transformer", train_experts)
+            logger.info(
+                "Model has no transformer_2; routing requested '{}' training through transformer",
+                train_experts,
+            )
 
         # ---- LoRA or full fine-tuning ----
         self.lora_config = lora_config
@@ -1216,9 +1219,7 @@ class WanI2VForTraining:
         B = condition.shape[0]
         device = condition.device
         latent_shape = (
-            tuple(initial_latent.shape)
-            if initial_latent is not None
-            else self.latent_shape_from_condition(condition)
+            tuple(initial_latent.shape) if initial_latent is not None else self.latent_shape_from_condition(condition)
         )
 
         # Build sigma schedule for sampling: T+1 values from 1→0

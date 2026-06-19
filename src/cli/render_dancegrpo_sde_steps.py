@@ -79,7 +79,10 @@ def _generate_dancegrpo_sde_z0_predictions(
     """Run one SDE trajectory and capture the predicted x0/z0 at each step."""
     batch_size = condition.shape[0]
     device = condition.device
-    latent_shape = tuple(initial_latent.shape) if initial_latent is not None else model.latent_shape_from_condition(condition)
+    if initial_latent is not None:
+        latent_shape = tuple(initial_latent.shape)
+    else:
+        latent_shape = model.latent_shape_from_condition(condition)
 
     t_values = torch.linspace(1.0, 0.0, num_sampling_steps + 1, device=device)
     shift = model.flow_shift
@@ -258,7 +261,9 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     num_sampling_steps = args.num_sampling_steps or default_steps
-    sde_noise_scale = args.sde_noise_scale if args.sde_noise_scale is not None else getattr(cfg, "grpo_sde_noise_scale", 0.0)
+    sde_noise_scale = (
+        args.sde_noise_scale if args.sde_noise_scale is not None else getattr(cfg, "grpo_sde_noise_scale", 0.0)
+    )
     sde_formula = getattr(cfg, "grpo_sde_formula", "dancegrpo")
     cfg_scale = args.cfg_scale if args.cfg_scale is not None else getattr(cfg, "grpo_cfg_scale", 1.0)
     seed = args.seed if args.seed is not None else cfg.seed
@@ -411,7 +416,11 @@ def main() -> int:
     (output_dir / "sample_metadata.json").write_text(json.dumps(loaded.metadata, indent=2), encoding="utf-8")
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"[done] wrote {len(video_paths)} step videos to {output_dir}", flush=True)
-    print(json.dumps({"manifest": str(output_dir / "manifest.json"), "grid": str(output_dir / "steps_grid.mp4")}, indent=2), flush=True)
+    output_summary = {
+        "manifest": str(output_dir / "manifest.json"),
+        "grid": str(output_dir / "steps_grid.mp4"),
+    }
+    print(json.dumps(output_summary, indent=2), flush=True)
 
     del traj, videos
     gc.collect()

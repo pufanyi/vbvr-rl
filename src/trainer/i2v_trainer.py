@@ -376,7 +376,10 @@ class I2VTrainer(BaseTrainer):
             condition = batch["condition"].to(self.device)
         else:
             # Raw data path — encode on-the-fly
-            prompt_embeds = self._time_profile_phase("t5_encode", lambda: self.model.encode_text(batch["prompt"], self.device))
+            prompt_embeds = self._time_profile_phase(
+                "t5_encode",
+                lambda: self.model.encode_text(batch["prompt"], self.device),
+            )
             video = self._time_profile_phase("video_h2d", lambda: to_model_pixels(batch["videos"][-1], self.device))
             image = self._time_profile_phase("image_h2d", lambda: to_model_pixels(batch["image"], self.device))
             video_latents = self._time_profile_phase("vae_video", lambda: self.model.encode_video(video))
@@ -386,5 +389,10 @@ class I2VTrainer(BaseTrainer):
             )
         return self._time_profile_phase(
             "transformer_loss",
-            lambda: self.model.compute_loss(video_latents, condition, prompt_embeds, prompt_dropout=self.cfg.prompt_dropout),
+            lambda: self.model.compute_loss(
+                video_latents,
+                condition,
+                prompt_embeds,
+                prompt_dropout=self.cfg.prompt_dropout,
+            ),
         )

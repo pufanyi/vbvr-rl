@@ -100,7 +100,10 @@ def _load_eval_sample(eval_json: str, sample_index: int) -> tuple[dict[str, Any]
     return sample, eval_path.parent
 
 
-def _load_generated_maze_sample(args: argparse.Namespace, model_path: str) -> tuple[dict[str, Any], np.ndarray, list[np.ndarray]]:
+def _load_generated_maze_sample(
+    args: argparse.Namespace,
+    model_path: str,
+) -> tuple[dict[str, Any], np.ndarray, list[np.ndarray]]:
     if args.generated_maze_gid is None:
         raise ValueError("generated_maze_gid is required")
     if args.generated_maze_gid < 0:
@@ -229,8 +232,7 @@ def main() -> int:
 
     if args.generated_maze_gid is not None:
         print(
-            f"[sample] generated_holdout gid={args.generated_maze_gid} "
-            f"seed={args.maze_seed + args.generated_maze_gid}",
+            f"[sample] generated_holdout gid={args.generated_maze_gid} seed={args.maze_seed + args.generated_maze_gid}",
             flush=True,
         )
     else:
@@ -353,8 +355,7 @@ def main() -> int:
             )
             rollout_generator = torch.Generator(device=device).manual_seed(seed + 1009 * (group_start + 1))
             print(
-                f"[checkpoint {ckpt_idx}/{len(checkpoints)}] groups "
-                f"{group_start}..{group_start + cur_s - 1}",
+                f"[checkpoint {ckpt_idx}/{len(checkpoints)}] groups {group_start}..{group_start + cur_s - 1}",
                 flush=True,
             )
             with torch.no_grad():

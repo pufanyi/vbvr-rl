@@ -174,8 +174,7 @@ def _assert_finite_module(module: torch.nn.Module, module_name: str) -> None:
         nan_count = torch.isnan(tensor).sum().item()
         inf_count = torch.isinf(tensor).sum().item()
         raise FloatingPointError(
-            f"{module_name}.{name} contains non-finite values after checkpoint load "
-            f"(nan={nan_count}, inf={inf_count})"
+            f"{module_name}.{name} contains non-finite values after checkpoint load (nan={nan_count}, inf={inf_count})"
         )
 
 

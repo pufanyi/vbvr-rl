@@ -643,11 +643,7 @@ def interpolate_ball_positions(
     frame_positions_cell = np.zeros((num_frames, 2), dtype=np.float32)
     frame_positions_pix = np.zeros((num_frames, 2), dtype=np.float32)
     for f in range(num_frames):
-        t = (
-            float(L - 1)
-            if completion_frame <= 0
-            else min(float(L - 1), f * (L - 1) / completion_frame)
-        )
+        t = float(L - 1) if completion_frame <= 0 else min(float(L - 1), f * (L - 1) / completion_frame)
         k = int(np.floor(t))
         alpha = float(t - k)
         if k >= L - 1:
@@ -860,9 +856,7 @@ def render_video_from_metadata(maze: dict[str, Any]) -> np.ndarray:
                 render_metadata.get("goal_marker_half_extent_px", _goal_marker_half_extent(cell_px))
             ),
             line_completion_frame=(
-                int(render_metadata["line_completion_frame"])
-                if "line_completion_frame" in render_metadata
-                else None
+                int(render_metadata["line_completion_frame"]) if "line_completion_frame" in render_metadata else None
             ),
         )
 
@@ -875,8 +869,7 @@ def render_video_from_metadata(maze: dict[str, Any]) -> np.ndarray:
 
 
 PROMPT_TEMPLATES: tuple[str, ...] = (
-    "A {ball} ball navigates through a {difficulty} {wall} maze, following "
-    "the valid path to the goal.",
+    "A {ball} ball navigates through a {difficulty} {wall} maze, following the valid path to the goal.",
     "A small {ball} circle moves through a {difficulty} maze with {wall} walls on a "
     "{passage} background, heading toward the {goal} goal marker.",
     "Top-down view of a {difficulty} {passage} maze with {wall} walls; a {ball} ball "

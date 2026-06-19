@@ -39,9 +39,9 @@ from safetensors.torch import save as st_save
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
+from src.data.remote_io import localize_media_path, resolve_media_path
 from src.precompute.vbvr_prompt_embeds import encode_text, load_text_encoder
 from src.precompute.vbvr_vae_latents import encode_video, load_vae, prepare_condition
-from src.data.remote_io import localize_media_path, resolve_media_path
 
 
 def _is_distributed() -> bool:

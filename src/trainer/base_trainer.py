@@ -729,9 +729,7 @@ class BaseTrainer(CheckpointRuntimeMixin):
                 nan_count = int(torch.isnan(local_grad).sum().item())
                 inf_count = int(torch.isinf(local_grad).sum().item())
                 finite_count = int(finite.sum().item())
-                finite_absmax = (
-                    float(local_grad[finite].abs().max().item()) if finite_count > 0 else float("nan")
-                )
+                finite_absmax = float(local_grad[finite].abs().max().item()) if finite_count > 0 else float("nan")
                 bad.append(
                     f"{name}: shape={tuple(local_grad.shape)} dtype={local_grad.dtype} "
                     f"nan={nan_count} inf={inf_count} finite_absmax={finite_absmax:.6g}"
