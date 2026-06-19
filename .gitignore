@@ -216,3 +216,5 @@ eval_out/
 logs/
 
 tmp/
+
+data/diffsynth_mix/
