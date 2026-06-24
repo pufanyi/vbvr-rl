@@ -29,6 +29,7 @@ class TrainConfig(BaseModel):
     prefetch_factor: int = 2
     dataloader_timeout_seconds: int = 0  # 0 keeps PyTorch's default no-timeout behavior
     dataloader_in_order: bool = True  # False lets workers return whichever batch is ready first
+    dataloader_item_trace_seconds: int = 0  # raw I2V worker stack dump threshold; 0 disables
 
     # Training
     output_dir: str = "storage/checkpoints"

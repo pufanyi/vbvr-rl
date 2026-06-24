@@ -22,10 +22,13 @@ Per-dataset overrides (optional keys in the config dict):
 """
 
 import bisect
+import faulthandler
 import json
 import logging
 import os
 import random
+import sys
+import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
@@ -82,6 +85,29 @@ def _decord_num_threads() -> int:
         return 1
 
 
+class _SlowItemWatchdog:
+    def __init__(self, seconds: int, message: str):
+        self._seconds = seconds
+        self._message = message
+        self._timer: threading.Timer | None = None
+
+    def start(self) -> "_SlowItemWatchdog":
+        if self._seconds <= 0:
+            return self
+        self._timer = threading.Timer(self._seconds, self._dump)
+        self._timer.daemon = True
+        self._timer.start()
+        return self
+
+    def cancel(self) -> None:
+        if self._timer is not None:
+            self._timer.cancel()
+
+    def _dump(self) -> None:
+        print(self._message, file=sys.stderr, flush=True)
+        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+
+
 class I2VDataset(Dataset):
     """Parquet-backed video dataset. Rows are read directly from Arrow tables."""
 
@@ -98,6 +124,7 @@ class I2VDataset(Dataset):
         remote_prefetch_lookahead: int = 0,
         remote_prefetch_workers: int = 1,
         remote_prefetch_stride: int = 1,
+        item_trace_seconds: int = 0,
     ):
         config_path = Path(json_path)
         parent_dir = config_path.parent
@@ -152,6 +179,7 @@ class I2VDataset(Dataset):
         self._remote_prefetch_lookahead = max(0, int(remote_prefetch_lookahead))
         self._remote_prefetch_workers = max(1, int(remote_prefetch_workers))
         self._remote_prefetch_stride = max(1, int(remote_prefetch_stride))
+        self._item_trace_seconds = max(0, int(item_trace_seconds))
         self._prefetch_executor: ThreadPoolExecutor | None = None
         self._prefetch_futures: dict[int, Future] = {}
         if shuffle_indices:
@@ -266,6 +294,7 @@ class I2VDataset(Dataset):
     def __getitem__(self, idx):
         self._schedule_remote_prefetch(int(idx))
         for attempt in range(self._MAX_RETRIES):
+            watchdog = self._start_item_watchdog(idx, attempt + 1)
             try:
                 return self._load_item(idx)
             except Exception:
@@ -277,7 +306,46 @@ class I2VDataset(Dataset):
                     exc_info=True,
                 )
                 idx = random.randint(0, self._len - 1)
-        return self._load_item(idx)
+            finally:
+                watchdog.cancel()
+        watchdog = self._start_item_watchdog(idx, self._MAX_RETRIES + 1)
+        try:
+            return self._load_item(idx)
+        finally:
+            watchdog.cancel()
+
+    def _start_item_watchdog(self, idx: int, attempt: int) -> _SlowItemWatchdog:
+        if self._item_trace_seconds <= 0:
+            return _SlowItemWatchdog(0, "")
+        return _SlowItemWatchdog(
+            self._item_trace_seconds,
+            self._format_item_watchdog_message(idx, attempt),
+        ).start()
+
+    def _format_item_watchdog_message(self, idx: int, attempt: int) -> str:
+        rank = os.environ.get("RANK", "?")
+        local_rank = os.environ.get("LOCAL_RANK", "?")
+        try:
+            source_idx = self._source_index(idx)
+            ti, row = self._locate(source_idx)
+            video_paths, prompt, image_path = self._read_row(self._tables[ti], row)
+            root = self._roots[ti]
+            paths = [self._resolve(p, root) for p in video_paths]
+            if image_path is not None:
+                paths.append(self._resolve(image_path, root))
+            if len(paths) > 4:
+                paths = paths[:4] + [f"... +{len(paths) - 4} more"]
+            prompt = prompt.replace("\n", " ")[:160]
+            detail = (
+                f"logical_idx={idx} source_idx={source_idx} table={ti} row={row} "
+                f"attempt={attempt}/{self._MAX_RETRIES + 1} paths={paths!r} prompt={prompt!r}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            detail = f"logical_idx={idx} attempt={attempt}/{self._MAX_RETRIES + 1} context_error={exc!r}"
+        return (
+            f"[I2VDataset watchdog] rank={rank} local_rank={local_rank} pid={os.getpid()} "
+            f"item load exceeded {self._item_trace_seconds}s: {detail}"
+        )
 
     def _ensure_prefetch_executor(self) -> ThreadPoolExecutor:
         if self._prefetch_executor is None:

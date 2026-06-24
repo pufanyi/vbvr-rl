@@ -762,6 +762,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
                 remote_prefetch_lookahead=cfg.raw_remote_prefetch_lookahead,
                 remote_prefetch_workers=cfg.raw_remote_prefetch_workers,
                 remote_prefetch_stride=raw_prefetch_stride,
+                item_trace_seconds=cfg.dataloader_item_trace_seconds,
             )
         sampler_shuffle = not cfg.shuffle_raw_indices
         if self.rl_split_enabled or cfg.grpo_shared_prompt_batch:

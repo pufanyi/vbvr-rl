@@ -110,12 +110,20 @@ def _resolve_device(value: str | None) -> torch.device:
 
 def _load_base_pipeline(args: argparse.Namespace, dtype: torch.dtype, device: torch.device) -> DiffusionPipeline:
     logger.info("Loading base pipeline from {} ({})", args.base_model, args.torch_dtype)
+    # Place weights directly on the accelerator via device_map so the two 14B
+    # transformers never accumulate in CPU RAM. Loading to CPU and then calling
+    # pipe.to(device) peaks well above a typical container memory cgroup limit
+    # and gets OOM-killed mid-load. device_map="cuda" (or "xpu"/etc.) is the
+    # single-device strategy diffusers supports for this.
+    device_map = device.type if device.type != "cpu" else None
     pipe = DiffusionPipeline.from_pretrained(
         str(args.base_model),
         torch_dtype=dtype,
         low_cpu_mem_usage=True,
+        device_map=device_map,
     )
-    pipe.to(device)
+    if device_map is None:
+        pipe.to(device)
     gc.collect()
     return pipe
 

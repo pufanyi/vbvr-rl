@@ -37,10 +37,11 @@ expert_parallel_data_mode: split
 train_experts: both
 
 num_workers: 4
-prefetch_factor: 2
+prefetch_factor: 1
 persistent_workers: true
 dataloader_timeout_seconds: 300
 dataloader_in_order: false
+dataloader_item_trace_seconds: 120
 
 fsdp: true
 hsdp: false
