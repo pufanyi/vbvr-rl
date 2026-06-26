@@ -985,15 +985,31 @@ class WanI2VForTraining:
         prev_sample = prev_sample_mean + noise_scale * noise
 
         # Log probability under the Gaussian transition
-        log_prob = self._sde_transition_log_prob("flowgrpo", prev_sample, prev_sample_mean, noise_scale)
+        log_prob = self._sde_transition_log_prob(
+            "flowgrpo", prev_sample, prev_sample_mean, noise_scale, skip_first_frame=self.expand_timesteps
+        )
 
         return prev_sample, prev_sample_mean, log_prob
+
+    @staticmethod
+    def _reduce_per_sample(per_elem: torch.Tensor, skip_first_frame: bool = False) -> torch.Tensor:
+        """Mean a per-element tensor over all non-batch dims, returning shape (B,).
+
+        When ``skip_first_frame`` is set the conditioning first latent frame
+        (``[:, :, 0]``) is dropped before reducing.  For ``expand_timesteps``
+        (5B TI2V) models that frame is the frozen I2V condition image, not a
+        generated action, so it must not contribute to per-step log-probs / KL.
+        """
+        if skip_first_frame and per_elem.ndim >= 3 and per_elem.shape[2] > 1:
+            per_elem = per_elem[:, :, 1:]
+        return per_elem.mean(dim=tuple(range(1, per_elem.ndim)))
 
     @staticmethod
     def _gaussian_transition_log_prob(
         sample: torch.Tensor,
         mean: torch.Tensor,
         std_dev_t: float,
+        skip_first_frame: bool = False,
     ) -> torch.Tensor:
         """Per-sample Gaussian transition log-probability in fp32."""
         if std_dev_t <= 1e-8:
@@ -1003,7 +1019,7 @@ class WanI2VForTraining:
             - math.log(std_dev_t)
             - 0.5 * math.log(2.0 * math.pi)
         )
-        return log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
+        return WanI2VForTraining._reduce_per_sample(log_prob, skip_first_frame)
 
     @staticmethod
     def _dancegrpo_transition_mean(
@@ -1056,10 +1072,12 @@ class WanI2VForTraining:
         return prev_sample_mean, std_dev_t
 
     @staticmethod
-    def _flowcps_transition_log_prob(sample: torch.Tensor, mean: torch.Tensor) -> torch.Tensor:
+    def _flowcps_transition_log_prob(
+        sample: torch.Tensor, mean: torch.Tensor, skip_first_frame: bool = False
+    ) -> torch.Tensor:
         """Flow-CPS log-probability surrogate used by the official implementation."""
         log_prob = -((sample.detach().to(torch.float32) - mean.to(torch.float32)) ** 2)
-        return log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
+        return WanI2VForTraining._reduce_per_sample(log_prob, skip_first_frame)
 
     @staticmethod
     def _sde_transition_log_prob(
@@ -1067,10 +1085,11 @@ class WanI2VForTraining:
         sample: torch.Tensor,
         mean: torch.Tensor,
         noise_scale: float,
+        skip_first_frame: bool = False,
     ) -> torch.Tensor:
         if sde_formula == "flowcps":
-            return WanI2VForTraining._flowcps_transition_log_prob(sample, mean)
-        return WanI2VForTraining._gaussian_transition_log_prob(sample, mean, noise_scale)
+            return WanI2VForTraining._flowcps_transition_log_prob(sample, mean, skip_first_frame)
+        return WanI2VForTraining._gaussian_transition_log_prob(sample, mean, noise_scale, skip_first_frame)
 
     @staticmethod
     def _sde_transition_kl_loss(
@@ -1078,8 +1097,9 @@ class WanI2VForTraining:
         mean: torch.Tensor,
         ref_mean: torch.Tensor,
         noise_scale: float,
+        skip_first_frame: bool = False,
     ) -> torch.Tensor:
-        mse = ((mean - ref_mean) ** 2).mean(dim=list(range(1, mean.ndim))).mean()
+        mse = WanI2VForTraining._reduce_per_sample((mean - ref_mean) ** 2, skip_first_frame).mean()
         if sde_formula == "flowcps":
             return mse
         if noise_scale <= 1e-8:
@@ -1145,7 +1165,9 @@ class WanI2VForTraining:
         if noise is None:
             noise = torch.randn_like(sample)
         prev_sample = (prev_sample_mean + noise.to(torch.float32) * std_dev_t).to(sample.dtype)
-        log_prob = self._sde_transition_log_prob("dancegrpo", prev_sample, prev_sample_mean, std_dev_t)
+        log_prob = self._sde_transition_log_prob(
+            "dancegrpo", prev_sample, prev_sample_mean, std_dev_t, skip_first_frame=self.expand_timesteps
+        )
         return prev_sample, prev_sample_mean, log_prob
 
     def _flowcps_sde_step(
@@ -1168,7 +1190,9 @@ class WanI2VForTraining:
         if noise is None:
             noise = torch.randn_like(sample)
         prev_sample = (prev_sample_mean + noise.to(torch.float32) * std_dev_t).to(sample.dtype)
-        log_prob = self._sde_transition_log_prob("flowcps", prev_sample, prev_sample_mean, std_dev_t)
+        log_prob = self._sde_transition_log_prob(
+            "flowcps", prev_sample, prev_sample_mean, std_dev_t, skip_first_frame=self.expand_timesteps
+        )
         return prev_sample, prev_sample_mean, log_prob
 
     @torch.no_grad()
@@ -1184,6 +1208,7 @@ class WanI2VForTraining:
         generator: torch.Generator | None = None,
         initial_latent: torch.Tensor | None = None,
         sde_formula: str = "flowgrpo",
+        return_pred_x0: bool = False,
     ) -> dict:
         """Generate video latents via SDE sampling, storing per-step data for GRPO.
 
@@ -1204,6 +1229,9 @@ class WanI2VForTraining:
             sde_formula: ``"flowgrpo"`` keeps the existing trainer behavior;
                 ``"dancegrpo"`` uses the official DanceGRPO RF-SDE update;
                 ``"flowcps"`` uses Coefficients-Preserving Sampling.
+            return_pred_x0: When True, also capture the predicted clean latent
+                ``z0 = x_t - sigma * v`` at each step (offloaded to CPU). Used by
+                the inference renderer to preview the denoising trajectory.
 
         Returns:
             dict with keys:
@@ -1212,6 +1240,8 @@ class WanI2VForTraining:
                 - timesteps: list of T timestep values
                 - sigmas: list of T+1 sigma values
                 - noises: list of T noise vectors (for recomputation)
+                - pred_x0: list of T predicted-clean latents (only when
+                  ``return_pred_x0``; empty otherwise)
         """
         if sde_formula not in {"flowgrpo", "dancegrpo", "flowcps"}:
             raise ValueError(f"Unknown SDE formula: {sde_formula}")
@@ -1228,16 +1258,25 @@ class WanI2VForTraining:
         shift = self.flow_shift
         sigmas = shift * t_values / (1.0 + (shift - 1.0) * t_values)
 
+        # 5B TI2V (expand_timesteps): latent frame 0 is the frozen I2V conditioning
+        # image. It must never be noised — pin it to the clean condition latent and
+        # exclude it from per-step log-prob / KL (the step reductions skip frame 0).
+        freeze_first_frame = self.expand_timesteps and latent_shape[2] > 1 and condition.shape[2] == latent_shape[2]
+        cond_first_frame = condition[:, :, 0:1].to(torch.bfloat16) if freeze_first_frame else None
+
         # Start from pure noise unless a caller provides a shared x_T.
         if initial_latent is None:
             latent = torch.randn(latent_shape, device=device, dtype=torch.bfloat16, generator=generator)
         else:
             latent = initial_latent.to(device=device, dtype=torch.bfloat16).clone()
+        if freeze_first_frame:
+            latent[:, :, 0:1] = cond_first_frame
 
         all_latents = [latent]
         all_log_probs = []
         all_timesteps = []
         all_noises = []
+        all_pred_x0: list[torch.Tensor] = []
 
         for i in range(num_sampling_steps):
             sigma = sigmas[i].item()
@@ -1282,6 +1321,13 @@ class WanI2VForTraining:
                 else:
                     model_output = uncond_output + cfg_scale * (model_output - uncond_output)
 
+            # Predicted clean latent z0 = x_t - sigma * v (post-CFG, before stepping).
+            # Same quantity the step renderer decodes for per-step previews.
+            if return_pred_x0:
+                all_pred_x0.append(
+                    (latent.to(torch.float32) - sigma * model_output.to(torch.float32)).detach().cpu()
+                )
+
             # SDE step
             if sde_formula == "dancegrpo":
                 noise = torch.randn(latent.shape, device=device, dtype=torch.float32, generator=generator)
@@ -1316,6 +1362,12 @@ class WanI2VForTraining:
                     noise=noise,
                 )
 
+            if freeze_first_frame:
+                # Re-pin frame 0 to the clean conditioning latent and zero its stored
+                # noise so the trajectory never carries first-frame noise downstream.
+                latent[:, :, 0:1] = cond_first_frame
+                noise[:, :, 0:1] = 0
+
             all_latents.append(latent)
             all_log_probs.append(log_prob)
             all_timesteps.append(timestep_val)
@@ -1327,6 +1379,7 @@ class WanI2VForTraining:
             "timesteps": all_timesteps,
             "sigmas": sigmas,
             "noises": all_noises,
+            "pred_x0": all_pred_x0,
         }
 
     def compute_log_prob_and_kl(
@@ -1411,7 +1464,9 @@ class WanI2VForTraining:
             sigma_min=sigma_min,
             sigma_max=sigma_max,
         )
-        log_prob = self._sde_transition_log_prob(sde_formula, next_latent, prev_sample_mean, noise_scale)
+        log_prob = self._sde_transition_log_prob(
+            sde_formula, next_latent, prev_sample_mean, noise_scale, skip_first_frame=self.expand_timesteps
+        )
 
         # KL divergence placeholder (computed externally between current and ref means)
         kl_div = torch.zeros(B, device=device)
