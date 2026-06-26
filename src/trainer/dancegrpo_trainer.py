@@ -249,7 +249,9 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         mean: torch.Tensor,
         noise_scale: float,
     ) -> torch.Tensor:
-        return self.model._sde_transition_log_prob(self.cfg.grpo_sde_formula, sample, mean, noise_scale)
+        return self.model._sde_transition_log_prob(
+            self.cfg.grpo_sde_formula, sample, mean, noise_scale, skip_first_frame=self.model.expand_timesteps
+        )
 
     def _transition_kl_loss(
         self,
@@ -257,7 +259,9 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         ref_mean: torch.Tensor,
         noise_scale: float,
     ) -> torch.Tensor:
-        return self.model._sde_transition_kl_loss(self.cfg.grpo_sde_formula, mean, ref_mean, noise_scale)
+        return self.model._sde_transition_kl_loss(
+            self.cfg.grpo_sde_formula, mean, ref_mean, noise_scale, skip_first_frame=self.model.expand_timesteps
+        )
 
     def _rollout_video_root(self) -> Path:
         if self.cfg.grpo_rollout_video_dir:

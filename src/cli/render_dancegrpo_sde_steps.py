@@ -88,10 +88,16 @@ def _generate_dancegrpo_sde_z0_predictions(
     shift = model.flow_shift
     sigmas = shift * t_values / (1.0 + (shift - 1.0) * t_values)
 
+    # 5B TI2V: frame 0 is the frozen I2V conditioning image — never noise it.
+    freeze_first_frame = model.expand_timesteps and latent_shape[2] > 1 and condition.shape[2] == latent_shape[2]
+    cond_first_frame = condition[:, :, 0:1].to(torch.bfloat16) if freeze_first_frame else None
+
     if initial_latent is None:
         latent = torch.randn(latent_shape, device=device, dtype=torch.bfloat16, generator=generator)
     else:
         latent = initial_latent.to(device=device, dtype=torch.bfloat16).clone()
+    if freeze_first_frame:
+        latent[:, :, 0:1] = cond_first_frame
 
     z0_predictions: list[torch.Tensor] = []
     timesteps: list[float] = []
@@ -137,6 +143,8 @@ def _generate_dancegrpo_sde_z0_predictions(
         timesteps.append(timestep_val)
 
         noise = torch.randn(latent.shape, device=device, dtype=torch.float32, generator=generator)
+        if freeze_first_frame:
+            noise[:, :, 0:1] = 0
         prev_mean, noise_scale = model._sde_transition_mean(
             sample=latent,
             model_output=model_output,
@@ -146,6 +154,8 @@ def _generate_dancegrpo_sde_z0_predictions(
             sde_noise_scale=sde_noise_scale,
         )
         latent = (prev_mean + noise.to(torch.float32) * noise_scale).to(latent.dtype)
+        if freeze_first_frame:
+            latent[:, :, 0:1] = cond_first_frame
 
     return {
         "z0_predictions": z0_predictions,
