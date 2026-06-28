@@ -1324,9 +1324,7 @@ class WanI2VForTraining:
             # Predicted clean latent z0 = x_t - sigma * v (post-CFG, before stepping).
             # Same quantity the step renderer decodes for per-step previews.
             if return_pred_x0:
-                all_pred_x0.append(
-                    (latent.to(torch.float32) - sigma * model_output.to(torch.float32)).detach().cpu()
-                )
+                all_pred_x0.append((latent.to(torch.float32) - sigma * model_output.to(torch.float32)).detach().cpu())
 
             # SDE step
             if sde_formula == "dancegrpo":
