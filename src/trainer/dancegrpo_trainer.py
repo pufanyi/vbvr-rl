@@ -89,6 +89,37 @@ def _slice_meta(meta: dict[str, Any], index: int) -> dict[str, Any]:
     return sliced
 
 
+def _batch_prompt_size(batch: dict[str, Any]) -> int:
+    if "prompt_embeds" in batch:
+        return int(batch["prompt_embeds"].shape[0])
+    if "condition" in batch:
+        return int(batch["condition"].shape[0])
+    if "prompt" in batch:
+        return len(batch["prompt"])
+    if "image" in batch:
+        return int(batch["image"].shape[0])
+    if "videos" in batch and batch["videos"]:
+        return int(batch["videos"][0].shape[0])
+    raise KeyError("Could not infer prompt batch size from batch")
+
+
+def _slice_prompt_batch(batch: dict[str, Any], index: int, batch_size: int) -> dict[str, Any]:
+    sliced: dict[str, Any] = {}
+    for key, value in batch.items():
+        if isinstance(value, torch.Tensor):
+            sliced[key] = value[index : index + 1]
+        elif isinstance(value, list):
+            if key in {"videos", "video_latents"} and value and all(torch.is_tensor(item) for item in value):
+                sliced[key] = [item[index : index + 1] for item in value]
+            elif len(value) == batch_size:
+                sliced[key] = value[index : index + 1]
+            else:
+                sliced[key] = value
+        else:
+            sliced[key] = value
+    return sliced
+
+
 class DanceGRPOTrainer(BaseGRPOTrainer):
     """Paper-inspired GRPO variant with shared group noise and timestep selection."""
 
@@ -1909,8 +1940,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
         step_start = time.monotonic()
 
-        prompt_embeds_all, gt_video_latents_all, condition_all, meta_all = self._encode_batch_inputs(batch)
-        prompt_batch_size = int(gt_video_latents_all.shape[0])
+        prompt_batch_size = _batch_prompt_size(batch)
         prompt_idx, prompt_rank, prompt_world_size, group_indices = _shared_prompt_assignment(
             self.rank,
             self.world_size,
@@ -1945,10 +1975,19 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             selected_t_idxs,
         )
 
-        prompt_embeds = prompt_embeds_all[prompt_idx : prompt_idx + 1]
-        gt_video_latents = gt_video_latents_all[prompt_idx : prompt_idx + 1]
-        condition = condition_all[prompt_idx : prompt_idx + 1]
-        meta = _slice_meta(meta_all, prompt_idx)
+        encode_start = time.monotonic()
+        prompt_embeds, gt_video_latents, condition, meta = self._encode_batch_inputs(
+            _slice_prompt_batch(batch, prompt_idx, prompt_batch_size)
+        )
+        debug_sync()
+        self._split_debug_log(
+            "shared_prompt_encode_done rank={} step={} prompt={} batch={} seconds={:.2f}",
+            self.global_rank,
+            int(self.train_state.step),
+            prompt_idx,
+            prompt_batch_size,
+            time.monotonic() - encode_start,
+        )
 
         for m in [self.model.transformer, self.model.transformer_2]:
             if m is not None:

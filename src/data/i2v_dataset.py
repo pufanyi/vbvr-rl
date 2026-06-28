@@ -30,7 +30,9 @@ import random
 import sys
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import imageio.v3 as iio
 import numpy as np
@@ -65,6 +67,19 @@ class _ItemConfig(BaseModel):
     fixed_height: int | None = None
     fixed_width: int | None = None
     fps: int
+
+
+@dataclass(frozen=True)
+class _VBVRProSample:
+    task_name: str
+    sample_id: str
+    sample_index: int
+    sample_dir: Path
+    video_path: Path
+    image_path: Path
+    final_frame_path: Path | None
+    metadata_path: Path
+    prompt: str | None = None
 
 
 def compute_hw(max_area: int, aspect_ratio: float) -> tuple[int, int]:
@@ -137,27 +152,11 @@ class I2VDataset(Dataset):
         else:
             raise ValueError(f"Config JSON must be a dict or list of dicts: {config_path}")
 
-        self._tables: list[pq.ParquetFile] = []
-        self._roots: list[Path] = []
-        self._configs: list[_ItemConfig] = []
+        self._sources: list[dict[str, Any]] = []
         self._cumulative: list[int] = []
 
         total = 0
         for entry in entries:
-            data_path = Path(entry["data_path"])
-            if not data_path.is_absolute():
-                data_path = parent_dir / data_path
-
-            table = pq.read_table(data_path)
-            n = table.num_rows
-
-            if "root" in entry:
-                root = Path(entry["root"])
-                if not root.is_absolute():
-                    root = parent_dir / root
-            else:
-                root = data_path.parent
-
             cfg = _ItemConfig(
                 num_frames=num_frames if num_frames is not None else entry.get("num_frames", 81),
                 max_area=max_area if max_area is not None else entry.get("max_area", 480 * 832),
@@ -166,13 +165,34 @@ class I2VDataset(Dataset):
                 fps=fps if fps is not None else entry.get("fps", 16),
             )
 
-            self._tables.append(table)
-            self._roots.append(root)
-            self._configs.append(cfg)
+            fmt = str(entry.get("format", entry.get("type", "parquet"))).lower().replace("-", "_")
+            if fmt == "parquet":
+                data_path = Path(entry["data_path"])
+                if not data_path.is_absolute():
+                    data_path = parent_dir / data_path
+
+                table = pq.read_table(data_path)
+                n = table.num_rows
+
+                if "root" in entry:
+                    root = Path(entry["root"])
+                    if not root.is_absolute():
+                        root = parent_dir / root
+                else:
+                    root = data_path.parent
+
+                self._sources.append({"format": "parquet", "table": table, "root": root, "cfg": cfg})
+                logger.info("Loaded %d rows from %s (root=%s)", n, data_path, root)
+            elif fmt == "vbvr_pro":
+                samples = self._load_vbvr_pro_manifest(entry, parent_dir)
+                n = len(samples)
+                self._sources.append({"format": "vbvr_pro", "samples": samples, "cfg": cfg})
+                logger.info("Loaded %d VBVR-Pro %s samples", n, entry.get("split", "train"))
+            else:
+                raise ValueError(f"Unsupported I2V dataset entry format: {fmt!r}")
+
             total += n
             self._cumulative.append(total)
-
-            logger.info("Loaded %d rows from %s (root=%s)", n, data_path, root)
 
         self._len = total
         self._index_map: np.ndarray | None = None
@@ -225,6 +245,154 @@ class I2VDataset(Dataset):
         image = table.column("image")[row].as_py() if "image" in cols else None
 
         return video_paths, prompt, image
+
+    @staticmethod
+    def _resolve_config_path(path: str | os.PathLike[str], parent_dir: Path) -> Path:
+        resolved = Path(path)
+        if not resolved.is_absolute():
+            resolved = parent_dir / resolved
+        return resolved
+
+    @classmethod
+    def _load_vbvr_pro_manifest(cls, entry: dict, parent_dir: Path) -> list[_VBVRProSample]:
+        manifest_path = cls._resolve_config_path(entry["split_manifest"], parent_dir)
+        split = str(entry.get("split", "train"))
+        records = json.loads(manifest_path.read_text())
+        if not isinstance(records, list):
+            raise ValueError(f"VBVR-Pro split manifest must be a list: {manifest_path}")
+
+        roots_raw = entry.get("data_roots")
+        if roots_raw is None:
+            root = entry.get("root")
+            roots_raw = [root] if root is not None else []
+        data_roots = [cls._resolve_config_path(root, parent_dir) for root in roots_raw]
+        allowed_task_names = cls._load_allowed_task_names(entry, parent_dir)
+
+        skip_missing = bool(entry.get("skip_missing", False))
+        check_files = bool(entry.get("check_files", True))
+        samples: list[_VBVRProSample] = []
+        missing: list[str] = []
+        limit_per_task = entry.get("limit_per_task")
+        for record in records:
+            if split not in record:
+                raise ValueError(f"VBVR-Pro record for {record.get('task')} has no split {split!r}")
+            task_name = str(record.get("task") or Path(str(record["source"])).parent.name)
+            if allowed_task_names is not None and task_name not in allowed_task_names:
+                continue
+            source = Path(record["source"])
+            rel_source = cls._relative_vbvr_pro_source(source, data_roots)
+            sample_ids = list(record[split])
+            if limit_per_task is not None:
+                sample_ids = sample_ids[: int(limit_per_task)]
+
+            source_dir: Path | None = None
+            if not check_files:
+                source_candidates = [root / rel_source for root in data_roots]
+                source_candidates.append(source)
+                source_dir = next((path for path in source_candidates if path.exists()), source_candidates[0])
+
+            for sample_index, sample_id in enumerate(sample_ids):
+                if source_dir is None:
+                    candidates = [root / rel_source / sample_id for root in data_roots]
+                    candidates.append(source / sample_id)
+                    sample_dir = next((path for path in candidates if path.exists()), None)
+                    if sample_dir is None:
+                        missing.append(str(candidates[0] if candidates else source / sample_id))
+                        continue
+                else:
+                    sample_dir = source_dir / str(sample_id)
+                try:
+                    samples.append(
+                        cls._build_vbvr_pro_sample(
+                            task_name,
+                            str(sample_id),
+                            sample_index,
+                            sample_dir,
+                            check_files=check_files,
+                        )
+                    )
+                except FileNotFoundError:
+                    if not skip_missing:
+                        raise
+                    missing.append(str(sample_dir))
+
+        if missing and not skip_missing:
+            preview = ", ".join(missing[:5])
+            more = f" (+{len(missing) - 5} more)" if len(missing) > 5 else ""
+            raise FileNotFoundError(f"Missing VBVR-Pro samples for split {split!r}: {preview}{more}")
+        if missing:
+            logger.warning("Skipped %d missing VBVR-Pro samples for split %s", len(missing), split)
+        if not samples:
+            raise ValueError(f"No VBVR-Pro samples loaded from {manifest_path} split={split!r}")
+        return samples
+
+    @classmethod
+    def _load_allowed_task_names(cls, entry: dict, parent_dir: Path) -> frozenset[str] | None:
+        allowed = entry.get("allowed_task_names")
+        allowed_from_evalkit = entry.get("allowed_task_names_from_evalkit")
+        if allowed is None and allowed_from_evalkit is None:
+            return None
+        task_names = set(str(name) for name in (allowed or []))
+        if allowed_from_evalkit is not None:
+            evalkit_path = cls._resolve_config_path(allowed_from_evalkit, parent_dir)
+            if str(evalkit_path) not in sys.path:
+                sys.path.insert(0, str(evalkit_path))
+            from vbvr_bench.evaluators import TASK_EVALUATOR_MAP
+
+            task_names.update(str(name) for name in TASK_EVALUATOR_MAP)
+        return frozenset(task_names)
+
+    @staticmethod
+    def _relative_vbvr_pro_source(source: Path, data_roots: list[Path]) -> Path:
+        for root in data_roots:
+            try:
+                return source.relative_to(root)
+            except ValueError:
+                pass
+        for marker in ("VBVR-Pro", "VBVR-Pro_revise"):
+            if marker in source.parts:
+                return Path(*source.parts[source.parts.index(marker) + 1 :])
+        return Path(source.name)
+
+    @classmethod
+    def _build_vbvr_pro_sample(
+        cls,
+        task_name: str,
+        sample_id: str,
+        sample_index: int,
+        sample_dir: Path,
+        *,
+        check_files: bool,
+    ) -> _VBVRProSample:
+        video_path = sample_dir / "video" / "ground_truth.mp4"
+        image_path = sample_dir / "first_frame.png"
+        final_frame_path = sample_dir / "video" / "final_frame.png"
+        metadata_path = sample_dir / "metadata.json"
+        if check_files:
+            for required in (video_path, image_path, metadata_path):
+                if not required.exists():
+                    raise FileNotFoundError(f"Missing VBVR-Pro sample file: {required}")
+        return _VBVRProSample(
+            task_name=task_name,
+            sample_id=sample_id,
+            sample_index=sample_index,
+            sample_dir=sample_dir,
+            video_path=video_path,
+            image_path=image_path,
+            final_frame_path=final_frame_path if not check_files or final_frame_path.exists() else None,
+            metadata_path=metadata_path,
+        )
+
+    @staticmethod
+    def _read_vbvr_pro_prompt(sample_dir: Path, metadata_path: Path) -> str:
+        for prompt_path in (sample_dir / "video" / "prompt.txt", sample_dir / "image" / "prompt.txt"):
+            if prompt_path.exists():
+                return prompt_path.read_text(encoding="utf-8").strip()
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        render = metadata.get("generic_declarative_render")
+        if isinstance(render, dict) and isinstance(render.get("prompt"), str):
+            return render["prompt"]
+        return ""
 
     # ------------------------------------------------------------------
     # Path / media helpers
@@ -327,17 +495,23 @@ class I2VDataset(Dataset):
         local_rank = os.environ.get("LOCAL_RANK", "?")
         try:
             source_idx = self._source_index(idx)
-            ti, row = self._locate(source_idx)
-            video_paths, prompt, image_path = self._read_row(self._tables[ti], row)
-            root = self._roots[ti]
-            paths = [self._resolve(p, root) for p in video_paths]
-            if image_path is not None:
-                paths.append(self._resolve(image_path, root))
+            si, row = self._locate(source_idx)
+            source = self._sources[si]
+            if source["format"] == "parquet":
+                video_paths, prompt, image_path = self._read_row(source["table"], row)
+                root = source["root"]
+                paths = [self._resolve(p, root) for p in video_paths]
+                if image_path is not None:
+                    paths.append(self._resolve(image_path, root))
+            else:
+                sample = source["samples"][row]
+                prompt = sample.prompt or self._read_vbvr_pro_prompt(sample.sample_dir, sample.metadata_path)
+                paths = [str(sample.video_path), str(sample.image_path), str(sample.metadata_path)]
             if len(paths) > 4:
                 paths = paths[:4] + [f"... +{len(paths) - 4} more"]
             prompt = prompt.replace("\n", " ")[:160]
             detail = (
-                f"logical_idx={idx} source_idx={source_idx} table={ti} row={row} "
+                f"logical_idx={idx} source_idx={source_idx} source={si} row={row} "
                 f"attempt={attempt}/{self._MAX_RETRIES + 1} paths={paths!r} prompt={prompt!r}"
             )
         except Exception as exc:  # noqa: BLE001
@@ -387,22 +561,31 @@ class I2VDataset(Dataset):
 
     def _prefetch_remote_media_for_index(self, idx: int) -> None:
         source_idx = self._source_index(idx)
-        ti, row = self._locate(source_idx)
-        video_paths, _prompt, image_path = self._read_row(self._tables[ti], row)
-        root = self._roots[ti]
-        paths = [self._resolve(p, root) for p in video_paths]
-        if image_path is not None:
-            paths.append(self._resolve(image_path, root))
+        si, row = self._locate(source_idx)
+        source = self._sources[si]
+        if source["format"] == "parquet":
+            video_paths, _prompt, image_path = self._read_row(source["table"], row)
+            root = source["root"]
+            paths = [self._resolve(p, root) for p in video_paths]
+            if image_path is not None:
+                paths.append(self._resolve(image_path, root))
+        else:
+            sample = source["samples"][row]
+            paths = [str(sample.video_path), str(sample.image_path)]
         for path in paths:
             if is_remote_path(path):
                 localize_media_path(path)
 
     def _load_item(self, idx):
         source_idx = self._source_index(idx)
-        ti, row = self._locate(source_idx)
-        video_paths, prompt, image_path = self._read_row(self._tables[ti], row)
-        cfg = self._configs[ti]
-        root = self._roots[ti]
+        si, row = self._locate(source_idx)
+        source = self._sources[si]
+        if source["format"] == "vbvr_pro":
+            return self._load_vbvr_pro_item(source_idx, source["samples"][row], source["cfg"])
+
+        video_paths, prompt, image_path = self._read_row(source["table"], row)
+        cfg = source["cfg"]
+        root = source["root"]
 
         # Use the last video (final target) to determine resolution
         final_video_path = self._resolve(video_paths[-1], root)
@@ -422,4 +605,25 @@ class I2VDataset(Dataset):
             "videos": videos,
             "image": image,
             "prompt": prompt,
+        }
+
+    def _load_vbvr_pro_item(self, source_idx: int, sample: _VBVRProSample, cfg: _ItemConfig):
+        height, width = self._get_video_hw(str(sample.video_path), cfg)
+        video = self._load_video(str(sample.video_path), height, width, cfg)
+        image = self._load_image(str(sample.image_path), height, width)
+        prompt = sample.prompt or self._read_vbvr_pro_prompt(sample.sample_dir, sample.metadata_path)
+        return {
+            "index": source_idx,
+            "videos": [video],
+            "image": image,
+            "prompt": prompt,
+            "sample_task_name": sample.task_name,
+            "sample_tar": f"{sample.task_name}.tar",
+            "sample_index_in_tar": sample.sample_index,
+            "sample_id": sample.sample_id,
+            "sample_gt_video_path": str(sample.video_path),
+            "sample_gt_first_frame": str(sample.image_path),
+            "sample_gt_final_frame": str(sample.final_frame_path or ""),
+            "sample_metadata_path": str(sample.metadata_path),
+            "sample_source_dir": str(sample.sample_dir),
         }

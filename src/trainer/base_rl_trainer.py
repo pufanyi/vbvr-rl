@@ -694,7 +694,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
             if cfg.grpo_reward_fn == "vbvr_rule":
                 from src.trainer.rewards.vbvr_rule import evalkit_supported_task_names
 
-                allowed_task_names = evalkit_supported_task_names()
+                allowed_task_names = evalkit_supported_task_names(cfg.vbvr_reward_evalkit_dir)
                 if self.rank == 0:
                     logger.info(
                         "Filtering VBVR RL dataset to {} EvalKit-supported tasks",

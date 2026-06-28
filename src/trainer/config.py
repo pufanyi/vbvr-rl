@@ -344,12 +344,21 @@ class RLConfig(TrainConfig):
     # ------------------------------------------------------------------
     # VBVR rule reward (grpo_reward_fn: "vbvr_rule")
     # ------------------------------------------------------------------
-    # Decode generated/GT latents to temporary mp4 files and score with the
+    # Decode generated latents to temporary mp4 files and score with the
     # vendored VBVR EvalKit task-specific rule evaluator.
+    vbvr_reward_evalkit_dir: str | None = None
     vbvr_reward_device: str = "cpu"
     vbvr_reward_fps: int = 16
     vbvr_reward_decode_batch_size: int = 1
+    vbvr_reward_cpu_workers: int = 1
     vbvr_reward_task_specific_only: bool = True
     vbvr_reward_tmp_dir: str = "storage/tmp/vbvr_rule_reward"
     vbvr_reward_keep_tmp: bool = False
     vbvr_reward_unsupported_score: float = 0.0
+
+    @field_validator("vbvr_reward_decode_batch_size", "vbvr_reward_cpu_workers")
+    @classmethod
+    def _validate_positive_vbvr_reward_fields(cls, v: int):
+        if v <= 0:
+            raise ValueError(f"VBVR reward positive integer fields must be > 0, got {v}")
+        return v
