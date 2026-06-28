@@ -5,7 +5,7 @@ model_path: storage/models/Wan2.2-TI2V-5B-Diffusers
 latent_webdataset_dir: storage/latents/maze_5b_line_to_ball_v1/webdataset/rl
 dataset_size: 20000
 
-output_dir: storage/checkpoints/dancegrpo_maze_5b_mse_cps
+output_dir: storage/checkpoints/dancegrpo_maze_5b_tracker_cps
 resume_from: storage/checkpoints/cos_maze_5b_line_to_ball_100k_tau_0.9/checkpoint-epoch4
 reset_dataloader: true
 auto_resume: true
@@ -56,7 +56,7 @@ grpo_train_sample_batch_size: 4
 grpo_num_sampling_steps: 30
 grpo_clip_range: 1.0e-4
 grpo_kl_coeff: 0
-grpo_reward_fn: neg_loss
+grpo_reward_fn: maze_tracker
 # Coefficients-Preserving Sampling (CPS) SDE transition formula.
 grpo_sde_formula: flowcps
 grpo_sde_noise_scale: 0.3
@@ -75,4 +75,4 @@ maze_tracker_reward_w_goal: 0.25
 maze_tracker_reward_w_progress: 0.15
 
 wandb_project: wan-dancegrpo-maze-5b-tracker
-wandb_run_name: dancegrpo_maze_5b_line_to_ball_rl_mse_shared_prompt_cps_2
+wandb_run_name: dancegrpo_maze_5b_line_to_ball_rl_tracker_shared_prompt_cps
