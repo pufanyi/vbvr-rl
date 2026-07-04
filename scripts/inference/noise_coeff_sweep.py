@@ -270,7 +270,10 @@ def main(argv: list[str] | None = None) -> int:
     configs = parse_configs(args.configs)
     device = torch.device(args.device)
 
-    print(f"[{args.ckpt_name}] device={args.device} rounds={args.rounds} samples={sample_indices} configs={configs}", flush=True)
+    print(
+        f"[{args.ckpt_name}] device={args.device} rounds={args.rounds} samples={sample_indices} configs={configs}",
+        flush=True,
+    )
     t_load = time.time()
     model = build_model(make_cfg(args, sample_indices[0], "ode", None, args.seed), need_text_encoder=False)
     print(f"[{args.ckpt_name}] model+checkpoint loaded in {time.time() - t_load:.1f}s", flush=True)

@@ -93,7 +93,9 @@ def main() -> int:
                 img = Image.fromarray(cell[-1]).resize((thumb, th), Image.Resampling.BILINEAR)
                 sheet.paste(img, (x, y))
         sheet.save(out / "all_samples.jpg", quality=92)
-        print(f"wrote {out/'all_samples.jpg'} ({len(overview_rows)} samples) + {len(overview_rows)} side-by-side mp4s")
+        print(
+            f"wrote {out / 'all_samples.jpg'} ({len(overview_rows)} samples) + {len(overview_rows)} side-by-side mp4s"
+        )
     return 0
 
 
