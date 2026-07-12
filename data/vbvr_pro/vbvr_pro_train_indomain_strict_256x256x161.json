@@ -1,0 +1,23 @@
+[
+  {
+    "format": "vbvr_pro",
+    "split_manifest": "/mnt/aigc/xujunxiang/Code/VBVR-Pro/scripts/split_manifest.json",
+    "data_roots": [
+      "/mnt/umm/users/xujunxiang/VBVR-Pro_revise",
+      "/mnt/umm/users/xujunxiang/VBVR-Pro"
+    ],
+    "split": "train",
+    "allowed_task_splits": [
+      "In-Domain_50"
+    ],
+    "exclude_sample_ids_from_splits": [
+      "bench"
+    ],
+    "allowed_task_names_from_evalkit": "/mnt/aigc/xujunxiang/Code/Share/vbvr-evalkit-interleave",
+    "check_files": false,
+    "num_frames": 161,
+    "height": 256,
+    "width": 256,
+    "fps": 16
+  }
+]

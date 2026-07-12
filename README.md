@@ -138,5 +138,6 @@ Use `--checkpoint <checkpoint-dir> --use_ema` with `src.cli.eval_i2v` to generat
 - [`docs/training.md`](docs/training.md): SFT, COS, correction, and DanceGRPO behavior.
 - [`docs/data.md`](docs/data.md): raw and latent dataset contracts.
 - [`docs/evaluation.md`](docs/evaluation.md): generation, VBVR, VLM/rule scoring.
+- [`docs/vbvr_pro_eval.md`](docs/vbvr_pro_eval.md): VBVR-Pro main_v2 eight-GPU evaluation.
 - [`docs/checkpoints.md`](docs/checkpoints.md): DCP, resume/init, LoRA, EMA.
 - [`docs/improvements/`](docs/improvements/README.md): algorithm-to-engineering improvement plan.

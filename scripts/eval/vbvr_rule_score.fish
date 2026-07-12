@@ -71,7 +71,7 @@ set -q SOURCE_SPLIT[1]; or set SOURCE_SPLIT $SPLIT
 
 # ── 1. Build eval JSON if generation is needed ───────────────────────
 if not test -f $EVAL_JSON
-    set -l build_args --gt_base $GT_BASE --output $EVAL_JSON --split $SPLIT
+    set -l build_args --gt_base $GT_BASE --output $EVAL_JSON --layout split --split $SPLIT
     if test (count $TASKS) -gt 0
         set -a build_args --tasks $TASKS
     end

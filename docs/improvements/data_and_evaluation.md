@@ -42,14 +42,12 @@ Recommended work:
 
 ## 4. Improve VBVR Evaluation Reproducibility
 
-`eval_i2v` uses a rank-local generator seeded once, then skips existing files. This makes resumed generation sensitive to which files already exist.[^eval-i2v]
+`eval_i2v` now derives a deterministic seed from the global sample index and atomically publishes only videos that pass frame-count, resolution, and FPS validation. Resumed generation is therefore stable across skipped files and data-parallel world sizes.[^eval-i2v]
 
-Recommended work:
+Remaining work:
 
-- Derive a deterministic seed per sample from `(global_seed, sample_id)`.
 - Write a sidecar JSON next to every generated video with prompt, image path, checkpoint, seed, inference steps, guidance scale, and resolution.
-- Add a `--force` option and a `--dry_run` option.
-- Add a manifest at the output root so scoring can verify generation completeness.
+- Add a `--dry_run` option.
 
 ## 5. Calibrate VLM Scoring
 

@@ -267,6 +267,17 @@ class I2VDataset(Dataset):
             roots_raw = [root] if root is not None else []
         data_roots = [cls._resolve_config_path(root, parent_dir) for root in roots_raw]
         allowed_task_names = cls._load_allowed_task_names(entry, parent_dir)
+        allowed_task_splits_raw = entry.get("allowed_task_splits")
+        if isinstance(allowed_task_splits_raw, str):
+            allowed_task_splits = {allowed_task_splits_raw}
+        elif allowed_task_splits_raw is None:
+            allowed_task_splits = None
+        else:
+            allowed_task_splits = {str(name) for name in allowed_task_splits_raw}
+        exclude_sample_ids_from = entry.get("exclude_sample_ids_from_splits", [])
+        if isinstance(exclude_sample_ids_from, str):
+            exclude_sample_ids_from = [exclude_sample_ids_from]
+        exclude_sample_ids_from = [str(name) for name in exclude_sample_ids_from]
 
         skip_missing = bool(entry.get("skip_missing", False))
         check_files = bool(entry.get("check_files", True))
@@ -277,11 +288,23 @@ class I2VDataset(Dataset):
             if split not in record:
                 raise ValueError(f"VBVR-Pro record for {record.get('task')} has no split {split!r}")
             task_name = str(record.get("task") or Path(str(record["source"])).parent.name)
+            task_split = str(record.get("split", ""))
+            if allowed_task_splits is not None and task_split not in allowed_task_splits:
+                continue
             if allowed_task_names is not None and task_name not in allowed_task_names:
                 continue
             source = Path(record["source"])
             rel_source = cls._relative_vbvr_pro_source(source, data_roots)
             sample_ids = list(record[split])
+            excluded_sample_ids: set[str] = set()
+            for excluded_split in exclude_sample_ids_from:
+                if excluded_split not in record:
+                    raise ValueError(
+                        f"VBVR-Pro record for {task_name} has no exclusion split {excluded_split!r}"
+                    )
+                excluded_sample_ids.update(str(sample_id) for sample_id in record[excluded_split])
+            if excluded_sample_ids:
+                sample_ids = [sample_id for sample_id in sample_ids if str(sample_id) not in excluded_sample_ids]
             if limit_per_task is not None:
                 sample_ids = sample_ids[: int(limit_per_task)]
 

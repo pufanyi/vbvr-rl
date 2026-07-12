@@ -23,7 +23,7 @@ Input JSON format:
 ]
 ```
 
-The generator computes output resolution from image aspect ratio and `max_area`, rounded to the pipeline's VAE/patch multiple. Multi-GPU mode partitions records round-robin by rank. Model loading can be parallel or rank-serialized to reduce host RAM spikes.[^eval-i2v]
+The generator computes output resolution from image aspect ratio and `max_area`, rounded to the pipeline's VAE/patch multiple, or accepts an explicit `--height` and `--width`. Multi-GPU mode partitions records round-robin by rank. Seeds are derived from the global sample index, and videos are validated for resolution, frame count, and FPS before an atomic rename, so changing rank count or resuming around existing outputs does not change other samples. Fixed-resolution runs can use `--validate_only` to verify the exact expected path set without initializing CUDA or loading a model. Model loading can be parallel or rank-serialized to reduce host RAM spikes.[^eval-i2v]
 
 Example:
 
@@ -84,7 +84,9 @@ Example:
 The rule path uses:
 
 - `src.eval.vbvr_restructure_to_evalkit` to convert generation output into the layout expected by the third-party kit;
-- `src.eval.vbvr_run_evaluation_parallel` for parallel rule scoring.[^vbvr-restructure][^vbvr-rule]
+- `src.eval.vbvr_run_evaluation_parallel` for parallel rule scoring, with `--evalkit_dir` selecting the exact scorer checkout and `--expected_videos` enforcing completeness.[^vbvr-restructure][^vbvr-rule]
+
+The current VBVR-Pro 5B workflow has a dedicated [main_v2 evaluation guide](vbvr_pro_eval.md). It covers the 500-sample manifest contract, eight-GPU native Diffusers generation, frame-preserving resize/retime preparation, and latest rule scorer.
 
 ## Output Files
 
@@ -106,7 +108,6 @@ The VLM runner writes:
 - The VLM judge is not calibrated against a human-labeled validation set.
 - The prompt in `_JUDGE_SYSTEM` asks for a short reasoning string, but no consistency or self-checking pass is performed.
 - The rule path and VLM path are separate output formats until the script normalizes them.
-- Generation uses a single global seed per rank; per-sample deterministic seeds would make skipped/resumed generation easier to reproduce.
 - VLM scoring caches JSONL shards, but malformed/torn lines are only skipped, not repaired.
 
 [^eval-i2v]: [`src/cli/eval_i2v.py`](../src/cli/eval_i2v.py)
