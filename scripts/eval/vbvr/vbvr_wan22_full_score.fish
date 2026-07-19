@@ -10,9 +10,9 @@
 # Per-model results land in $MODEL_OUT/score/.
 #
 # Run from repo root:
-#   fish scripts/eval/vbvr_wan22_full_score.fish
+#   fish scripts/eval/vbvr/vbvr_wan22_full_score.fish
 
-source (dirname (status filename))/../lib/env.fish
+source (dirname (status filename))/../../lib/env.fish
 
 # ── Configuration ────────────────────────────────────────────────────
 set MODEL_OUTPUTS \

@@ -1055,16 +1055,31 @@ class WanI2VForTraining:
         model_output: torch.Tensor,
         sigma: float,
         sigma_prev: float,
-        noise_level: float,
-    ) -> tuple[torch.Tensor, float]:
+        noise_level: float | torch.Tensor,
+    ) -> tuple[torch.Tensor, float | torch.Tensor]:
         """Coefficients-Preserving Sampling transition mean and noise std."""
-        if not (0.0 <= noise_level <= 1.0):
-            raise ValueError(f"Flow-CPS noise_level must be in [0, 1], got {noise_level}")
-
         sample_fp32 = sample.to(torch.float32)
         model_output_fp32 = model_output.to(torch.float32)
-        std_dev_t = sigma_prev * math.sin(noise_level * math.pi / 2.0)
-        coeff = math.sqrt(max(sigma_prev**2 - std_dev_t**2, 0.0))
+
+        if torch.is_tensor(noise_level):
+            levels = noise_level.to(device=sample.device, dtype=torch.float32)
+            if levels.ndim == 0:
+                levels = levels.expand(sample.shape[0])
+            if levels.ndim != 1 or levels.shape[0] != sample.shape[0]:
+                raise ValueError(
+                    "Batched Flow-CPS noise_level must have shape (B,), "
+                    f"got {tuple(levels.shape)} for batch size {sample.shape[0]}"
+                )
+            if not bool(torch.isfinite(levels).all()) or bool(((levels < 0.0) | (levels > 1.0)).any()):
+                raise ValueError("Flow-CPS noise_level tensor values must be finite and in [0, 1]")
+            levels = levels.reshape(sample.shape[0], *([1] * (sample.ndim - 1)))
+            std_dev_t = sigma_prev * torch.sin(levels * (math.pi / 2.0))
+            coeff = torch.sqrt(torch.clamp(sigma_prev**2 - std_dev_t**2, min=0.0))
+        else:
+            if not (0.0 <= noise_level <= 1.0):
+                raise ValueError(f"Flow-CPS noise_level must be in [0, 1], got {noise_level}")
+            std_dev_t = sigma_prev * math.sin(noise_level * math.pi / 2.0)
+            coeff = math.sqrt(max(sigma_prev**2 - std_dev_t**2, 0.0))
 
         pred_original_sample = sample_fp32 - sigma * model_output_fp32
         noise_estimate = sample_fp32 + model_output_fp32 * (1.0 - sigma)
@@ -1114,10 +1129,10 @@ class WanI2VForTraining:
         sigma_prev: float,
         *,
         sde_formula: str,
-        sde_noise_scale: float = 0.7,
+        sde_noise_scale: float | torch.Tensor = 0.7,
         sigma_min: float = 0.0,
         sigma_max: float = 1.0,
-    ) -> tuple[torch.Tensor, float]:
+    ) -> tuple[torch.Tensor, float | torch.Tensor]:
         if sde_formula == "flowgrpo":
             return WanI2VForTraining._flowgrpo_transition_mean(
                 sample=sample,
@@ -1176,7 +1191,7 @@ class WanI2VForTraining:
         model_output: torch.Tensor,
         sigma: float,
         sigma_prev: float,
-        noise_level: float,
+        noise_level: float | torch.Tensor,
         noise: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Single Flow-CPS step with the official log-probability surrogate."""
@@ -1201,7 +1216,7 @@ class WanI2VForTraining:
         condition: torch.Tensor,
         prompt_embeds: torch.Tensor,
         num_sampling_steps: int = 10,
-        sde_noise_scale: float = 0.7,
+        sde_noise_scale: float | torch.Tensor = 0.7,
         sigma_min: float = 0.0,
         sigma_max: float = 1.0,
         cfg_scale: float = 1.0,
@@ -1219,7 +1234,8 @@ class WanI2VForTraining:
             condition: condition tensor from prepare_condition / latent precompute.
             prompt_embeds: (B, 512, text_dim) text embeddings.
             num_sampling_steps: Number of denoising steps T.
-            sde_noise_scale: 'a' parameter for SDE noise.
+            sde_noise_scale: SDE noise parameter. Flow-CPS additionally accepts
+                a tensor of shape ``(B,)`` for per-sample coefficients.
             sigma_min: Noise floor.
             sigma_max: Noise ceiling.
             cfg_scale: Classifier-free guidance scale (1.0 = no guidance).
@@ -1389,7 +1405,7 @@ class WanI2VForTraining:
         prompt_embeds: torch.Tensor,
         sigma: float,
         sigma_prev: float,
-        sde_noise_scale: float = 0.7,
+        sde_noise_scale: float | torch.Tensor = 0.7,
         sigma_min: float = 0.0,
         sigma_max: float = 1.0,
         sde_formula: str = "flowgrpo",

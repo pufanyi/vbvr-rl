@@ -3,11 +3,11 @@
 # One-command VBVR lmms-eval for a DCP checkpoint.
 #
 # Examples:
-#   fish scripts/eval/lmms_eval_checkpoint.fish storage/checkpoints/sft_vbvr_fixed_1e-6/checkpoint-4000
-#   CHECKPOINT=storage/checkpoints/sft_vbvr_fixed_1e-6/checkpoint-4000 DATA_PARALLEL=4 fish scripts/eval/lmms_eval_checkpoint.fish
-#   DRY_RUN=1 fish scripts/eval/lmms_eval_checkpoint.fish storage/checkpoints/sft_vbvr_fixed_1e-6/checkpoint-4000
+#   fish scripts/eval/lmms/lmms_eval_checkpoint.fish storage/checkpoints/sft_vbvr_fixed_1e-6/checkpoint-4000
+#   CHECKPOINT=storage/checkpoints/sft_vbvr_fixed_1e-6/checkpoint-4000 DATA_PARALLEL=4 fish scripts/eval/lmms/lmms_eval_checkpoint.fish
+#   DRY_RUN=1 fish scripts/eval/lmms/lmms_eval_checkpoint.fish storage/checkpoints/sft_vbvr_fixed_1e-6/checkpoint-4000
 
-source (dirname (status filename))/../lib/env.fish
+source (dirname (status filename))/../../lib/env.fish
 
 if test (count $argv) -gt 0
     set CHECKPOINT $argv[1]
@@ -19,7 +19,7 @@ if not set -q CHECKPOINT[1]
 end
 if not set -q CHECKPOINT[1]
     echo "[error] CHECKPOINT is required"
-    echo "usage: fish scripts/eval/lmms_eval_checkpoint.fish <dcp-checkpoint-dir>"
+    echo "usage: fish scripts/eval/lmms/lmms_eval_checkpoint.fish <dcp-checkpoint-dir>"
     exit 1
 end
 
@@ -43,7 +43,7 @@ set -q MERGE_LORA[1]; or set MERGE_LORA 1
 set -q SAFE_SERIALIZATION[1]; or set SAFE_SERIALIZATION 1
 
 # Optional output roots. OUTPUT_DIR is preserved as the lmms-eval output dir for
-# compatibility with scripts/eval/lmms_eval.fish.
+# compatibility with scripts/eval/lmms/lmms_eval.fish.
 if not set -q EVAL_OUTPUT_DIR[1]
     if set -q OUTPUT_DIR[1]
         set EVAL_OUTPUT_DIR $OUTPUT_DIR
@@ -210,7 +210,7 @@ set -l generated_dir $EVAL_OUTPUT_DIR/generated_videos/(basename $MODEL_DIR_FOR_
 echo "[eval] generated videos: $generated_dir"
 
 if test -n "$DRY_RUN"
-    echo "[dry-run] MODEL_DIR=$MODEL_DIR_FOR_EVAL OUTPUT_DIR=$EVAL_OUTPUT_DIR DATA_PARALLEL=$DATA_PARALLEL fish scripts/eval/lmms_eval.fish"
+    echo "[dry-run] MODEL_DIR=$MODEL_DIR_FOR_EVAL OUTPUT_DIR=$EVAL_OUTPUT_DIR DATA_PARALLEL=$DATA_PARALLEL fish scripts/eval/lmms/lmms_eval.fish"
     exit 0
 end
 
@@ -218,4 +218,4 @@ set -gx MODEL_DIR $MODEL_DIR_FOR_EVAL
 set -gx OUTPUT_DIR $EVAL_OUTPUT_DIR
 set -gx DATA_PARALLEL $DATA_PARALLEL
 
-exec fish scripts/eval/lmms_eval.fish
+exec fish scripts/eval/lmms/lmms_eval.fish

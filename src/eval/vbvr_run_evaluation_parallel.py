@@ -18,7 +18,7 @@ Main-v2 also has evaluators that explicitly use ``./easyocr_models``. Workers
 run from ``--evalkit_dir`` so relative annotations resolve correctly; that
 checkout must therefore contain an ``easyocr_models`` directory or symlink.
 
-Usage (called by scripts/eval/vbvr_rule_score.fish):
+Usage (called by scripts/eval/vbvr/vbvr_rule_score.fish):
     .venv/bin/python -m src.eval.vbvr_run_evaluation_parallel \
         --model_path /abs/path/model_out \
         --gt_base    /abs/path/VBVR-Bench \

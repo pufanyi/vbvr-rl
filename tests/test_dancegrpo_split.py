@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from src.models.wan_i2v import WanI2VForTraining
@@ -64,9 +65,82 @@ def test_rl_config_allows_full_actor_sync_without_lora():
 
 
 def test_rl_config_allows_flowcps_sde_formula():
-    cfg = RLConfig(grpo_sde_formula="flowcps")
+    cfg = RLConfig(grpo_sde_formula="flowcps", grpo_cps_noise_scale_range=[0.0, 1.0])
 
     assert cfg.grpo_sde_formula == "flowcps"
+    assert cfg.grpo_cps_noise_scale_range == (0.0, 1.0)
+
+
+@pytest.mark.parametrize(
+    "noise_range",
+    [(-0.1, 0.5), (0.2, 0.2), (0.8, 0.2), (0.0, 1.1)],
+)
+def test_rl_config_rejects_invalid_flowcps_noise_range(noise_range):
+    with pytest.raises(ValueError, match="grpo_cps_noise_scale_range"):
+        RLConfig(grpo_sde_formula="flowcps", grpo_cps_noise_scale_range=noise_range)
+
+
+def test_rl_config_rejects_cps_noise_range_for_other_sde_formulas():
+    with pytest.raises(ValueError, match="requires grpo_sde_formula='flowcps'"):
+        RLConfig(grpo_sde_formula="dancegrpo", grpo_cps_noise_scale_range=(0.0, 1.0))
+
+
+def test_dancegrpo_samples_deterministic_cps_noise_once_per_prompt_group():
+    trainer = DanceGRPOTrainer.__new__(DanceGRPOTrainer)
+    trainer.cfg = SimpleNamespace(
+        grpo_sde_formula="flowcps",
+        grpo_sde_noise_scale=0.7,
+        grpo_cps_noise_scale_range=(0.0, 1.0),
+        seed=42,
+    )
+
+    levels = trainer._sample_group_cps_noise_levels(3, step=11, stream_id=0, device=torch.device("cpu"))
+    repeated = levels.repeat_interleave(4).view(3, 4)
+    same_seed = trainer._sample_group_cps_noise_levels(3, step=11, stream_id=0, device=torch.device("cpu"))
+    other_stream = trainer._sample_group_cps_noise_levels(3, step=11, stream_id=1, device=torch.device("cpu"))
+
+    assert torch.equal(levels, same_seed)
+    assert not torch.equal(levels, other_stream)
+    assert bool(((levels >= 0.0) & (levels < 1.0)).all())
+    assert torch.equal(repeated, levels[:, None].expand(-1, 4))
+    assert torch.unique(levels).numel() == 3
+
+
+def test_dancegrpo_fixed_cps_noise_remains_supported():
+    trainer = DanceGRPOTrainer.__new__(DanceGRPOTrainer)
+    trainer.cfg = SimpleNamespace(
+        grpo_sde_formula="flowcps",
+        grpo_sde_noise_scale=0.7,
+        grpo_cps_noise_scale_range=None,
+        seed=42,
+    )
+
+    levels = trainer._sample_group_cps_noise_levels(3, step=11, stream_id=0, device=torch.device("cpu"))
+
+    assert torch.equal(levels, torch.full((3,), 0.7))
+
+
+def test_split_rollout_coalescing_preserves_per_prompt_cps_noise_levels():
+    trainer = DanceGRPOTrainer.__new__(DanceGRPOTrainer)
+    trainer.cfg = SimpleNamespace(grpo_train_sample_batch_size=2)
+    chunks = []
+    for group in [0, 1]:
+        chunks.append(
+            {
+                "groups": [group],
+                "rewards": torch.zeros(2, 1),
+                "latents": torch.zeros(1, 2, 1),
+                "next_latents": torch.zeros(1, 2, 1),
+                "log_probs": torch.zeros(1, 2),
+                "cps_noise_levels": torch.tensor([0.1, 0.7]),
+            }
+        )
+
+    merged = trainer._coalesce_train_rollout_chunks(chunks, B=2)
+
+    assert len(merged) == 1
+    assert merged[0]["groups"] == [0, 1]
+    assert torch.allclose(merged[0]["cps_noise_levels"], torch.tensor([0.1, 0.1, 0.7, 0.7]))
 
 
 def test_flowcps_transition_matches_coefficients_preserving_formula():
@@ -92,6 +166,52 @@ def test_flowcps_transition_matches_coefficients_preserving_formula():
 
     assert abs(std - expected_std) < 1e-6
     assert torch.allclose(mean, expected_mean)
+
+
+def test_flowcps_transition_supports_per_sample_noise_levels():
+    sample = torch.tensor([0.4, 0.4], dtype=torch.float32).reshape(2, 1, 1, 1, 1)
+    model_output = torch.tensor([0.5, 0.5], dtype=torch.float32).reshape(2, 1, 1, 1, 1)
+    noise_levels = torch.tensor([0.0, 1.0])
+    sigma = 0.6
+    sigma_prev = 0.25
+
+    mean, std = WanI2VForTraining._flowcps_transition_mean(
+        sample=sample,
+        model_output=model_output,
+        sigma=sigma,
+        sigma_prev=sigma_prev,
+        noise_level=noise_levels,
+    )
+
+    expected_std = torch.tensor([0.0, sigma_prev]).reshape(2, 1, 1, 1, 1)
+    x0 = sample - sigma * model_output
+    x1 = sample + model_output * (1.0 - sigma)
+    expected_coeff = torch.tensor([sigma_prev, 0.0]).reshape(2, 1, 1, 1, 1)
+    expected_mean = x0 * (1.0 - sigma_prev) + x1 * expected_coeff
+
+    assert torch.allclose(std, expected_std, atol=1e-6)
+    assert torch.allclose(mean, expected_mean, atol=1e-6)
+
+
+def test_flowcps_step_applies_each_samples_noise_level():
+    model = WanI2VForTraining.__new__(WanI2VForTraining)
+    model.expand_timesteps = False
+    sample = torch.zeros(2, 1, 1, 1, 1)
+    model_output = torch.zeros_like(sample)
+    noise = torch.ones_like(sample)
+
+    prev_sample, mean, log_prob = model._flowcps_sde_step(
+        sample=sample,
+        model_output=model_output,
+        sigma=0.6,
+        sigma_prev=0.25,
+        noise_level=torch.tensor([0.0, 1.0]),
+        noise=noise,
+    )
+
+    assert torch.allclose(mean, torch.zeros_like(mean))
+    assert torch.allclose(prev_sample.flatten(), torch.tensor([0.0, 0.25]), atol=1e-6)
+    assert torch.allclose(log_prob, torch.tensor([0.0, -(0.25**2)]), atol=1e-6)
 
 
 def test_flowcps_log_prob_and_kl_use_official_unscaled_surrogates():

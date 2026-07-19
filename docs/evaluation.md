@@ -75,7 +75,7 @@ Example:
 
 ## Rule-Based VBVR-EvalKit Path
 
-`scripts/eval/vbvr_generate_score.fish` automates a common checkpoint loop:
+`scripts/eval/vbvr/vbvr_generate_score.fish` automates a common checkpoint loop:
 
 1. build an eval JSON if missing;
 2. generate videos with `src.cli.eval_i2v`;
@@ -116,6 +116,6 @@ The VLM runner writes:
 [^vbvr-dataset]: [`src/eval/vbvr/dataset.py`](../src/eval/vbvr/dataset.py)
 [^vbvr-runner]: [`src/eval/vbvr/runner.py`](../src/eval/vbvr/runner.py)
 [^vlm-judge]: [`src/eval/vbvr/judges/vlm.py`](../src/eval/vbvr/judges/vlm.py)
-[^vbvr-script]: [`scripts/eval/vbvr_generate_score.fish`](../scripts/eval/vbvr_generate_score.fish)
+[^vbvr-script]: [`scripts/eval/vbvr/vbvr_generate_score.fish`](../scripts/eval/vbvr/vbvr_generate_score.fish)
 [^vbvr-restructure]: [`src/eval/vbvr_restructure_to_evalkit.py`](../src/eval/vbvr_restructure_to_evalkit.py)
 [^vbvr-rule]: [`src/eval/vbvr_run_evaluation_parallel.py`](../src/eval/vbvr_run_evaluation_parallel.py)

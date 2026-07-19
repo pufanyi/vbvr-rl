@@ -3,7 +3,7 @@
 # Complete VBVR-Pro evaluation for one DanceGRPO checkpoint with Flow-CPS.
 # Set CHECKPOINT_STEP and CPS_NOISE_LEVEL, or use a fixed checkpoint wrapper.
 
-source (dirname (status filename))/../lib/env.fish
+source (dirname (status filename))/../../../lib/env.fish
 
 set -q CHECKPOINT_STEP[1]
 or begin

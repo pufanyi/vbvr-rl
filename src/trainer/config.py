@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 
 class TrainConfig(BaseModel):
@@ -244,6 +244,10 @@ class RLConfig(TrainConfig):
     grpo_kl_coeff: float = 0.004  # beta: KL penalty coefficient against reference policy
     grpo_sde_formula: Literal["flowgrpo", "dancegrpo", "flowcps"] = "dancegrpo"
     grpo_sde_noise_scale: float = 0.3  # DanceGRPO eta / exploration noise level
+    # Flow-CPS only: when set, sample one coefficient uniformly from this range
+    # per prompt/GRPO group. All G rollouts for that prompt share the sampled
+    # value. None preserves the fixed grpo_sde_noise_scale behavior.
+    grpo_cps_noise_scale_range: tuple[float, float] | None = None
     grpo_sde_sigma_min: float = 0.0  # noise floor for SDE std
     grpo_sde_sigma_max: float = 1.0  # noise ceiling for SDE std
     grpo_adv_clip_max: float = 5.0  # clamp advantages to [-max, max]
@@ -265,6 +269,28 @@ class RLConfig(TrainConfig):
         if not (0.0 < v <= 1.0):
             raise ValueError(f"dancegrpo_timestep_selection_ratio must be in (0, 1], got {v}")
         return v
+
+    @field_validator("grpo_cps_noise_scale_range")
+    @classmethod
+    def _validate_grpo_cps_noise_scale_range(cls, v: tuple[float, float] | None):
+        if v is None:
+            return v
+        low, high = v
+        if not (0.0 <= low < high <= 1.0):
+            raise ValueError(f"grpo_cps_noise_scale_range must satisfy 0 <= min < max <= 1, got ({low}, {high})")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_flowcps_noise_configuration(self):
+        if self.grpo_cps_noise_scale_range is not None and self.grpo_sde_formula != "flowcps":
+            raise ValueError("grpo_cps_noise_scale_range requires grpo_sde_formula='flowcps'")
+        if (
+            self.grpo_sde_formula == "flowcps"
+            and self.grpo_cps_noise_scale_range is None
+            and not (0.0 < self.grpo_sde_noise_scale <= 1.0)
+        ):
+            raise ValueError(f"fixed Flow-CPS grpo_sde_noise_scale must be in (0, 1], got {self.grpo_sde_noise_scale}")
+        return self
 
     @field_validator("rl_train_node_count")
     @classmethod

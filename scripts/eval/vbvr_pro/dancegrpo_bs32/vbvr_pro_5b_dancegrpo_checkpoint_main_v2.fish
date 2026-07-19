@@ -3,7 +3,7 @@
 # Complete VBVR-Pro main_v2 evaluation and reporting for one DanceGRPO
 # checkpoint. Set CHECKPOINT_STEP or use one of the fixed-step wrappers.
 
-source (dirname (status filename))/../lib/env.fish
+source (dirname (status filename))/../../../lib/env.fish
 
 function _fail
     echo "[error] $argv" >&2
@@ -33,10 +33,13 @@ set -q SCORE_DIR[1]
 or set -lx SCORE_DIR $OUTPUT_ROOT/scores
 
 set -l script_dir (dirname (status filename))
-fish $script_dir/vbvr_pro_5b_main_v2.fish $argv
+fish $script_dir/../vbvr_pro_5b_main_v2.fish $argv
 set -l pipeline_status $status
 if test $pipeline_status -ne 0
     exit $pipeline_status
+end
+if set -q DRY_RUN[1]
+    exit 0
 end
 
 set -l prepared_name (basename (string trim -r -c / -- $PREPARED_DIR))

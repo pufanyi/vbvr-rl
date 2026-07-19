@@ -129,6 +129,27 @@ It adopts two ideas from DanceGRPO:
 
 The timestep subset is generated consistently across ranks so all FSDP ranks call the same expert modules in the same order. This is necessary because per-rank divergence in expert routing can deadlock FSDP collectives.[^dancegrpo-trainer]
 
+Flow-CPS training supports either a fixed coefficient or a uniformly sampled
+per-prompt coefficient. The existing fixed behavior is:
+
+```yaml
+grpo_sde_formula: flowcps
+grpo_sde_noise_scale: 0.7
+```
+
+To sample independently between prompt groups while keeping all `G` rollouts
+inside one prompt group on the same coefficient, set a range:
+
+```yaml
+grpo_sde_formula: flowcps
+grpo_cps_noise_scale_range: [0.0, 1.0]
+```
+
+The coefficient is sampled once per prompt and optimizer step. Shared-prompt
+ranks and split rollout actors derive it from the same deterministic seed, and
+the rollout payload stores it so policy replay uses the exact original value.
+`grpo_sde_noise_scale` remains the fixed-mode value when the range is omitted.
+
 DanceGRPO currently rejects expert parallel. For split RL, the multinode launcher defaults to half the nodes training and half running rollout/reward actors. A manual `rl_train_node_count: 1` means node 0 trains and the remaining nodes run rollout/reward actors; rollout actors partition `grpo_group_size` across cards.[^dancegrpo-trainer]
 
 ## Reward Functions

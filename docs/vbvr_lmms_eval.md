@@ -1,7 +1,7 @@
 # VBVR lmms-eval Notes
 
 This note documents the checkpoint conversion and VBVR-Bench evaluation path used by
-`scripts/convert/dcp_to_diffusers.fish` and `scripts/eval/lmms_eval.fish`.
+`scripts/convert/dcp_to_diffusers.fish` and `scripts/eval/lmms/lmms_eval.fish`.
 
 ## Pipeline
 
@@ -17,17 +17,17 @@ VBVR ground-truth assets, and aggregates metrics such as `vbvr_overall`,
 
 ## One-Command Checkpoint Eval
 
-`scripts/eval/lmms_eval_checkpoint.fish` wraps conversion and evaluation for a
+`scripts/eval/lmms/lmms_eval_checkpoint.fish` wraps conversion and evaluation for a
 single DCP checkpoint. It computes the same converted model path as
 `scripts/convert/dcp_to_diffusers.fish`, skips conversion when
-`model_index.json` already exists, and then calls `scripts/eval/lmms_eval.fish`
+`model_index.json` already exists, and then calls `scripts/eval/lmms/lmms_eval.fish`
 with `MODEL_DIR` pointed at the converted Diffusers model.
 
 Example:
 
 ```bash
 DATA_PARALLEL=4 \
-fish scripts/eval/lmms_eval_checkpoint.fish \
+fish scripts/eval/lmms/lmms_eval_checkpoint.fish \
   storage/checkpoints/sft_vbvr_fixed_1e-6/checkpoint-4000
 ```
 
@@ -93,7 +93,7 @@ conversion with normal CUDA access.
 
 ## lmms-eval VBVR Run
 
-`scripts/eval/lmms_eval.fish` changes directory to
+`scripts/eval/lmms/lmms_eval.fish` changes directory to
 `/mnt/umm/users/pufanyi/workspace/lmms-eval` and executes:
 
 ```bash
@@ -136,7 +136,7 @@ On a 4 GPU machine, override `DATA_PARALLEL`:
 MODEL_DIR=/mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/models/dcp_converted/sft_vbvr_fixed_1e-6_checkpoint-4000 \
 DATA_PARALLEL=4 \
 OUTPUT_DIR=/mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/lmms_eval \
-fish scripts/eval/lmms_eval.fish
+fish scripts/eval/lmms/lmms_eval.fish
 ```
 
 Keep `DATA_PARALLEL * NUM_GPUS` less than or equal to the number of visible GPUs.
@@ -172,7 +172,7 @@ The run was started with:
 MODEL_DIR=/mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/models/dcp_converted/sft_vbvr_fixed_1e-6_checkpoint-4000 \
 DATA_PARALLEL=4 \
 OUTPUT_DIR=/mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/lmms_eval \
-fish scripts/eval/lmms_eval.fish
+fish scripts/eval/lmms/lmms_eval.fish
 ```
 
 It was stopped by request before completion. No final VBVR metrics were
@@ -204,7 +204,7 @@ were confirmed idle afterward.
 
 ## Practical Tips
 
-- Always convert DCP checkpoints to Diffusers before using `lmms_eval.fish`;
+- Always convert DCP checkpoints to Diffusers before using `scripts/eval/lmms/lmms_eval.fish`;
   FastVideo expects a regular model directory with `model_index.json`.
 - Use `DATA_PARALLEL=4` on the current 4 GPU setup. Leave the default only on an
   8 GPU setup.

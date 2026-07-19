@@ -89,5 +89,5 @@ Recommended work:
 [^i2v-dataset]: [`src/data/i2v_dataset.py`](../../src/data/i2v_dataset.py)
 [^eval-i2v]: [`src/cli/eval_i2v.py`](../../src/cli/eval_i2v.py)
 [^vlm-judge]: [`src/eval/vbvr/judges/vlm.py`](../../src/eval/vbvr/judges/vlm.py)
-[^vbvr-script]: [`scripts/eval/vbvr_generate_score.fish`](../../scripts/eval/vbvr_generate_score.fish)
+[^vbvr-script]: [`scripts/eval/vbvr/vbvr_generate_score.fish`](../../scripts/eval/vbvr/vbvr_generate_score.fish)
 [^maze-webdataset]: [`src/precompute/maze_webdataset.py`](../../src/precompute/maze_webdataset.py)

@@ -62,7 +62,7 @@ prepares scorer videos, then runs the rule scorer. It uses the configured
 EvalKit directory as-is:
 
 ```fish
-fish scripts/eval/vbvr_pro_5b_main_v2.fish
+fish scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish
 ```
 
 Important defaults are explicit in the launcher:
@@ -90,8 +90,12 @@ Common overrides use environment variables:
 set -lx NUM_GPUS 8
 set -lx SCORE_WORKERS 8
 set -lx OUTPUT_ROOT storage/eval_out/vbvr_pro_main_v2/my_run
-fish scripts/eval/vbvr_pro_5b_main_v2.fish
+fish scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish
 ```
+
+Set `DRY_RUN=1` to resolve and print the generation mode, checkpoint,
+converted-model path, output root, sampling steps, CFG, and CPS noise (when
+applicable) without loading a model or writing evaluation artifacts.
 
 Checkpoint-specific wrappers may add report generation after the shared
 pipeline. For example, the SFT epoch-1 wrapper runs the full evaluation and
@@ -99,7 +103,7 @@ then exports all 100 per-task averages plus the domain/category summary to an
 Excel workbook:
 
 ```fish
-fish scripts/eval/vbvr_pro_5b_sft_full_lr1e5_epoch1_main_v2.fish
+fish scripts/eval/vbvr_pro/vbvr_pro_5b_sft_full_lr1e5_epoch1_main_v2.fish
 ```
 
 The reusable exporter is `python -m src.cli.export_vbvr_task_scores`; it
@@ -108,14 +112,14 @@ validates the expected sample/task counts before writing the workbook. With
 are Overall, In-Domain, and Out-of-Domain.
 
 The DanceGRPO checkpoint series has fixed-step wrappers named
-`scripts/eval/vbvr_pro_5b_dancegrpo_checkpoint_<STEP>_main_v2.fish` for steps
+`scripts/eval/vbvr_pro/dancegrpo_bs32/vbvr_pro_5b_dancegrpo_checkpoint_<STEP>_main_v2.fish` for steps
 300, 600, 900, 1200, 1500, 1800, 2100, 2400, and 2700. Each wrapper calls the
 same `vbvr_pro_5b_dancegrpo_checkpoint_main_v2.fish` implementation and keeps
 its converted model, videos, score JSON, Excel workbook, and text summary in a
 checkpoint-specific path. For example:
 
 ```fish
-fish scripts/eval/vbvr_pro_5b_dancegrpo_checkpoint_1500_main_v2.fish
+fish scripts/eval/vbvr_pro/dancegrpo_bs32/vbvr_pro_5b_dancegrpo_checkpoint_1500_main_v2.fish
 ```
 
 ## Checkpoint-300 CPS Noise Sweep
@@ -126,10 +130,10 @@ the same base seed for corresponding samples, and one isolated output root per
 noise level:
 
 ```fish
-fish scripts/eval/vbvr_pro_5b_dancegrpo_checkpoint_300_cps_noise_0p1_main_v2.fish
-fish scripts/eval/vbvr_pro_5b_dancegrpo_checkpoint_300_cps_noise_0p3_main_v2.fish
-fish scripts/eval/vbvr_pro_5b_dancegrpo_checkpoint_300_cps_noise_0p7_main_v2.fish
-fish scripts/eval/vbvr_pro_5b_dancegrpo_checkpoint_300_cps_noise_0p9_main_v2.fish
+fish scripts/eval/vbvr_pro/dancegrpo_bs32/vbvr_pro_5b_dancegrpo_checkpoint_300_cps_noise_0p1_main_v2.fish
+fish scripts/eval/vbvr_pro/dancegrpo_bs32/vbvr_pro_5b_dancegrpo_checkpoint_300_cps_noise_0p3_main_v2.fish
+fish scripts/eval/vbvr_pro/dancegrpo_bs32/vbvr_pro_5b_dancegrpo_checkpoint_300_cps_noise_0p7_main_v2.fish
+fish scripts/eval/vbvr_pro/dancegrpo_bs32/vbvr_pro_5b_dancegrpo_checkpoint_300_cps_noise_0p9_main_v2.fish
 ```
 
 Each command independently performs CPS generation, 1024x1024x161 video
@@ -138,10 +142,30 @@ preparation, `main_v2` scoring, per-task Excel export, and concise
 
 For fixed CPS noise levels of 0.3 and 0.7, every DanceGRPO checkpoint from 300
 through 2700 has a wrapper named
-`scripts/eval/vbvr_pro_5b_dancegrpo_checkpoint_<STEP>_cps_noise_<LEVEL>_main_v2.fish`.
+`scripts/eval/vbvr_pro/dancegrpo_bs32/vbvr_pro_5b_dancegrpo_checkpoint_<STEP>_cps_noise_<LEVEL>_main_v2.fish`.
 These wrappers delegate to `vbvr_pro_5b_dancegrpo_checkpoint_cps_main_v2.fish`
 and isolate all outputs by checkpoint step and noise level. Run the jobs
 sequentially.
+
+## bs32 lr=1e-6 Checkpoint Sweep
+
+The checkpoint root
+`storage/checkpoints/dancegrpo_vbvr_pro_5b_256x256x161_rule_cps_from_nsft_bs32_lr_1e-6`
+contains checkpoints 100 through 800 in increments of 100. Its 24 fixed
+entrypoints live under `scripts/eval/vbvr_pro/dancegrpo_bs32_lr_1e-6/`: each
+checkpoint has one ODE (`..._checkpoint_<STEP>_main_v2.fish`) and two Flow-CPS
+wrappers (`..._cps_noise_0p3_...` and `..._cps_noise_0p7_...`). For example:
+
+```fish
+set series scripts/eval/vbvr_pro/dancegrpo_bs32_lr_1e-6
+fish $series/vbvr_pro_5b_dancegrpo_checkpoint_100_main_v2.fish
+fish $series/vbvr_pro_5b_dancegrpo_checkpoint_100_cps_noise_0p3_main_v2.fish
+fish $series/vbvr_pro_5b_dancegrpo_checkpoint_100_cps_noise_0p7_main_v2.fish
+```
+
+The wrappers pin distinct converted-model and evaluation roots for this run,
+so they cannot accidentally reuse artifacts from the original bs32 or strict
+In-Domain series. Run the 24 eight-GPU jobs sequentially.
 
 Use `FORCE_REGENERATE=1` only when intentionally replacing personal generated
 videos after a generation-provenance change; the launcher will also rebuild
@@ -171,7 +195,7 @@ checkpoint-specific output roots.
 To refresh cross-run Excel summaries after more evaluations finish, run:
 
 ```fish
-fish scripts/eval/summarize_vbvr_pro_results.fish
+fish scripts/eval/vbvr_pro/summarize_vbvr_pro_results.fish
 ```
 
 It scans complete standard 1024x1024x161 results and writes five workbooks to

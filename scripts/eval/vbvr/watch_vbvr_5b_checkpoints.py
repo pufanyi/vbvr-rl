@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RUNS = [
     "storage/checkpoints/sft_vbvr_5b_256x256x161_full_lr_1e-5",
     "storage/checkpoints/sft_vbvr_5b_256x256x161_full_lr_5e-6",
@@ -170,7 +170,7 @@ def _run_eval(
             "SAFE_SERIALIZATION": "1",
         }
     )
-    cmd = ["fish", "scripts/eval/lmms_eval_checkpoint.fish", str(checkpoint)]
+    cmd = ["fish", "scripts/eval/lmms/lmms_eval_checkpoint.fish", str(checkpoint)]
     with log_path.open("a") as log:
         log.write(f"\n===== {_now()} START {' '.join(cmd)} =====\n")
         log.write(

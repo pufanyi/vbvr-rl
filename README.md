@@ -66,7 +66,7 @@ Inference and evaluation:
   --prompt "A concise I2V prompt." \
   --output storage/outputs/sample.mp4
 
-fish scripts/eval/vbvr_generate_score.fish
+fish scripts/eval/vbvr/vbvr_generate_score.fish
 ```
 
 ## Data Inputs

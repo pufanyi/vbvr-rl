@@ -11,7 +11,8 @@ under `storage/`, `data/`, or `docs/assets/`.
 - `inference/`: general inference and VAE smoke-test launchers.
 - `precompute/`: latent, WebDataset, and benchmark precompute launchers.
 - `data/`: dataset packaging, shuffling, and upload utilities.
-- `eval/`: evaluation pipelines and compatibility wrappers for `src.eval`.
+- `eval/`: evaluation pipelines grouped by runtime/benchmark; see
+  [`eval/README.md`](eval/README.md).
 - `convert/`: checkpoint conversion launchers and compatibility wrappers.
 - `download/`: model download helpers.
 - `dev/`: local experiments and operator utilities.
@@ -24,7 +25,7 @@ fish scripts/train/grpo.fish --config configs/train_grpo_maze.yaml
 fish scripts/inference/i2v.fish --image path/to/image.jpg --prompt "..."
 fish scripts/precompute/vbvr_384_webdataset_single_node.fish
 fish scripts/precompute/maze_webdataset.fish --num_samples 20000
-fish scripts/eval/vbvr_generate_score.fish
+fish scripts/eval/vbvr/vbvr_generate_score.fish
 fish scripts/convert/dcp_to_diffusers.fish
 ```
 

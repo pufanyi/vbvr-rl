@@ -134,8 +134,13 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             raise ValueError("DanceGRPO requires grpo_group_size >= 2 for group-relative advantages")
         if cfg.grpo_num_sampling_steps < 2:
             raise ValueError("DanceGRPO requires grpo_num_sampling_steps >= 2")
-        if cfg.grpo_sde_noise_scale <= 0:
+        cps_noise_range = cfg.grpo_cps_noise_scale_range
+        if cps_noise_range is not None and cfg.grpo_sde_formula != "flowcps":
+            raise ValueError("grpo_cps_noise_scale_range is only supported with grpo_sde_formula='flowcps'")
+        if cps_noise_range is None and cfg.grpo_sde_noise_scale <= 0:
             raise ValueError("DanceGRPO requires grpo_sde_noise_scale > 0")
+        if cfg.grpo_sde_formula == "flowcps" and cps_noise_range is None and cfg.grpo_sde_noise_scale > 1:
+            raise ValueError("Flow-CPS requires grpo_sde_noise_scale <= 1")
         if self.rl_split_enabled and cfg.grpo_shared_prompt_batch:
             raise ValueError("grpo_shared_prompt_batch is for non-split all-rank GRPO; disable split RL")
         if self.expert_parallel and cfg.grpo_shared_prompt_batch:
@@ -149,12 +154,13 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             raise ValueError("Split DanceGRPO full actor weight sync requires rl_async_rollout=true")
         logger.info(
             "DanceGRPO | sde_formula={} shared_group_init_noise={} timestep_selection_ratio={:.2f} "
-            "train_sample_batch_size={} split_debug_logs={}",
+            "train_sample_batch_size={} split_debug_logs={} cps_noise={}",
             cfg.grpo_sde_formula,
             cfg.dancegrpo_share_group_init_noise,
             cfg.dancegrpo_timestep_selection_ratio,
             cfg.grpo_train_sample_batch_size,
             cfg.rl_split_debug_logs,
+            list(cps_noise_range) if cps_noise_range is not None else cfg.grpo_sde_noise_scale,
         )
 
     def _sample_group_initial_latents(
@@ -167,6 +173,38 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             return None
         latent_shape = self.model.latent_shape_from_condition(condition)
         return torch.randn(latent_shape, device=condition.device, dtype=torch.bfloat16, generator=generator)
+
+    def _sample_group_cps_noise_levels(
+        self,
+        num_prompts: int,
+        *,
+        step: int,
+        stream_id: int,
+        device: torch.device,
+    ) -> torch.Tensor | None:
+        """Sample one Flow-CPS coefficient per prompt/GRPO group.
+
+        The stateless seed lets split rollout actors and shared-prompt ranks
+        independently reproduce the same prompt coefficients. Callers repeat
+        each value across that prompt's G rollout samples.
+        """
+        if self.cfg.grpo_sde_formula != "flowcps":
+            return None
+
+        noise_range = self.cfg.grpo_cps_noise_scale_range
+        if noise_range is None:
+            return torch.full(
+                (num_prompts,),
+                float(self.cfg.grpo_sde_noise_scale),
+                device=device,
+                dtype=torch.float32,
+            )
+
+        low, high = noise_range
+        seed = (self.cfg.seed + 1_000_003 * int(step) + 104_729 * int(stream_id) + 53) % (2**63 - 1)
+        generator = torch.Generator(device="cpu").manual_seed(seed)
+        levels = torch.rand(num_prompts, generator=generator, dtype=torch.float32)
+        return (low + (high - low) * levels).to(device=device)
 
     def _select_training_timesteps(self, num_sampling_steps: int) -> list[int]:
         """Subsample replay timesteps following DanceGRPO's timestep selection idea.
@@ -261,7 +299,8 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         model_output: torch.Tensor,
         sigma: float,
         sigma_prev: float,
-    ) -> tuple[torch.Tensor, float]:
+        sde_noise_scale: float | torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, float | torch.Tensor]:
         cfg = self.cfg
         return self.model._sde_transition_mean(
             sample=sample,
@@ -269,7 +308,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             sigma=sigma,
             sigma_prev=sigma_prev,
             sde_formula=cfg.grpo_sde_formula,
-            sde_noise_scale=cfg.grpo_sde_noise_scale,
+            sde_noise_scale=cfg.grpo_sde_noise_scale if sde_noise_scale is None else sde_noise_scale,
             sigma_min=cfg.grpo_sde_sigma_min,
             sigma_max=cfg.grpo_sde_sigma_max,
         )
@@ -740,6 +779,12 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         encode_start = time.monotonic()
         prompt_embeds, gt_video_latents, condition, meta = self._encode_batch_inputs(job["batch"])
         B = gt_video_latents.shape[0]
+        prompt_cps_noise_levels = self._sample_group_cps_noise_levels(
+            B,
+            step=global_step,
+            stream_id=0,
+            device=self.device,
+        )
         self._split_debug_log(
             "async_actor_encode_done step={} groups={} batch={} seconds={:.2f}",
             step_id,
@@ -766,6 +811,9 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             initial_latent = (
                 shared_initial_latent.repeat_interleave(cur_s, dim=0) if shared_initial_latent is not None else None
             )
+            chunk_cps_noise_levels = (
+                prompt_cps_noise_levels.repeat_interleave(cur_s) if prompt_cps_noise_levels is not None else None
+            )
             rollout_seed = cfg.seed + 1_000_003 * global_step + 9_176 * (min(groups) + 1) + 131 * offset
             rollout_generator = torch.Generator(device=self.device).manual_seed(rollout_seed)
 
@@ -783,7 +831,9 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 condition=cond_s,
                 prompt_embeds=pe_s,
                 num_sampling_steps=T,
-                sde_noise_scale=cfg.grpo_sde_noise_scale,
+                sde_noise_scale=(
+                    chunk_cps_noise_levels if chunk_cps_noise_levels is not None else cfg.grpo_sde_noise_scale
+                ),
                 sigma_min=cfg.grpo_sde_sigma_min,
                 sigma_max=cfg.grpo_sde_sigma_max,
                 cfg_scale=cfg.grpo_cfg_scale,
@@ -803,24 +853,25 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             )
             reward_seconds = time.monotonic() - reward_start
             transfer_start = time.monotonic()
-            payload["chunks"].append(
-                {
-                    "groups": groups,
-                    "rewards": reward_flat.view(B, cur_s).to("cpu", non_blocking=True),
-                    "latents": torch.stack([traj["latents"][idx] for idx in selected_t_idxs]).to(
-                        "cpu",
-                        non_blocking=True,
-                    ),
-                    "next_latents": torch.stack([traj["latents"][idx + 1] for idx in selected_t_idxs]).to(
-                        "cpu",
-                        non_blocking=True,
-                    ),
-                    "log_probs": torch.stack([traj["log_probs"][idx] for idx in selected_t_idxs]).to(
-                        "cpu",
-                        non_blocking=True,
-                    ),
-                }
-            )
+            chunk_payload = {
+                "groups": groups,
+                "rewards": reward_flat.view(B, cur_s).to("cpu", non_blocking=True),
+                "latents": torch.stack([traj["latents"][idx] for idx in selected_t_idxs]).to(
+                    "cpu",
+                    non_blocking=True,
+                ),
+                "next_latents": torch.stack([traj["latents"][idx + 1] for idx in selected_t_idxs]).to(
+                    "cpu",
+                    non_blocking=True,
+                ),
+                "log_probs": torch.stack([traj["log_probs"][idx] for idx in selected_t_idxs]).to(
+                    "cpu",
+                    non_blocking=True,
+                ),
+            }
+            if chunk_cps_noise_levels is not None:
+                chunk_payload["cps_noise_levels"] = chunk_cps_noise_levels.to("cpu", non_blocking=True)
+            payload["chunks"].append(chunk_payload)
             if self._split_debug_enabled():
                 self._split_debug_log(
                     "async_actor_chunk_done step={} chunk={}/{} groups={} reward_mean={:.4f} "
@@ -1598,6 +1649,12 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
         prompt_embeds, gt_video_latents, condition, meta = self._encode_batch_inputs(batch)
         B = gt_video_latents.shape[0]
+        prompt_cps_noise_levels = self._sample_group_cps_noise_levels(
+            B,
+            step=global_step,
+            stream_id=0,
+            device=self.device,
+        )
 
         for m in [self.model.transformer, self.model.transformer_2]:
             if m is not None:
@@ -1616,6 +1673,9 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             initial_latent = (
                 shared_initial_latent.repeat_interleave(cur_s, dim=0) if shared_initial_latent is not None else None
             )
+            chunk_cps_noise_levels = (
+                prompt_cps_noise_levels.repeat_interleave(cur_s) if prompt_cps_noise_levels is not None else None
+            )
             rollout_seed = cfg.seed + 1_000_003 * global_step + 9_176 * (self.rollout_rank + 1) + 131 * offset
             rollout_generator = torch.Generator(device=self.device).manual_seed(rollout_seed)
 
@@ -1623,7 +1683,9 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 condition=cond_s,
                 prompt_embeds=pe_s,
                 num_sampling_steps=T,
-                sde_noise_scale=cfg.grpo_sde_noise_scale,
+                sde_noise_scale=(
+                    chunk_cps_noise_levels if chunk_cps_noise_levels is not None else cfg.grpo_sde_noise_scale
+                ),
                 sigma_min=cfg.grpo_sde_sigma_min,
                 sigma_max=cfg.grpo_sde_sigma_max,
                 cfg_scale=cfg.grpo_cfg_scale,
@@ -1639,24 +1701,25 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 pe_s,
                 meta=meta_s,
             )
-            payload["chunks"].append(
-                {
-                    "groups": groups,
-                    "rewards": reward_flat.view(B, cur_s).to("cpu", non_blocking=True),
-                    "latents": torch.stack([traj["latents"][idx] for idx in selected_t_idxs]).to(
-                        "cpu",
-                        non_blocking=True,
-                    ),
-                    "next_latents": torch.stack([traj["latents"][idx + 1] for idx in selected_t_idxs]).to(
-                        "cpu",
-                        non_blocking=True,
-                    ),
-                    "log_probs": torch.stack([traj["log_probs"][idx] for idx in selected_t_idxs]).to(
-                        "cpu",
-                        non_blocking=True,
-                    ),
-                }
-            )
+            chunk_payload = {
+                "groups": groups,
+                "rewards": reward_flat.view(B, cur_s).to("cpu", non_blocking=True),
+                "latents": torch.stack([traj["latents"][idx] for idx in selected_t_idxs]).to(
+                    "cpu",
+                    non_blocking=True,
+                ),
+                "next_latents": torch.stack([traj["latents"][idx + 1] for idx in selected_t_idxs]).to(
+                    "cpu",
+                    non_blocking=True,
+                ),
+                "log_probs": torch.stack([traj["log_probs"][idx] for idx in selected_t_idxs]).to(
+                    "cpu",
+                    non_blocking=True,
+                ),
+            }
+            if chunk_cps_noise_levels is not None:
+                chunk_payload["cps_noise_levels"] = chunk_cps_noise_levels.to("cpu", non_blocking=True)
+            payload["chunks"].append(chunk_payload)
             del traj
 
         dist.gather_object(payload, dst=self.train_global_ranks[0])
@@ -1767,6 +1830,14 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             for name, parts in tensor_parts.items():
                 tensor = torch.cat(parts, dim=2)
                 merged[name] = tensor.reshape(tensor.shape[0], B * len(groups), *tensor.shape[3:])
+            cps_parts = [chunk.get("cps_noise_levels") for chunk in pending]
+            if any(part is not None for part in cps_parts):
+                if not all(part is not None for part in cps_parts):
+                    raise RuntimeError("Cannot coalesce a mix of fixed/non-CPS and per-group CPS rollout chunks")
+                merged["cps_noise_levels"] = torch.cat(
+                    [part.reshape(B, len(chunk["groups"])) for part, chunk in zip(cps_parts, pending, strict=True)],
+                    dim=1,
+                ).reshape(B * len(groups))
             coalesced.append(merged)
             pending = []
             pending_s = 0
@@ -1829,6 +1900,9 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             latents = chunk["latents"].to(device=device, non_blocking=True)
             next_latents = chunk["next_latents"].to(device=device, non_blocking=True)
             old_log_probs = chunk["log_probs"].to(device=device, non_blocking=True)
+            cps_noise_levels = chunk.get("cps_noise_levels")
+            if cps_noise_levels is not None:
+                cps_noise_levels = cps_noise_levels.to(device=device, non_blocking=True)
 
             for replay_idx, t_idx in enumerate(selected_t_idxs):
                 is_last = chunk_idx == len(chunks) - 1 and replay_idx == len(selected_t_idxs) - 1
@@ -1848,6 +1922,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                     model_output=model_output,
                     sigma=sigma,
                     sigma_prev=sigma_prev,
+                    sde_noise_scale=cps_noise_levels,
                 )
                 new_log_prob = self._transition_log_prob(next_latent, prev_mean, noise_scale)
 
@@ -1865,6 +1940,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                         model_output=ref_output,
                         sigma=sigma,
                         sigma_prev=sigma_prev,
+                        sde_noise_scale=cps_noise_levels,
                     )
                     kl_loss = self._transition_kl_loss(prev_mean, ref_mean, noise_scale)
 
@@ -1874,7 +1950,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 total_policy_loss += policy_loss.item() * cur_s
                 total_kl_loss += kl_loss.item() * cur_s
 
-            del latents, next_latents, old_log_probs
+            del latents, next_latents, old_log_probs, cps_noise_levels
 
         return {
             "policy_loss": total_policy_loss / metric_normalizer,
@@ -1979,6 +2055,17 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         prompt_embeds, gt_video_latents, condition, meta = self._encode_batch_inputs(
             _slice_prompt_batch(batch, prompt_idx, prompt_batch_size)
         )
+        all_prompt_cps_noise_levels = self._sample_group_cps_noise_levels(
+            prompt_batch_size,
+            step=int(self.train_state.step),
+            stream_id=0,
+            device=device,
+        )
+        prompt_cps_noise_levels = (
+            all_prompt_cps_noise_levels[prompt_idx : prompt_idx + 1]
+            if all_prompt_cps_noise_levels is not None
+            else None
+        )
         debug_sync()
         self._split_debug_log(
             "shared_prompt_encode_done rank={} step={} prompt={} batch={} seconds={:.2f}",
@@ -2018,6 +2105,9 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             initial_latent = (
                 shared_initial_latent.repeat_interleave(cur_s, dim=0) if shared_initial_latent is not None else None
             )
+            chunk_cps_noise_levels = (
+                prompt_cps_noise_levels.repeat_interleave(cur_s) if prompt_cps_noise_levels is not None else None
+            )
             rollout_seed = (
                 cfg.seed
                 + 1_000_003 * self.train_state.step
@@ -2030,7 +2120,9 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 condition=cond_s,
                 prompt_embeds=pe_s,
                 num_sampling_steps=T,
-                sde_noise_scale=cfg.grpo_sde_noise_scale,
+                sde_noise_scale=(
+                    chunk_cps_noise_levels if chunk_cps_noise_levels is not None else cfg.grpo_sde_noise_scale
+                ),
                 sigma_min=cfg.grpo_sde_sigma_min,
                 sigma_max=cfg.grpo_sde_sigma_max,
                 cfg_scale=cfg.grpo_cfg_scale,
@@ -2061,6 +2153,8 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             del traj["noises"]
             traj["latents"] = [x.to("cpu", non_blocking=True) for x in traj["latents"]]
             traj["log_probs"] = [x.to("cpu", non_blocking=True) for x in traj["log_probs"]]
+            if chunk_cps_noise_levels is not None:
+                traj["cps_noise_levels"] = chunk_cps_noise_levels.to("cpu", non_blocking=True)
             local_chunks.append((traj, groups))
             debug_sync()
             self._split_debug_log(
@@ -2133,6 +2227,9 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
             traj["latents"] = [x.to(device, non_blocking=True) for x in traj["latents"]]
             traj["log_probs"] = [x.to(device, non_blocking=True) for x in traj["log_probs"]]
+            cps_noise_levels = traj.get("cps_noise_levels")
+            if cps_noise_levels is not None:
+                cps_noise_levels = cps_noise_levels.to(device, non_blocking=True)
 
             for replay_idx, t_idx in enumerate(selected_t_idxs):
                 is_last = chunk_idx == num_chunks - 1 and replay_idx == len(selected_t_idxs) - 1
@@ -2152,6 +2249,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                     model_output=model_output,
                     sigma=sigma,
                     sigma_prev=sigma_prev,
+                    sde_noise_scale=cps_noise_levels,
                 )
                 new_log_prob = self._transition_log_prob(next_latent, prev_mean, noise_scale)
 
@@ -2169,6 +2267,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                         model_output=ref_output,
                         sigma=sigma,
                         sigma_prev=sigma_prev,
+                        sde_noise_scale=cps_noise_levels,
                     )
                     kl_loss = self._transition_kl_loss(prev_mean, ref_mean, noise_scale)
 
@@ -2178,6 +2277,8 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 local_kl_sum += kl_loss.item() * cur_s
 
             del traj["latents"], traj["log_probs"]
+            if "cps_noise_levels" in traj:
+                del traj["cps_noise_levels"]
             debug_sync()
             self._split_debug_log(
                 "shared_prompt_replay_chunk_done rank={} step={} prompt={} chunk={}/{} groups={} seconds={:.2f}",
@@ -2229,6 +2330,12 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
         prompt_embeds, gt_video_latents, condition, meta = self._encode_batch_inputs(batch)
         B = gt_video_latents.shape[0]
+        prompt_cps_noise_levels = self._sample_group_cps_noise_levels(
+            B,
+            step=int(self.train_state.step),
+            stream_id=int(self.global_rank),
+            device=device,
+        )
         selected_t_idxs = self._select_training_timesteps(T)
         if self.rank == 0:
             logger.info(
@@ -2255,12 +2362,17 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             initial_latent = (
                 shared_initial_latent.repeat_interleave(cur_s, dim=0) if shared_initial_latent is not None else None
             )
+            chunk_cps_noise_levels = (
+                prompt_cps_noise_levels.repeat_interleave(cur_s) if prompt_cps_noise_levels is not None else None
+            )
 
             traj = self.model.sde_generate(
                 condition=cond_s,
                 prompt_embeds=pe_s,
                 num_sampling_steps=T,
-                sde_noise_scale=cfg.grpo_sde_noise_scale,
+                sde_noise_scale=(
+                    chunk_cps_noise_levels if chunk_cps_noise_levels is not None else cfg.grpo_sde_noise_scale
+                ),
                 sigma_min=cfg.grpo_sde_sigma_min,
                 sigma_max=cfg.grpo_sde_sigma_max,
                 cfg_scale=cfg.grpo_cfg_scale,
@@ -2280,6 +2392,8 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             del traj["noises"]
             traj["latents"] = [x.to("cpu", non_blocking=True) for x in traj["latents"]]
             traj["log_probs"] = [x.to("cpu", non_blocking=True) for x in traj["log_probs"]]
+            if chunk_cps_noise_levels is not None:
+                traj["cps_noise_levels"] = chunk_cps_noise_levels.to("cpu", non_blocking=True)
             all_chunk_trajs.append((traj, cur_s))
 
         rewards = torch.cat(reward_chunks, dim=1)
@@ -2307,6 +2421,9 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
             traj["latents"] = [x.to(device, non_blocking=True) for x in traj["latents"]]
             traj["log_probs"] = [x.to(device, non_blocking=True) for x in traj["log_probs"]]
+            cps_noise_levels = traj.get("cps_noise_levels")
+            if cps_noise_levels is not None:
+                cps_noise_levels = cps_noise_levels.to(device, non_blocking=True)
 
             for replay_idx, t_idx in enumerate(selected_t_idxs):
                 is_last = chunk_idx == num_chunks - 1 and replay_idx == len(selected_t_idxs) - 1
@@ -2326,6 +2443,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                     model_output=model_output,
                     sigma=sigma,
                     sigma_prev=sigma_prev,
+                    sde_noise_scale=cps_noise_levels,
                 )
                 new_log_prob = self._transition_log_prob(next_latent, prev_mean, noise_scale)
 
@@ -2343,6 +2461,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                         model_output=ref_output,
                         sigma=sigma,
                         sigma_prev=sigma_prev,
+                        sde_noise_scale=cps_noise_levels,
                     )
                     kl_loss = self._transition_kl_loss(prev_mean, ref_mean, noise_scale)
 
@@ -2353,6 +2472,8 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 total_kl_loss += kl_loss.item() * cur_s
 
             del traj["latents"], traj["log_probs"]
+            if "cps_noise_levels" in traj:
+                del traj["cps_noise_levels"]
 
         return {
             "policy_loss": total_policy_loss / metric_normalizer,

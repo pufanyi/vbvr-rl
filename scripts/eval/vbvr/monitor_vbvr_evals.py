@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 CHECKPOINT_ROOT = REPO_ROOT / "storage/checkpoints"
 CONVERTED_ROOT = REPO_ROOT / "storage/models/dcp_converted"
 BASE_MODEL = REPO_ROOT / "storage/models/Wan2.2-I2V-A14B-Diffusers"

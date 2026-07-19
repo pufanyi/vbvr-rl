@@ -5,7 +5,7 @@
 # 1024x1024x161 preparation, scoring, validation, resume, provenance, and the
 # final per-task Excel report.
 
-source (dirname (status filename))/../lib/env.fish
+source (dirname (status filename))/../../lib/env.fish
 
 set -q CHECKPOINT[1]
 or set -lx CHECKPOINT storage/checkpoints/sft_vbvr_5b_256x256x161_full_lr_1e-5/checkpoint-epoch1

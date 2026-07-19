@@ -3,7 +3,7 @@
 # End-to-end VBVR-Pro main_v2 evaluation for a Wan2.2 TI2V 5B DCP checkpoint.
 # All generated artifacts stay under this repository's ignored storage/ tree.
 
-source (dirname (status filename))/../lib/env.fish
+source (dirname (status filename))/../../lib/env.fish
 
 # Ignore ambient multinode launcher state; torchrun owns the local DP group.
 set -e RANK
@@ -78,6 +78,17 @@ if test $GENERATION_MODE = cps
     $PYTHON -c 'import sys; value=float(sys.argv[1]); raise SystemExit(0 if 0.0 <= value <= 1.0 else 1)' \
         $CPS_NOISE_LEVEL
     or _fail "CPS_NOISE_LEVEL must be in [0, 1], got $CPS_NOISE_LEVEL"
+end
+
+if set -q DRY_RUN[1]
+    echo "[dry-run] mode=$GENERATION_MODE checkpoint=$CHECKPOINT"
+    echo "[dry-run] converted_model=$CONVERTED_MODEL output_root=$OUTPUT_ROOT"
+    if test $GENERATION_MODE = cps
+        echo "[dry-run] cps_noise_level=$CPS_NOISE_LEVEL steps=$NUM_INFERENCE_STEPS cfg=$GUIDANCE_SCALE"
+    else
+        echo "[dry-run] steps=$NUM_INFERENCE_STEPS cfg=$GUIDANCE_SCALE"
+    end
+    exit 0
 end
 
 function _valid_score_result

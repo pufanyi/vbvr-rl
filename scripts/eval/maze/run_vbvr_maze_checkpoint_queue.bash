@@ -198,7 +198,7 @@ run_vbvr_one() {
     cd "$ROOT"
     DATA_PARALLEL="$DATA_PARALLEL" \
       EVAL_OUTPUT_DIR="$out" \
-      run_logged "vbvr_${name}" fish scripts/eval/lmms_eval_checkpoint.fish "$ckpt"
+      run_logged "vbvr_${name}" fish scripts/eval/lmms/lmms_eval_checkpoint.fish "$ckpt"
   )
 }
 
