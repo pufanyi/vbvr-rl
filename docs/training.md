@@ -152,6 +152,42 @@ the rollout payload stores it so policy replay uses the exact original value.
 
 DanceGRPO currently rejects expert parallel. For split RL, the multinode launcher defaults to half the nodes training and half running rollout/reward actors. A manual `rl_train_node_count: 1` means node 0 trains and the remaining nodes run rollout/reward actors; rollout actors partition `grpo_group_size` across cards.[^dancegrpo-trainer]
 
+### Single-Node Tensor Parallel + FSDP
+
+Full A14B DanceGRPO can compose two-way tensor parallelism with four FSDP
+data replicas on one eight-GPU node:
+
+```yaml
+fsdp: true
+hsdp: false
+tensor_parallel_size: 2
+expert_parallel: false
+lora_rank: 0
+grpo_shared_prompt_batch: false
+batch_size: 4  # per DP replica: 4 x DP4 = 16 global prompts
+grpo_fsdp_sync_each_backward: true
+```
+
+The standard data path shards prompts over the four DP replicas and duplicates
+each replica's batch only within its TP pair. Rollout inference and replay
+training therefore use the same TP-sharded policy; FSDP adds parameter,
+gradient, and optimizer-state sharding across the four DP replicas. The
+runnable A14B configuration is
+`configs/train_dancegrpo_vbvr_pro_a14b_256x256x161_rule_cps_from_sft_diffsynth_mix_260603_bs_16_lr_1e-5_full_tp2_fsdp4.yaml`.[^wan-tp-config]
+
+Full-finetune DanceGRPO must not defer FSDP synchronization across hundreds of
+replay backwards: doing so retains unsharded gradients. The
+`grpo_fsdp_sync_each_backward` switch performs reduce-scatter after each replay
+backward, bounding gradient memory while still accumulating the sharded
+gradient for the optimizer step. The TP path also uses a topology-aware global
+gradient norm because stock `clip_grad_norm_` cannot combine the 1D-DP and
+2D-DP/TP DTensor meshes in the same Wan model. For raw full-A14B runs,
+`grpo_offload_inference_models: true` moves frozen T5 to CPU after encoding and
+the VAE to CPU after rule rewards, recovering replay/Adam headroom; both are
+restored automatically before the next raw batch. The GRPO launcher defaults
+the CUDA allocator to `expandable_segments:True` unless the operator already
+set an override.[^base-rl][^wan-tp]
+
 ## Reward Functions
 
 Rewards are registered through `src.trainer.rewards.registry` and built by name from `RLConfig.grpo_reward_fn`.[^reward-registry]
@@ -209,6 +245,9 @@ fish scripts/train/i2v_correction.fish --nproc 8 -- --config configs/train_corre
 [^base-grpo]: [`src/trainer/base_grpo_trainer.py`](../src/trainer/base_grpo_trainer.py)
 [^dancegrpo]: DanceGRPO authors, "DanceGRPO: Unleashing GRPO on Visual Generation", arXiv:2505.07818, https://arxiv.org/abs/2505.07818
 [^dancegrpo-trainer]: [`src/trainer/dancegrpo_trainer.py`](../src/trainer/dancegrpo_trainer.py)
+[^base-rl]: [`src/trainer/base_rl_trainer.py`](../src/trainer/base_rl_trainer.py)
+[^wan-tp]: [`src/trainer/tensor_parallel.py`](../src/trainer/tensor_parallel.py)
+[^wan-tp-config]: [`configs/train_dancegrpo_vbvr_pro_a14b_256x256x161_rule_cps_from_sft_diffsynth_mix_260603_bs_16_lr_1e-5_full_tp2_fsdp4.yaml`](../configs/train_dancegrpo_vbvr_pro_a14b_256x256x161_rule_cps_from_sft_diffsynth_mix_260603_bs_16_lr_1e-5_full_tp2_fsdp4.yaml)
 [^reward-registry]: [`src/trainer/rewards/registry.py`](../src/trainer/rewards/registry.py)
 [^neg-loss]: [`src/trainer/rewards/neg_loss.py`](../src/trainer/rewards/neg_loss.py)
 [^maze-reward]: [`src/trainer/rewards/maze.py`](../src/trainer/rewards/maze.py)

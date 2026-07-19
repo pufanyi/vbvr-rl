@@ -100,7 +100,8 @@ class BaseGRPOTrainer(BaseRLTrainer):
     def _setup_fsdp(self, cfg: RLConfig) -> list[torch.nn.Module]:
         sync_modules = super()._setup_fsdp(cfg)
         if cfg.fsdp:
-            for _name, ref in self.ref_transformers.items():
+            for name, ref in self.ref_transformers.items():
+                self._parallelize_transformer_for_tp(ref, f"reference_{name}")
                 shard_transformer(ref, self.mesh, self.mp_policy)
         return sync_modules
 
@@ -230,6 +231,11 @@ class BaseGRPOTrainer(BaseRLTrainer):
                 gt_video_latents = video_latents.to(self.device)
             condition = batch["condition"].to(self.device)
         else:
+            if self.cfg.grpo_offload_inference_models:
+                if self.model.text_encoder is not None:
+                    self.model.text_encoder.to(self.device)
+                if self.model.vae is not None:
+                    self.model.vae.to(self.device)
             prompt_embeds = self.model.encode_text(batch["prompt"], self.device)
             video = to_model_pixels(batch["videos"][-1], self.device)
             image = to_model_pixels(batch["image"], self.device)
@@ -244,7 +250,90 @@ class BaseGRPOTrainer(BaseRLTrainer):
                 meta[key] = value.to(self.device)
             else:
                 meta[key] = value
+
+        if self.cfg.grpo_offload_inference_models:
+            moved_to_cpu = False
+            if self.model.text_encoder is not None:
+                self.model.text_encoder.to("cpu")
+                moved_to_cpu = True
+            reward_needs_vae = bool(getattr(self.reward_fn, "requires_vae", False))
+            keep_vae_for_local_reward = reward_needs_vae and (not self.tensor_parallel_enabled or self.tp_rank == 0)
+            if self.cfg.grpo_save_rollout_videos:
+                keep_vae_for_local_reward = True
+            if self.model.vae is not None and not keep_vae_for_local_reward:
+                self.model.vae.to("cpu")
+                moved_to_cpu = True
+            if moved_to_cpu and self.device.type == "cuda":
+                torch.cuda.empty_cache()
         return prompt_embeds, gt_video_latents, condition, meta
+
+    def _offload_inference_models_for_replay(self) -> None:
+        """Release frozen T5/VAE CUDA storage once rollout rewards are done."""
+        if not self.cfg.grpo_offload_inference_models:
+            return
+        moved_to_cpu = False
+        for module in (self.model.text_encoder, self.model.vae):
+            if module is not None:
+                module.to("cpu")
+                moved_to_cpu = True
+        if moved_to_cpu and self.device.type == "cuda":
+            torch.cuda.empty_cache()
+
+    def _compute_reward(
+        self,
+        generated_latents: torch.Tensor,
+        gt_video_latents: torch.Tensor,
+        condition: torch.Tensor,
+        prompt_embeds: torch.Tensor,
+        *,
+        meta: dict[str, Any],
+    ) -> torch.Tensor:
+        """Evaluate one reward per sample and synchronize it within a TP group.
+
+        TP ranks execute one logical rollout together, so evaluating an
+        expensive VAE/rule reward on every TP rank is redundant. More
+        importantly, synchronizing the result guarantees identical loss
+        scalars on the ranks participating in tensor-parallel backward.
+        """
+        reward_uses_policy = bool(getattr(self.reward_fn, "requires_policy_forward", False))
+        evaluate_on_this_rank = not self.tensor_parallel_enabled or self.tp_rank == 0 or reward_uses_policy
+        if evaluate_on_this_rank:
+            if (
+                self.cfg.grpo_offload_inference_models
+                and bool(getattr(self.reward_fn, "requires_vae", False))
+                and self.model.vae is not None
+            ):
+                # Raw batches restore the VAE while encoding their condition,
+                # but latent batches reach the reward directly. Restore it
+                # here as well so offload remains valid across optimizer steps.
+                self.model.vae.to(self.device)
+            # Preserve torch RNG around reward evaluation. A TP policy reward
+            # runs on every TP rank with the same RNG state; a VAE/CPU reward
+            # runs only on TP rank 0. Neither may desynchronize the next
+            # rollout noise across the TP group.
+            fork_devices = [self.device] if generated_latents.is_cuda else []
+            with torch.random.fork_rng(devices=fork_devices):
+                rewards = self.reward_fn(
+                    generated_latents,
+                    gt_video_latents,
+                    condition,
+                    prompt_embeds,
+                    meta=meta,
+                ).reshape(-1)
+            if rewards.numel() != generated_latents.shape[0]:
+                raise RuntimeError(
+                    "Reward must return one scalar per generated sample, got "
+                    f"samples={generated_latents.shape[0]}, rewards={rewards.numel()}"
+                )
+            rewards = rewards.to(device=generated_latents.device, dtype=torch.float32)
+        else:
+            rewards = torch.empty(generated_latents.shape[0], device=generated_latents.device, dtype=torch.float32)
+
+        if self.tensor_parallel_enabled:
+            if self._tp_pg is None:
+                raise RuntimeError("TP reward synchronization requires an initialized TP process group")
+            dist.broadcast(rewards, group=self._tp_pg, group_src=0)
+        return rewards
 
     # ------------------------------------------------------------------
     # Sampling schedule
@@ -514,10 +603,12 @@ class BaseGRPOTrainer(BaseRLTrainer):
                     break
 
                 self.train_state.step = global_step
+                if self.device.type == "cuda":
+                    torch.cuda.reset_peak_memory_stats(self.device)
                 metrics = self._grpo_step(batch)
 
                 self._all_reduce_gradients()
-                grad_norm = torch.nn.utils.clip_grad_norm_(self.params, cfg.max_grad_norm).item()
+                grad_norm = self._clip_grad_norm(cfg.max_grad_norm)
 
                 lr = cosine_lr(global_step, cfg.warmup_steps, self.total_steps, cfg.learning_rate)
                 for opt in self.optimizers:
@@ -525,6 +616,19 @@ class BaseGRPOTrainer(BaseRLTrainer):
                         pg["lr"] = lr
                     opt.step()
                     opt.zero_grad(set_to_none=True)
+
+                if self.device.type == "cuda":
+                    memory_buf = torch.tensor(
+                        [
+                            torch.cuda.max_memory_allocated(self.device),
+                            torch.cuda.max_memory_reserved(self.device),
+                        ],
+                        device=self.device,
+                        dtype=torch.float64,
+                    )
+                    dist.all_reduce(memory_buf, op=dist.ReduceOp.MAX)
+                    metrics["peak_memory_allocated_gib"] = memory_buf[0].item() / 1024**3
+                    metrics["peak_memory_reserved_gib"] = memory_buf[1].item() / 1024**3
 
                 if self.ema is not None:
                     self.ema.update()
@@ -569,7 +673,11 @@ class BaseGRPOTrainer(BaseRLTrainer):
                         if self.rl_split_enabled or cfg.grpo_shared_prompt_batch:
                             dp = 1
                         else:
-                            dp = self.dp_size if self._expert_parallel_duplicates_data(cfg) else self.world_size
+                            dp = (
+                                self.dp_size
+                                if self.tensor_parallel_enabled or self._expert_parallel_duplicates_data(cfg)
+                                else self.world_size
+                            )
                         dataset_size = (
                             self._effective_dataset_size
                             if getattr(self, "_effective_dataset_size", None) is not None
@@ -634,7 +742,8 @@ class BaseGRPOTrainer(BaseRLTrainer):
                     else:
                         logger.info(
                             "step={}/{} epoch={:.2f} policy_loss={:.4f} kl_loss={:.4f} reward={:.4f}+/-{:.4f} "
-                            "lr={:.2e} grad_norm={:.4f} mfu={} eta={} ({} s/it)",
+                            "lr={:.2e} grad_norm={:.4f} peak_mem={:.1f}/{:.1f}GiB alloc/reserved "
+                            "mfu={} eta={} ({} s/it)",
                             global_step,
                             self.total_steps,
                             fractional_epoch,
@@ -644,6 +753,8 @@ class BaseGRPOTrainer(BaseRLTrainer):
                             metrics["reward_std"],
                             lr,
                             grad_norm,
+                            metrics.get("peak_memory_allocated_gib", 0.0),
+                            metrics.get("peak_memory_reserved_gib", 0.0),
                             mfu_str,
                             eta_str,
                             speed_str,
@@ -660,6 +771,8 @@ class BaseGRPOTrainer(BaseRLTrainer):
                                 "grpo/advantage_mean": metrics["advantage_mean"],
                                 "train/lr": lr,
                                 "train/grad_norm": grad_norm,
+                                "train/peak_memory_allocated_gib": metrics.get("peak_memory_allocated_gib", 0.0),
+                                "train/peak_memory_reserved_gib": metrics.get("peak_memory_reserved_gib", 0.0),
                                 "train/epoch": fractional_epoch,
                             }
                             if mfu is not None:

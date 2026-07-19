@@ -42,6 +42,12 @@ cd $project_root
 
 source (dirname (status filename))/../lib/env.fish
 
+# Long A14B replay repeatedly all-gathers large FSDP blocks. Expandable CUDA
+# segments reduce allocator fragmentation; preserve an explicit operator
+# override when one is already set.
+set -q PYTORCH_CUDA_ALLOC_CONF; or set -gx PYTORCH_CUDA_ALLOC_CONF expandable_segments:True
+set -q WAN_TRAINER_DECORD_NUM_THREADS; or set -gx WAN_TRAINER_DECORD_NUM_THREADS 1
+
 echo "Launching DanceGRPO training with $nproc GPUs..."
 
 torchrun --nproc_per_node=$nproc -m src.cli.train_grpo $train_args

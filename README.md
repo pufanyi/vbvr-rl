@@ -1,6 +1,6 @@
 # Wan-Trainer
 
-Wan-Trainer is a research training stack for **Wan2.2 Image-to-Video** models. The current codebase supports supervised flow-matching fine-tuning, Chain-of-Step (COS) path training, on-policy correction, DanceGRPO-style replay, latent WebDataset training, DCP checkpointing, LoRA extraction/loading, and VBVR-style evaluation.
+Wan-Trainer is a research training stack for **Wan2.2 Image-to-Video** models. The current codebase supports supervised flow-matching fine-tuning, Chain-of-Step (COS) path training, on-policy correction, DanceGRPO-style replay, TP+FSDP full fine-tuning, latent WebDataset training, DCP checkpointing, LoRA extraction/loading, and VBVR-style evaluation.
 
 The detailed English documentation lives in [`docs/`](docs/README.md). Start there if you need the full architecture and code-path analysis.
 
@@ -38,6 +38,10 @@ DanceGRPO:
 fish scripts/train/grpo.fish --nproc 8 --config configs/train_grpo_maze.yaml
 fish scripts/train/grpo.fish --nproc 8 --config configs/train_dancegrpo_maze.yaml
 fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8
+
+# Single-node A14B full fine-tuning: TP2 x FSDP4, global prompt batch 16.
+fish scripts/train/grpo.fish --nproc 8 --config \
+  configs/train_dancegrpo_vbvr_pro_a14b_256x256x161_rule_cps_from_sft_diffsynth_mix_260603_bs_16_lr_1e-5_full_tp2_fsdp4.yaml
 ```
 
 On-policy correction:

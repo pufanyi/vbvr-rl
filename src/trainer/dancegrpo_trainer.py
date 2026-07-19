@@ -673,7 +673,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
     def _apply_split_optimizer_step(self, global_step: int) -> tuple[float, float]:
         cfg = self.cfg
         self._all_reduce_gradients()
-        grad_norm = torch.nn.utils.clip_grad_norm_(self.params, cfg.max_grad_norm).item()
+        grad_norm = self._clip_grad_norm(cfg.max_grad_norm)
         lr = cosine_lr(global_step, cfg.warmup_steps, self.total_steps, cfg.learning_rate)
         for opt in self.optimizers:
             for pg in opt.param_groups:
@@ -844,7 +844,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             generate_seconds = time.monotonic() - generate_start
 
             reward_start = time.monotonic()
-            reward_flat = self.reward_fn(
+            reward_flat = self._compute_reward(
                 traj["latents"][-1],
                 gt_s,
                 cond_s,
@@ -1521,7 +1521,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 metrics = self._split_train_step(batch, selected_t_idxs)
 
                 self._all_reduce_gradients()
-                grad_norm = torch.nn.utils.clip_grad_norm_(self.params, cfg.max_grad_norm).item()
+                grad_norm = self._clip_grad_norm(cfg.max_grad_norm)
 
                 lr = cosine_lr(global_step, cfg.warmup_steps, self.total_steps, cfg.learning_rate)
                 for opt in self.optimizers:
@@ -1694,7 +1694,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 sde_formula=cfg.grpo_sde_formula,
             )
 
-            reward_flat = self.reward_fn(
+            reward_flat = self._compute_reward(
                 traj["latents"][-1],
                 gt_s,
                 cond_s,
@@ -1971,8 +1971,13 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
     ) -> tuple[torch.Tensor, int]:
         payload = {
             "prompt_idx": int(prompt_idx),
-            "groups": [int(group) for group in groups],
-            "rewards": rewards.detach().cpu(),
+            # A TP group owns one logical rollout. Only TP rank 0 contributes
+            # it to the global reward table; the partner participates in the
+            # Gloo collective with an empty payload.
+            "groups": [int(group) for group in groups] if not self.tensor_parallel_enabled or self.tp_rank == 0 else [],
+            "rewards": rewards.detach().cpu()
+            if not self.tensor_parallel_enabled or self.tp_rank == 0
+            else torch.empty(0, dtype=torch.float32),
         }
         gathered: list[Any] = [None for _ in range(self.world_size)]
         dist.all_gather_object(gathered, payload, group=self._checkpoint_pg)
@@ -2018,8 +2023,8 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
         prompt_batch_size = _batch_prompt_size(batch)
         prompt_idx, prompt_rank, prompt_world_size, group_indices = _shared_prompt_assignment(
-            self.rank,
-            self.world_size,
+            self.dp_rank if self.tensor_parallel_enabled else self.rank,
+            self.dp_size if self.tensor_parallel_enabled else self.world_size,
             prompt_batch_size,
             G,
         )
@@ -2029,7 +2034,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 "DanceGRPO shared prompt batch: prompts={} world={} ranks_per_prompt={} groups_per_rank={} "
                 "sample_batch_size={} replay_t={}",
                 prompt_batch_size,
-                self.world_size,
+                self.dp_size if self.tensor_parallel_enabled else self.world_size,
                 prompt_world_size,
                 len(group_indices),
                 S,
@@ -2133,7 +2138,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             debug_sync()
             rollout_seconds = time.monotonic() - chunk_start
             reward_start = time.monotonic()
-            reward_flat = self.reward_fn(
+            reward_flat = self._compute_reward(
                 traj["latents"][-1],
                 gt_s,
                 cond_s,
@@ -2196,6 +2201,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         )
         rewards = rewards.to(device=device, non_blocking=True)
         advantages = self._compute_advantages(rewards)
+        self._offload_inference_models_for_replay()
 
         for m in [self.model.transformer, self.model.transformer_2]:
             if m is not None:
@@ -2206,7 +2212,13 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
         local_policy_sum = 0.0
         local_kl_sum = 0.0
-        gradient_normalizer = max(len(selected_t_idxs) * G * prompt_batch_size / self.world_size, 1.0)
+        gradient_normalizer = max(
+            len(selected_t_idxs)
+            * G
+            * prompt_batch_size
+            / (self.dp_size if self.tensor_parallel_enabled else self.world_size),
+            1.0,
+        )
         num_chunks = len(local_chunks)
 
         for chunk_idx, (traj, groups) in enumerate(local_chunks):
@@ -2298,7 +2310,11 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             int(self.train_state.step),
         )
         metric_buf = torch.tensor([local_policy_sum, local_kl_sum], device=device, dtype=torch.float32)
-        dist.all_reduce(metric_buf, op=dist.ReduceOp.SUM)
+        dist.all_reduce(
+            metric_buf,
+            op=dist.ReduceOp.SUM,
+            group=self._dp_pg if self.tensor_parallel_enabled else None,
+        )
         debug_sync()
         self._split_debug_log(
             "shared_prompt_metric_reduce_done rank={} step={} seconds={:.2f} total_step_inner={:.2f}s",
@@ -2333,7 +2349,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         prompt_cps_noise_levels = self._sample_group_cps_noise_levels(
             B,
             step=int(self.train_state.step),
-            stream_id=int(self.global_rank),
+            stream_id=int(self.dp_rank if self.tensor_parallel_enabled else self.global_rank),
             device=device,
         )
         selected_t_idxs = self._select_training_timesteps(T)
@@ -2380,7 +2396,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 sde_formula=cfg.grpo_sde_formula,
             )
 
-            reward_flat = self.reward_fn(
+            reward_flat = self._compute_reward(
                 traj["latents"][-1],
                 gt_s,
                 cond_s,
@@ -2398,6 +2414,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
         rewards = torch.cat(reward_chunks, dim=1)
         advantages = self._compute_advantages(rewards)
+        self._offload_inference_models_for_replay()
 
         for m in [self.model.transformer, self.model.transformer_2]:
             if m is not None:

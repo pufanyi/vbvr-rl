@@ -15,6 +15,7 @@ import torch.distributed as dist
 from loguru import logger
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+from torch.distributed.tensor import DTensor
 from torch.utils.data import DistributedSampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 
@@ -26,6 +27,7 @@ from src.trainer.checkpoint_runtime import CheckpointRuntimeMixin
 from src.trainer.config import RLConfig
 from src.trainer.ema import EMA
 from src.trainer.optimizer import build_optimizer
+from src.trainer.tensor_parallel import parallelize_wan_transformer
 from src.trainer.utils import apply_liger_rms_norm, collate, setup_loguru, shard_transformer
 
 
@@ -59,10 +61,12 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         self.device = torch.device(f"cuda:{local_rank}")
         torch.cuda.set_device(self.device)
         self._init_rl_split_groups(cfg, dist_backend)
-        torch.manual_seed(cfg.seed + self.global_rank)
 
         # ---- Expert parallel (must run before model build) ----
         self._init_expert_parallel(cfg)
+        self._init_tensor_parallel(cfg)
+        seed_rank = self.dp_rank if self.tensor_parallel_enabled else self.global_rank
+        torch.manual_seed(cfg.seed + seed_rank)
 
         split_debug_logs = bool(getattr(cfg, "rl_split_debug_logs", False))
         self.log_enabled = (
@@ -87,6 +91,14 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
             )
         else:
             logger.info("World size: {}", self.world_size)
+        if self.tensor_parallel_enabled:
+            logger.info(
+                "Tensor parallel topology: DP={} x TP={} (dp_rank={}, tp_rank={})",
+                self.dp_size,
+                self.tensor_parallel_size,
+                self.dp_rank,
+                self.tp_rank,
+            )
         self._configure_attention_backend(cfg)
 
         # ---- Model ----
@@ -337,6 +349,51 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         self._effective_train_experts = "high" if self.expert_group == 0 else "low"
         self._expert_log_peer = half if self.expert_group == 0 else 0
 
+    def _init_tensor_parallel(self, cfg: RLConfig) -> None:
+        """Validate and record logical DP/TP ranks before model construction."""
+        self.tensor_parallel_size = int(cfg.tensor_parallel_size)
+        self.tensor_parallel_enabled = self.tensor_parallel_size > 1
+        self.tp_rank = 0
+        self.tp_mesh = None
+        self.parallel_mesh = None
+        self._tp_pg = None
+        if not self.tensor_parallel_enabled:
+            return
+
+        incompatible: list[str] = []
+        if self.rl_split_enabled:
+            incompatible.append("split RL")
+        if self.expert_parallel:
+            incompatible.append("expert_parallel")
+        if not cfg.fsdp:
+            incompatible.append("fsdp=False")
+        if cfg.hsdp:
+            incompatible.append("hsdp=True")
+        if cfg.lora_rank > 0:
+            incompatible.append("LoRA")
+        if cfg.use_liger_kernel:
+            incompatible.append("Liger RMSNorm")
+        if cfg.torch_compile:
+            incompatible.append("torch_compile")
+        if cfg.train_text_encoder:
+            incompatible.append("train_text_encoder")
+        if incompatible:
+            raise ValueError("tensor_parallel_size > 1 currently does not support: " + ", ".join(incompatible))
+        if self.world_size % self.tensor_parallel_size != 0:
+            raise ValueError(
+                f"train world_size={self.world_size} must be divisible by "
+                f"tensor_parallel_size={self.tensor_parallel_size}"
+            )
+
+        self.dp_size = self.world_size // self.tensor_parallel_size
+        self.dp_rank = self.rank // self.tensor_parallel_size
+        self.tp_rank = self.rank % self.tensor_parallel_size
+        if cfg.grpo_shared_prompt_batch and cfg.batch_size > self.dp_size:
+            raise ValueError(
+                "grpo_shared_prompt_batch assigns work over data-parallel replicas, so batch_size must be "
+                f"<= DP size; got batch_size={cfg.batch_size}, DP={self.dp_size}, TP={self.tensor_parallel_size}"
+            )
+
     def _get_expert_parallel_sampler_seed(self, cfg: RLConfig) -> int:
         """Sampler seed for expert-parallel mode."""
         return cfg.seed
@@ -356,7 +413,11 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
             if self.rl_split_enabled or self.cfg.grpo_shared_prompt_batch:
                 dp = 1
             else:
-                dp = self.dp_size if self._expert_parallel_duplicates_data(self.cfg) else self.world_size
+                dp = (
+                    self.dp_size
+                    if self.tensor_parallel_enabled or self._expert_parallel_duplicates_data(self.cfg)
+                    else self.world_size
+                )
             total = self.cfg.num_epochs * (dataset_size // (dp * self.cfg.batch_size))
         else:
             total = self.cfg.num_epochs * len(self.dataloader)
@@ -497,7 +558,23 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
     # ------------------------------------------------------------------
 
     def _create_device_mesh(self, cfg: RLConfig):
-        if self.rl_split_enabled and not self.expert_parallel:
+        if self.tensor_parallel_enabled:
+            self.parallel_mesh = init_device_mesh(
+                "cuda",
+                (self.dp_size, self.tensor_parallel_size),
+                mesh_dim_names=("dp", "tp"),
+            )
+            self.tp_mesh = self.parallel_mesh["tp"]
+            mesh = self.parallel_mesh["dp"]
+            self._tp_pg = self.tp_mesh.get_group()
+            self._dp_pg = mesh.get_group()
+            self._dcp_pg = None
+            logger.info(
+                "Initialized 2D training mesh: {} DP replicas x {} TP ranks",
+                self.dp_size,
+                self.tensor_parallel_size,
+            )
+        elif self.rl_split_enabled and not self.expert_parallel:
             if self._train_pg is None:
                 raise RuntimeError("split RL train rank is missing its train process group")
             if cfg.hsdp and self.world_size > self.local_world_size:
@@ -609,8 +686,10 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         if cfg.train_text_encoder and self.model.text_encoder is not None:
             fully_shard(self.model.text_encoder, mesh=self.mesh, mp_policy=self.mp_policy)
         if self.model.transformer is not None:
+            self._parallelize_transformer_for_tp(self.model.transformer, "transformer")
             shard_transformer(self.model.transformer, self.mesh, self.mp_policy)
         if self.model.transformer_2 is not None:
+            self._parallelize_transformer_for_tp(self.model.transformer_2, "transformer_2")
             shard_transformer(self.model.transformer_2, self.mesh, self.mp_policy)
         return [
             m
@@ -621,6 +700,21 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
             ]
             if m is not None
         ]
+
+    def _parallelize_transformer_for_tp(self, transformer: torch.nn.Module, name: str) -> None:
+        if not self.tensor_parallel_enabled:
+            return
+        if self.tp_mesh is None:
+            raise RuntimeError("TP mesh must be initialized before parallelizing the Wan transformer")
+        stats = parallelize_wan_transformer(transformer, self.tp_mesh)
+        logger.info(
+            "Tensor-parallelized {}: blocks={} attentions={} linears={} global_rms_norms={}",
+            name,
+            stats.blocks,
+            stats.attentions,
+            stats.linears,
+            stats.rms_norms,
+        )
 
     # ------------------------------------------------------------------
     # EMA
@@ -676,7 +770,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
                 data_world_size = 1
                 data_seed = cfg.seed
             else:
-                if self._expert_parallel_duplicates_data(cfg):
+                if self.tensor_parallel_enabled or self._expert_parallel_duplicates_data(cfg):
                     data_rank = self.dp_rank
                     data_world_size = self.dp_size
                 else:
@@ -749,7 +843,7 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
                     else:
                         raw_prefetch_stride = self.world_size
                 else:
-                    raw_prefetch_stride = self.world_size
+                    raw_prefetch_stride = self.dp_size if self.tensor_parallel_enabled else self.world_size
             dataset = I2VDataset(
                 json_path=cfg.dataset_json,
                 num_frames=cfg.num_frames,
@@ -783,6 +877,14 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
                 rank=rank,
                 shuffle=sampler_shuffle,
                 seed=seed,
+            )
+        elif self.tensor_parallel_enabled:
+            sampler = DistributedSampler(
+                dataset,
+                num_replicas=self.dp_size,
+                rank=self.dp_rank,
+                shuffle=sampler_shuffle,
+                seed=cfg.seed,
             )
         else:
             sampler = DistributedSampler(
@@ -870,6 +972,8 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
     # ------------------------------------------------------------------
 
     def _set_requires_gradient_sync(self, requires_gradient_sync: bool) -> None:
+        if self.cfg.grpo_fsdp_sync_each_backward and self.cfg.fsdp:
+            requires_gradient_sync = True
         for module in self.sync_modules:
             if hasattr(module, "set_requires_gradient_sync"):
                 module.set_requires_gradient_sync(requires_gradient_sync, recurse=True)
@@ -881,6 +985,59 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         for p in self.params:
             if p.grad is not None:
                 dist.all_reduce(p.grad, op=dist.ReduceOp.AVG, group=self._train_pg)
+
+    def _clip_grad_norm(self, max_norm: float) -> float:
+        """Clip RL gradients, including mixed 1D-FSDP and 2D-DP/TP DTensors.
+
+        ``torch.nn.utils.clip_grad_norm_`` cannot combine scalar norms from
+        DTensors backed by different meshes. Wan TP leaves top-level
+        parameters on the 1D DP mesh while projection parameters live on the
+        composed 2D DP/TP mesh, so we aggregate local squared norms manually.
+        TP-replicated parameters contribute from TP rank 0 only.
+        """
+        if not self.tensor_parallel_enabled:
+            return torch.nn.utils.clip_grad_norm_(self.params, max_norm).item()
+
+        local_square_sum = torch.zeros((), device=self.device, dtype=torch.float64)
+        gradients: list[torch.Tensor] = []
+        for parameter in self.params:
+            grad = parameter.grad
+            if grad is None:
+                continue
+            gradients.append(grad)
+
+            include_local_shard = True
+            local_grad = grad
+            if isinstance(grad, DTensor):
+                local_grad = grad.to_local()
+                mesh_names = grad.device_mesh.mesh_dim_names
+                if mesh_names is not None and "tp" in mesh_names:
+                    tp_dim = mesh_names.index("tp")
+                    tp_placement = grad.placements[tp_dim]
+                    if tp_placement.is_partial():
+                        raise RuntimeError(
+                            "Cannot clip a TP gradient with a Partial placement; enable FSDP gradient sync "
+                            "before optimizer clipping"
+                        )
+                    if tp_placement.is_replicate() and self.tp_rank != 0:
+                        include_local_shard = False
+                elif self.tp_rank != 0:
+                    # A DP-only DTensor is duplicated in every TP column.
+                    include_local_shard = False
+            elif self.global_rank != 0:
+                # A plain gradient is replicated over the whole training mesh.
+                include_local_shard = False
+
+            if include_local_shard:
+                local_square_sum += local_grad.detach().double().square().sum()
+
+        dist.all_reduce(local_square_sum, op=dist.ReduceOp.SUM)
+        total_norm = local_square_sum.sqrt()
+        clip_coefficient = torch.clamp(max_norm / (total_norm + 1e-6), max=1.0)
+        for grad in gradients:
+            local_grad = grad.to_local() if isinstance(grad, DTensor) else grad
+            local_grad.mul_(clip_coefficient.to(dtype=local_grad.dtype))
+        return total_norm.item()
 
     def _barrier(self) -> None:
         if self._checkpoint_pg is None:

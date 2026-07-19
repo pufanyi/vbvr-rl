@@ -22,6 +22,8 @@ from src.trainer.rewards.registry import register_reward
 class NegLossReward(BaseReward):
     """Reward = -flow_matching_loss of the generated latent against GT."""
 
+    requires_policy_forward = True
+
     @torch.no_grad()
     def __call__(
         self,

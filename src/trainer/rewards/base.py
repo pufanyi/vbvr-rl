@@ -34,9 +34,13 @@ class BaseReward:
             (or otherwise touches the VAE).  ``BaseRLTrainer._build_model``
             consults this to force-load the VAE even when the dataset ships
             precomputed latents.
+        requires_policy_forward: set True if the reward calls a trainable Wan
+            transformer. Tensor-parallel trainers must then execute the reward
+            on every TP rank instead of evaluating it only on TP rank 0.
     """
 
     requires_vae: ClassVar[bool] = False
+    requires_policy_forward: ClassVar[bool] = False
 
     def __init__(self, trainer: BaseGRPOTrainer, cfg: RLConfig) -> None:
         self.trainer = trainer

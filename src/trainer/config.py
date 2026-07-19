@@ -201,6 +201,11 @@ class RLConfig(TrainConfig):
 
     hsdp: bool = True
 
+    # Intra-model tensor parallelism for Wan attention/FFN projections. A
+    # single-node TP2 run over 8 GPUs composes this with four-way FSDP data
+    # parallelism (TP2 x FSDP4).
+    tensor_parallel_size: int = 1
+
     # Smoke / bounded RL runs. Defaults preserve the normal epoch-based loop.
     max_steps: int | None = None
     save_epoch_checkpoints: bool = True
@@ -239,6 +244,15 @@ class RLConfig(TrainConfig):
     # How many already-generated G samples to replay together during the train
     # update. This does not increase prompt batch size or rollout work per step.
     grpo_train_sample_batch_size: int = 1
+    # Move the frozen text encoder to CPU after raw prompt encoding and move
+    # the VAE to CPU after rollout rewards, freeing replay/optimizer headroom
+    # for full A14B fine-tuning. They are restored before the next raw batch.
+    grpo_offload_inference_models: bool = False
+    # Full fine-tuning can retain unsharded gradients across every replay
+    # backward when FSDP synchronization is delayed until the final replay.
+    # Synchronizing each backward bounds that peak at the cost of additional
+    # reduce-scatter collectives.
+    grpo_fsdp_sync_each_backward: bool = False
     grpo_num_sampling_steps: int = 10  # T: denoising steps during SDE sampling
     grpo_clip_range: float = 1e-3  # PPO clipping epsilon
     grpo_kl_coeff: float = 0.004  # beta: KL penalty coefficient against reference policy
@@ -268,6 +282,13 @@ class RLConfig(TrainConfig):
     def _validate_dancegrpo_timestep_selection_ratio(cls, v: float):
         if not (0.0 < v <= 1.0):
             raise ValueError(f"dancegrpo_timestep_selection_ratio must be in (0, 1], got {v}")
+        return v
+
+    @field_validator("tensor_parallel_size")
+    @classmethod
+    def _validate_tensor_parallel_size(cls, v: int):
+        if v <= 0:
+            raise ValueError(f"tensor_parallel_size must be > 0, got {v}")
         return v
 
     @field_validator("grpo_cps_noise_scale_range")

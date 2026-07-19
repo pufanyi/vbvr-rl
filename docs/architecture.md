@@ -70,7 +70,25 @@ The main sharding mode is PyTorch FSDP2 through `fully_shard`, using `MixedPreci
 - HSDP with a 2D mesh: shard within node and replicate across nodes;
 - expert parallel, where half the ranks train the high-noise expert and half train the low-noise expert;
 - expert-parallel plus HSDP, building per-expert sharded/replicated meshes;
+- DanceGRPO tensor parallel composed with FSDP, for example a single-node
+  `DP=4 x TP=2` mesh over eight GPUs;
 - non-FSDP mode with manual gradient all-reduce, mainly useful for small/LoRA runs.[^base-trainer][^base-rl]
+
+The DanceGRPO TP path applies tensor parallelism before FSDP2. Q/K/V and the
+first FFN projection are column-sharded; attention output and the second FFN
+projection are row-sharded. Wan normalizes Q/K across all heads, so the TP
+implementation uses an autograd-aware TP all-reduce for the RMS statistic
+instead of changing the model to a local/per-head norm. Parameters outside
+those projections remain TP-replicated and are FSDP-sharded over the DP
+dimension.[^wan-tp][^pytorch-tp]
+
+TP ranks form one logical data replica: they use the same sampler shard,
+rollout seeds, reward, and replay inputs. Expensive VAE/CPU rewards run on TP
+rank 0 and are broadcast to its partner; rewards that call the Wan policy are
+marked `requires_policy_forward` and execute collectively on every TP rank.
+The current TP implementation is RL-only and deliberately rejects LoRA,
+HSDP, expert parallel, split RL, trainable text encoders, Liger RMSNorm, and
+`torch.compile` rather than silently running a partially sharded topology.
 
 Expert parallel changes the effective model loaded on each rank. Ranks in group 0 load/train only `transformer`; ranks in group 1 load/train only `transformer_2`. The checkpoint runtime still writes the same `high/` and `low/` layout regardless of whether a flat or expert-parallel trainer produced the checkpoint.[^checkpoint-runtime]
 
@@ -155,6 +173,8 @@ The source shows several useful but risky tensions:
 [^base-trainer]: [`src/trainer/base_trainer.py`](../src/trainer/base_trainer.py)
 [^base-rl]: [`src/trainer/base_rl_trainer.py`](../src/trainer/base_rl_trainer.py)
 [^base-grpo]: [`src/trainer/base_grpo_trainer.py`](../src/trainer/base_grpo_trainer.py)
+[^wan-tp]: [`src/trainer/tensor_parallel.py`](../src/trainer/tensor_parallel.py)
+[^pytorch-tp]: PyTorch, "Tensor Parallelism - torch.distributed.tensor.parallel", https://docs.pytorch.org/docs/stable/distributed.tensor.parallel.html
 [^fsdp2]: PyTorch, "`torch.distributed.fsdp.fully_shard`", https://docs.pytorch.org/docs/2.8/distributed.fsdp.fully_shard.html
 [^checkpoint-runtime]: [`src/trainer/checkpoint_runtime.py`](../src/trainer/checkpoint_runtime.py)
 [^i2v-dataset]: [`src/data/i2v_dataset.py`](../src/data/i2v_dataset.py)
