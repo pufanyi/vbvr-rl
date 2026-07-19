@@ -12,7 +12,8 @@ The VBVR-Pro DanceGRPO wrappers are further separated by training run:
 
 - `vbvr_pro/dancegrpo_bs32/`: the original bs32 checkpoints at steps 300–2700.
 - `vbvr_pro/dancegrpo_bs32_lr_1e-6/`: lr=1e-6 checkpoints at steps 100–800;
-  every checkpoint has ODE, CPS 0.3, and CPS 0.7 entrypoints.
+  every checkpoint has UniPC ODE, deterministic FlowMatch Euler ODE, CPS 0.3,
+  and CPS 0.7 entrypoints.
 - `vbvr_pro/dancegrpo_indomain_strict/`: the strict In-Domain checkpoint series.
 
 Run every launcher from the repository root. Most fish launchers source

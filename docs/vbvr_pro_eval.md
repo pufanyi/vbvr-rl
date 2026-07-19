@@ -152,20 +152,32 @@ sequentially.
 The checkpoint root
 `storage/checkpoints/dancegrpo_vbvr_pro_5b_256x256x161_rule_cps_from_nsft_bs32_lr_1e-6`
 contains checkpoints 100 through 800 in increments of 100. Its 24 fixed
-entrypoints live under `scripts/eval/vbvr_pro/dancegrpo_bs32_lr_1e-6/`: each
-checkpoint has one ODE (`..._checkpoint_<STEP>_main_v2.fish`) and two Flow-CPS
-wrappers (`..._cps_noise_0p3_...` and `..._cps_noise_0p7_...`). For example:
+entrypoints plus 8 Euler entrypoints live under
+`scripts/eval/vbvr_pro/dancegrpo_bs32_lr_1e-6/`: each checkpoint has the
+original UniPC ODE (`..._checkpoint_<STEP>_main_v2.fish`), a first-order
+rectified-flow Euler ODE (`..._checkpoint_<STEP>_euler_main_v2.fish`), and two
+Flow-CPS wrappers (`..._cps_noise_0p3_...` and `..._cps_noise_0p7_...`). For
+example:
 
 ```fish
 set series scripts/eval/vbvr_pro/dancegrpo_bs32_lr_1e-6
 fish $series/vbvr_pro_5b_dancegrpo_checkpoint_100_main_v2.fish
+fish $series/vbvr_pro_5b_dancegrpo_checkpoint_100_euler_main_v2.fish
 fish $series/vbvr_pro_5b_dancegrpo_checkpoint_100_cps_noise_0p3_main_v2.fish
 fish $series/vbvr_pro_5b_dancegrpo_checkpoint_100_cps_noise_0p7_main_v2.fish
 ```
 
+The configured scheduler for the original ODE scripts is
+`UniPCMultistepScheduler`: second-order `bh2`, flow prediction, flow shift 5.0,
+and 50 inference steps. The Euler scripts instead install the deterministic
+`FlowMatchEulerDiscreteScheduler` with the same flow shift, 50 steps, CFG 5.0,
+and per-sample seeds. Its update is the first-order step
+`x_next = x + (sigma_next - sigma) * v_theta(x, sigma)`; stochastic sampling
+is disabled. This is not Euler Ancestral.
+
 The wrappers pin distinct converted-model and evaluation roots for this run,
 so they cannot accidentally reuse artifacts from the original bs32 or strict
-In-Domain series. The three modes for one checkpoint intentionally share its
+In-Domain series. The four modes for one checkpoint intentionally share its
 converted Diffusers model. Conversion is guarded by an atomic per-model lock,
 so overlapping ODE/CPS jobs elect one writer and the followers wait for the
 same conversion. Before publishing provenance, the launcher validates all
@@ -173,7 +185,7 @@ Diffusers components, safetensors headers, index keys, and referenced shards,
 then requires the output tree to remain stable. A stale output fingerprint
 from the older concurrent-writer race is refreshed only when all recorded
 conversion inputs still match and those validation checks pass. Genuine input
-mismatches still fail. Run the 24 eight-GPU jobs sequentially when they use the
+mismatches still fail. Run the 32 eight-GPU jobs sequentially when they use the
 same GPU pool.
 
 All jobs use one stable EasyOCR cache under `storage/evalkits/easyocr-shared`.

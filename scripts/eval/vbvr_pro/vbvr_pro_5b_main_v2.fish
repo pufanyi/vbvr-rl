@@ -46,6 +46,7 @@ set -q NUM_INFERENCE_STEPS[1]; or set NUM_INFERENCE_STEPS 50
 set -q GUIDANCE_SCALE[1]; or set GUIDANCE_SCALE 5.0
 set -q SEED[1]; or set SEED 0
 set -q GENERATION_MODE[1]; or set GENERATION_MODE ode
+set -q ODE_SOLVER[1]; or set ODE_SOLVER unipc
 set -q CPS_NOISE_LEVEL[1]; or set CPS_NOISE_LEVEL 0.7
 
 set -q PREPARED_HEIGHT[1]; or set PREPARED_HEIGHT 1024
@@ -78,6 +79,8 @@ end
 
 contains -- $GENERATION_MODE ode cps
 or _fail "GENERATION_MODE must be ode or cps, got $GENERATION_MODE"
+contains -- $ODE_SOLVER unipc euler
+or _fail "ODE_SOLVER must be unipc or euler, got $ODE_SOLVER"
 if test $GENERATION_MODE = cps
     $PYTHON -c 'import sys; value=float(sys.argv[1]); raise SystemExit(0 if 0.0 <= value <= 1.0 else 1)' \
         $CPS_NOISE_LEVEL
@@ -90,7 +93,7 @@ if set -q DRY_RUN[1]
     if test $GENERATION_MODE = cps
         echo "[dry-run] cps_noise_level=$CPS_NOISE_LEVEL steps=$NUM_INFERENCE_STEPS cfg=$GUIDANCE_SCALE"
     else
-        echo "[dry-run] steps=$NUM_INFERENCE_STEPS cfg=$GUIDANCE_SCALE"
+        echo "[dry-run] ode_solver=$ODE_SOLVER steps=$NUM_INFERENCE_STEPS cfg=$GUIDANCE_SCALE"
     end
     exit 0
 end
@@ -209,11 +212,18 @@ function _generation_provenance
     end
     set -l generator_source src/cli/eval_i2v.py
     set -l sampler_args
+    set -l generator_file_args
     if test $GENERATION_MODE = cps
         set generator_source src/cli/eval_i2v_cps.py
         set sampler_args \
             --value generation_mode=cps \
             --value cps_noise_level=$CPS_NOISE_LEVEL
+    else if test $ODE_SOLVER = euler
+        set generator_source src/cli/eval_i2v_euler.py
+        set generator_file_args --file generator_base=src/cli/eval_i2v.py
+        set sampler_args \
+            --value generation_mode=ode \
+            --value ode_solver=flowmatch_euler
     end
     $PYTHON -m src.eval.evaluation_provenance $mode \
         --manifest $GENERATION_PROVENANCE \
@@ -234,6 +244,7 @@ function _generation_provenance
         --file eval_json=$EVAL_JSON \
         --file split_manifest=$SPLIT_MANIFEST \
         --file generator=$generator_source \
+        $generator_file_args \
         --tree converted_model=$CONVERTED_MODEL \
         --tree eval_source=$GT_BASE \
         $sampler_args \
@@ -495,6 +506,9 @@ else
     if test $GENERATION_MODE = cps
         set generation_module src.cli.eval_i2v_cps
         set -a generation_args --noise_level $CPS_NOISE_LEVEL
+    else if test $ODE_SOLVER = euler
+        set generation_module src.cli.eval_i2v_euler
+        set -a generation_args --disable_progress_bar
     else
         set -a generation_args --disable_progress_bar
     end
