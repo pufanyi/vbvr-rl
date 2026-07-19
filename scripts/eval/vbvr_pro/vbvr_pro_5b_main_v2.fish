@@ -28,11 +28,12 @@ set -q EVAL_JSON[1]; or set EVAL_JSON $OUTPUT_ROOT/eval_samples.json
 set -q GENERATED_DIR[1]; or set GENERATED_DIR $OUTPUT_ROOT/generated_256x256x161
 set -q PREPARED_DIR[1]; or set PREPARED_DIR $OUTPUT_ROOT/eval_1024x1024_161f_5s
 set -q SCORE_DIR[1]; or set SCORE_DIR $OUTPUT_ROOT/scores
-set -q EASYOCR_ROOT[1]; or set EASYOCR_ROOT $OUTPUT_ROOT/easyocr
+set -q EASYOCR_ROOT[1]; or set EASYOCR_ROOT storage/evalkits/easyocr-shared
 set -q CONVERSION_PROVENANCE[1]; or set CONVERSION_PROVENANCE $CONVERTED_MODEL.wan-trainer-provenance.json
 set -q GENERATION_PROVENANCE[1]; or set GENERATION_PROVENANCE $OUTPUT_ROOT/generation-provenance.json
 set -q PREPARATION_PROVENANCE[1]; or set PREPARATION_PROVENANCE $OUTPUT_ROOT/preparation-provenance.json
 set -q SCORE_PROVENANCE[1]; or set SCORE_PROVENANCE $OUTPUT_ROOT/score-provenance.json
+set -q CONVERSION_LOCK[1]; or set CONVERSION_LOCK $CONVERSION_PROVENANCE.lock
 
 set -q EXPECTED_VIDEOS[1]; or set EXPECTED_VIDEOS 500
 set -q NUM_GPUS[1]; or set NUM_GPUS 8
@@ -54,6 +55,9 @@ set -q PREP_WORKERS[1]; or set PREP_WORKERS 8
 set -q PREP_CRF[1]; or set PREP_CRF 12
 set -q SCORE_WORKERS[1]; or set SCORE_WORKERS 8
 set -q SCORE_THREADS_PER_WORKER[1]; or set SCORE_THREADS_PER_WORKER 16
+set -q CONVERSION_PROVENANCE_WAIT_SECONDS[1]; or set CONVERSION_PROVENANCE_WAIT_SECONDS 1800
+set -q CONVERSION_PROVENANCE_POLL_SECONDS[1]; or set CONVERSION_PROVENANCE_POLL_SECONDS 2
+set -q CONVERSION_STABILITY_SECONDS[1]; or set CONVERSION_STABILITY_SECONDS 2
 
 set PYTHON .venv/bin/python
 set TORCHRUN .venv/bin/torchrun
@@ -117,10 +121,11 @@ set ffmpeg_version (ffmpeg -version 2>/dev/null | head -n 1 | string trim)
 function _conversion_provenance
     set -l mode $argv[1]
     set -l state $argv[2]
+    set -l extra_args $argv[3..-1]
     set -l output_args
     if test $mode = promote
         set output_args --output-tree converted_model=$CONVERTED_MODEL
-    else if test $mode = check; and test $state = complete
+    else if contains -- $mode check refresh-outputs; and test $state = complete
         set output_args --output-tree converted_model=$CONVERTED_MODEL
     end
     $PYTHON -m src.eval.evaluation_provenance $mode \
@@ -136,7 +141,60 @@ function _conversion_provenance
         --file converter=src/cli/convert_dcp_to_diffusers.py \
         --tree checkpoint=$CHECKPOINT \
         --tree base_model=$BASE_MODEL \
-        $output_args
+        $output_args \
+        $extra_args
+end
+
+set -g _vbvr_conversion_lock_held 0
+
+function _release_conversion_lock --on-event fish_exit
+    if test "$_vbvr_conversion_lock_held" != 1
+        return 0
+    end
+    command rm -f -- "$CONVERSION_LOCK/owner"
+    if not command rmdir -- "$CONVERSION_LOCK" 2>/dev/null
+        echo "[warn] could not remove conversion lock directory: $CONVERSION_LOCK" >&2
+        return 1
+    end
+    set -g _vbvr_conversion_lock_held 0
+end
+
+function _try_acquire_conversion_lock
+    command mkdir -- "$CONVERSION_LOCK" 2>/dev/null; or return 1
+    set -g _vbvr_conversion_lock_held 1
+    set -l lock_host (hostname)
+    printf 'host=%s\npid=%s\ncheckpoint=%s\nstarted_at=%s\n' \
+        "$lock_host" "$fish_pid" "$CHECKPOINT" (date --iso-8601=seconds) \
+        >"$CONVERSION_LOCK/owner"
+    or begin
+        _release_conversion_lock
+        return 1
+    end
+    return 0
+end
+
+function _converted_model_fingerprint
+    $PYTHON -c '
+import sys
+from pathlib import Path
+from src.eval.evaluation_provenance import fingerprint_tree
+fingerprint = fingerprint_tree(Path(sys.argv[1]))
+print("{}:{}:{}".format(fingerprint["entries"], fingerprint["total_size"], fingerprint["sha256"]))
+' "$CONVERTED_MODEL"
+end
+
+function _converted_model_is_stable
+    set -l before (_converted_model_fingerprint); or return 1
+    sleep $CONVERSION_STABILITY_SECONDS
+    set -l after (_converted_model_fingerprint); or return 1
+    if test "$before" != "$after"
+        echo "[error] converted model changed during the $CONVERSION_STABILITY_SECONDS-second stability check: $CONVERTED_MODEL" >&2
+        return 1
+    end
+end
+
+function _validate_converted_model
+    $PYTHON -m src.eval.validate_diffusers_model "$CONVERTED_MODEL" $argv
 end
 
 function _generation_provenance
@@ -254,48 +312,117 @@ mkdir -p $EASYOCR_ROOT/model $EASYOCR_ROOT/user_network; or exit 1
 for model_file in craft_mlt_25k.pth english_g2.pth
     test -f $EASYOCR_SOURCE_MODELS/$model_file
     or _fail "missing pre-populated EasyOCR weight: $EASYOCR_SOURCE_MODELS/$model_file"
-    cp -f $EASYOCR_SOURCE_MODELS/$model_file $EASYOCR_ROOT/model/$model_file; or exit 1
+    set -l source_model $EASYOCR_SOURCE_MODELS/$model_file
+    set -l installed_model $EASYOCR_ROOT/model/$model_file
+    if not test -f $installed_model; or not cmp -s $source_model $installed_model
+        set -l temporary_model $installed_model.tmp-$fish_pid
+        cp $source_model $temporary_model; or exit 1
+        mv -f $temporary_model $installed_model; or exit 1
+    end
 end
 
 set -l evalkit_easyocr_models $EVALKIT_DIR/easyocr_models
 set -l personal_easyocr_models (realpath $EASYOCR_ROOT/model)
-if test -L $evalkit_easyocr_models
-    if test (realpath $evalkit_easyocr_models) != $personal_easyocr_models
-        rm $evalkit_easyocr_models; or exit 1
-    end
-else if test -e $evalkit_easyocr_models
+if test -e $evalkit_easyocr_models; and not test -L $evalkit_easyocr_models
     _fail "expected a symlink at $evalkit_easyocr_models; refusing to replace an existing directory"
 end
-if not test -e $evalkit_easyocr_models
-    ln -s $personal_easyocr_models $evalkit_easyocr_models; or exit 1
+if not test -L $evalkit_easyocr_models; or test (realpath $evalkit_easyocr_models) != $personal_easyocr_models
+    set -l temporary_link $evalkit_easyocr_models.tmp-$fish_pid
+    ln -s $personal_easyocr_models $temporary_link; or exit 1
+    mv -Tf $temporary_link $evalkit_easyocr_models; or exit 1
 end
 
 $PYTHON -c 'import easyocr, norfair, scipy, skimage' 2>/dev/null
 or _fail "main_v2 dependencies are missing; install norfair and easyocr into .venv before scoring"
 
-if not test -f $CONVERTED_MODEL/model_index.json
-    if test -d $CONVERTED_MODEL; and test -n (find $CONVERTED_MODEL -mindepth 1 -print -quit 2>/dev/null)
-        _fail "converted model directory is incomplete: $CONVERTED_MODEL"
+mkdir -p (dirname "$CONVERTED_MODEL") (dirname "$CONVERSION_PROVENANCE"); or exit 1
+set -l conversion_action skipped
+set -l conversion_waited_seconds 0
+set -l conversion_wait_announced 0
+while true
+    if test -f "$CONVERTED_MODEL/model_index.json"; and _conversion_provenance check complete --quiet
+        break
     end
-    echo "[convert] $CHECKPOINT -> $CONVERTED_MODEL (raw weights, no EMA)"
-    _conversion_provenance write in_progress_resume; or exit 1
-    $PYTHON -m src.cli.convert_dcp_to_diffusers \
-        --checkpoint $CHECKPOINT \
-        --output $CONVERTED_MODEL \
-        --base_model $BASE_MODEL \
-        --torch_dtype bfloat16 \
-        --device cuda:0 \
-        --no-use_ema \
-        --merge_lora \
-        --safe_serialization \
-        --max_shard_size 10GB \
-        --no-fastvideo_compat
-    or exit 1
-    _conversion_provenance promote in_progress_resume; or exit 1
-else
-    _conversion_provenance check complete
-    or _fail "converted model provenance is missing or stale; use a fresh CONVERTED_MODEL or reconvert explicitly"
-    echo "[skip] converted model and provenance are complete: $CONVERTED_MODEL"
+
+    if _try_acquire_conversion_lock
+        # The winner must re-check after taking the lock: another process may
+        # have completed conversion between the first check and mkdir.
+        if test -f "$CONVERTED_MODEL/model_index.json"; and _conversion_provenance check complete --quiet
+            _release_conversion_lock; or exit 1
+            break
+        end
+
+        if test -f "$CONVERTED_MODEL/model_index.json"
+            # Recover only the known concurrent-writer failure mode. Inputs
+            # must still be byte-for-byte identical to the recorded complete
+            # provenance, and the final model must be valid and stable.
+            if not _conversion_provenance check-inputs complete --quiet
+                _conversion_provenance check complete
+                or _fail "converted model provenance inputs are missing or stale; use a fresh CONVERTED_MODEL or reconvert explicitly"
+            end
+            echo "[repair] validating stable converted model before refreshing stale output fingerprints"
+            _validate_converted_model; or _fail "converted model failed structural validation: $CONVERTED_MODEL"
+            _converted_model_is_stable; or _fail "converted model is still being modified: $CONVERTED_MODEL"
+            _conversion_provenance refresh-outputs complete
+            or _fail "could not refresh converted model output provenance: $CONVERSION_PROVENANCE"
+            set conversion_action repaired
+            _release_conversion_lock; or exit 1
+            break
+        end
+
+        if test -d "$CONVERTED_MODEL"; and test -n (find "$CONVERTED_MODEL" -mindepth 1 -print -quit 2>/dev/null)
+            _fail "converted model directory is incomplete: $CONVERTED_MODEL"
+        end
+
+        echo "[convert] $CHECKPOINT -> $CONVERTED_MODEL (raw weights, no EMA)"
+        _conversion_provenance write in_progress_resume; or exit 1
+        $PYTHON -m src.cli.convert_dcp_to_diffusers \
+            --checkpoint "$CHECKPOINT" \
+            --output "$CONVERTED_MODEL" \
+            --base_model "$BASE_MODEL" \
+            --torch_dtype bfloat16 \
+            --device cuda:0 \
+            --no-use_ema \
+            --merge_lora \
+            --safe_serialization \
+            --max_shard_size 10GB \
+            --no-fastvideo_compat
+        or exit 1
+        _validate_converted_model; or _fail "newly converted model failed structural validation: $CONVERTED_MODEL"
+        _converted_model_is_stable; or _fail "newly converted model is still being modified: $CONVERTED_MODEL"
+        _conversion_provenance promote in_progress_resume; or exit 1
+        set conversion_action converted
+        _release_conversion_lock; or exit 1
+        break
+    end
+
+    if test $conversion_wait_announced -eq 0
+        echo "[wait] another job owns the conversion lock: $CONVERSION_LOCK"
+        set conversion_wait_announced 1
+    end
+    if test $conversion_waited_seconds -ge $CONVERSION_PROVENANCE_WAIT_SECONDS
+        if test -f "$CONVERSION_LOCK/owner"
+            echo "[error] conversion lock owner:" >&2
+            command cat "$CONVERSION_LOCK/owner" >&2
+        end
+        _fail "timed out after $CONVERSION_PROVENANCE_WAIT_SECONDS seconds waiting for conversion lock: $CONVERSION_LOCK"
+    end
+    sleep $CONVERSION_PROVENANCE_POLL_SECONDS
+    set conversion_waited_seconds (math "$conversion_waited_seconds + $CONVERSION_PROVENANCE_POLL_SECONDS")
+end
+
+switch $conversion_action
+    case converted
+        echo "[done] converted model and provenance are complete: $CONVERTED_MODEL"
+    case repaired
+        echo "[done] refreshed converted model output provenance: $CONVERSION_PROVENANCE"
+    case '*'
+        echo "[skip] converted model and provenance are complete: $CONVERTED_MODEL"
+end
+
+if set -q CONVERSION_ONLY[1]
+    echo "[done] CONVERSION_ONLY requested; stopping before generation"
+    exit 0
 end
 
 echo "[manifest] validating the flattened bench against $SPLIT_MANIFEST"

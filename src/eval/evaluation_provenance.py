@@ -187,9 +187,36 @@ def promote_manifest(
     return True, ""
 
 
+def refresh_manifest_outputs(
+    path: Path,
+    expected_complete: dict[str, object],
+) -> tuple[bool, str]:
+    """Refresh output fingerprints while preserving exact recorded inputs.
+
+    This is deliberately narrower than ``write``: the existing manifest must
+    already be a complete record for the exact same stage, values, files, and
+    trees. Callers are responsible for semantically validating outputs and
+    ensuring that no writer is active before using this recovery operation.
+    """
+    matches, detail = manifest_matches(path, expected_complete, inputs_only=True)
+    if not matches:
+        return False, detail
+
+    source = path.expanduser().resolve()
+    recorded = json.loads(source.read_text(encoding="utf-8"))
+    refreshed = dict(recorded)
+    for section in ("output_files", "output_trees", "media_trees"):
+        refreshed[section] = expected_complete[section]
+    write_manifest(source, refreshed)
+    return True, ""
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["check", "check-inputs", "write", "promote"])
+    parser.add_argument(
+        "mode",
+        choices=["check", "check-inputs", "write", "promote", "refresh-outputs"],
+    )
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--stage", required=True)
     parser.add_argument("--value", action="append", default=[], metavar="KEY=VALUE")
@@ -241,6 +268,10 @@ def main(argv: list[str] | None = None) -> int:
                 media_trees=media_trees,
             )
             matches, detail = promote_manifest(args.manifest, expected_in_progress, complete)
+        elif args.mode == "refresh-outputs":
+            if values.get("state") != "complete":
+                raise ValueError("refresh-outputs requires state=complete")
+            matches, detail = refresh_manifest_outputs(args.manifest, manifest)
         else:
             matches, detail = manifest_matches(args.manifest, manifest, inputs_only=args.mode == "check-inputs")
         if not matches and not args.quiet:

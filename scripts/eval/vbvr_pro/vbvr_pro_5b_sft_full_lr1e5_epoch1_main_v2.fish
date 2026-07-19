@@ -30,6 +30,9 @@ set -l pipeline_status $status
 if test $pipeline_status -ne 0
     exit $pipeline_status
 end
+if set -q DRY_RUN[1]; or set -q CONVERSION_ONLY[1]
+    exit 0
+end
 
 set -l prepared_name (basename (string trim -r -c / -- $PREPARED_DIR))
 set -l result_json $SCORE_DIR/$prepared_name"_vbvr_results.json"

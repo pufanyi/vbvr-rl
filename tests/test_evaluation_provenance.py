@@ -5,6 +5,7 @@ from src.eval.evaluation_provenance import (
     fingerprint_tree,
     main,
     manifest_matches,
+    refresh_manifest_outputs,
     write_manifest,
 )
 
@@ -143,3 +144,65 @@ def test_promote_rechecks_inputs_and_fingerprints_outputs(tmp_path: Path):
     assert main(complete) == 0
     output.write_bytes(b"video-two")
     assert main([*complete, "--quiet"]) == 1
+
+
+def test_refresh_outputs_requires_exact_complete_inputs(tmp_path: Path):
+    source = tmp_path / "source.txt"
+    output_dir = tmp_path / "model"
+    output = output_dir / "weights.bin"
+    source.write_text("input")
+    output_dir.mkdir()
+    output.write_bytes(b"weights-one")
+    manifest_path = tmp_path / "provenance.json"
+
+    recorded = build_manifest(
+        stage="conversion",
+        values={"state": "complete", "dtype": "bf16"},
+        files={"source": str(source)},
+        trees={},
+        output_trees={"model": str(output_dir)},
+    )
+    write_manifest(manifest_path, recorded)
+
+    output.write_bytes(b"weights-two")
+    expected = build_manifest(
+        stage="conversion",
+        values={"state": "complete", "dtype": "bf16"},
+        files={"source": str(source)},
+        trees={},
+        output_trees={"model": str(output_dir)},
+    )
+    assert refresh_manifest_outputs(manifest_path, expected) == (True, "")
+    assert manifest_matches(manifest_path, expected) == (True, "")
+
+    source.write_text("different")
+    changed_inputs = build_manifest(
+        stage="conversion",
+        values={"state": "complete", "dtype": "bf16"},
+        files={"source": str(source)},
+        trees={},
+        output_trees={"model": str(output_dir)},
+    )
+    assert not refresh_manifest_outputs(manifest_path, changed_inputs)[0]
+
+
+def test_cli_refresh_outputs_rejects_non_complete_state(tmp_path: Path):
+    source = tmp_path / "source.txt"
+    output_dir = tmp_path / "model"
+    source.write_text("input")
+    output_dir.mkdir()
+    (output_dir / "weights.bin").write_bytes(b"weights")
+    manifest = tmp_path / "provenance.json"
+    common = [
+        "--manifest",
+        str(manifest),
+        "--stage",
+        "conversion",
+        "--file",
+        f"source={source}",
+        "--output-tree",
+        f"model={output_dir}",
+    ]
+
+    assert main(["write", *common, "--value", "state=in_progress_resume"]) == 0
+    assert main(["refresh-outputs", *common, "--value", "state=in_progress_resume", "--quiet"]) == 2

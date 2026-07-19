@@ -165,7 +165,20 @@ fish $series/vbvr_pro_5b_dancegrpo_checkpoint_100_cps_noise_0p7_main_v2.fish
 
 The wrappers pin distinct converted-model and evaluation roots for this run,
 so they cannot accidentally reuse artifacts from the original bs32 or strict
-In-Domain series. Run the 24 eight-GPU jobs sequentially.
+In-Domain series. The three modes for one checkpoint intentionally share its
+converted Diffusers model. Conversion is guarded by an atomic per-model lock,
+so overlapping ODE/CPS jobs elect one writer and the followers wait for the
+same conversion. Before publishing provenance, the launcher validates all
+Diffusers components, safetensors headers, index keys, and referenced shards,
+then requires the output tree to remain stable. A stale output fingerprint
+from the older concurrent-writer race is refreshed only when all recorded
+conversion inputs still match and those validation checks pass. Genuine input
+mismatches still fail. Run the 24 eight-GPU jobs sequentially when they use the
+same GPU pool.
+
+All jobs use one stable EasyOCR cache under `storage/evalkits/easyocr-shared`.
+Model weights and the EvalKit symlink are installed atomically, so concurrent
+scorers cannot redirect or truncate each other's per-run OCR cache.
 
 Use `FORCE_REGENERATE=1` only when intentionally replacing personal generated
 videos after a generation-provenance change; the launcher will also rebuild
