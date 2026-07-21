@@ -56,8 +56,6 @@ def test_tp2_rank_mapping(rank: int, expected_dp_rank: int, expected_tp_rank: in
         ({"fsdp": False}, "fsdp=False"),
         ({"hsdp": True}, "hsdp=True"),
         ({"lora_rank": 8}, "LoRA"),
-        ({"use_liger_kernel": True}, "Liger RMSNorm"),
-        ({"torch_compile": True}, "torch_compile"),
         ({"train_text_encoder": True}, "train_text_encoder"),
     ],
 )
@@ -71,6 +69,50 @@ def test_tp_requires_world_size_divisibility():
     trainer = _trainer_state(world_size=7)
     with pytest.raises(ValueError, match="must be divisible"):
         BaseRLTrainer._init_tensor_parallel(trainer, _tp_cfg())
+
+
+def test_tp_accepts_liger_and_torch_compile():
+    trainer = _trainer_state()
+    BaseRLTrainer._init_tensor_parallel(
+        trainer,
+        _tp_cfg(use_liger_kernel=True, torch_compile=True),
+    )
+
+    assert trainer.tensor_parallel_enabled
+    assert trainer.dp_size == 4
+
+
+def test_compile_modules_preserves_module_identity():
+    class RecordingModule:
+        def __init__(self):
+            self.compile_kwargs = None
+
+        def compile(self, **kwargs):
+            self.compile_kwargs = kwargs
+
+    vae = RecordingModule()
+    text_encoder = RecordingModule()
+    transformer = RecordingModule()
+    transformer_2 = RecordingModule()
+    model = SimpleNamespace(
+        vae=vae,
+        text_encoder=text_encoder,
+        transformer=transformer,
+        transformer_2=transformer_2,
+    )
+    trainer = SimpleNamespace(model=model)
+    cfg = _tp_cfg(torch_compile=True, torch_compile_backend="eager", torch_compile_mode=None)
+
+    BaseRLTrainer._compile_modules(trainer, cfg)
+
+    assert trainer.model.vae is vae
+    assert trainer.model.text_encoder is text_encoder
+    assert trainer.model.transformer is transformer
+    assert trainer.model.transformer_2 is transformer_2
+    assert vae.compile_kwargs == {"backend": "eager"}
+    assert text_encoder.compile_kwargs == {"backend": "eager"}
+    assert transformer.compile_kwargs == {"backend": "eager"}
+    assert transformer_2.compile_kwargs == {"backend": "eager"}
 
 
 def test_shared_prompt_batch_is_bounded_by_dp_size():

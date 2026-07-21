@@ -30,6 +30,7 @@ class WanTensorParallelStats:
     attentions: int
     linears: int
     rms_norms: int
+    liger_rms_norms: int
 
 
 class TensorParallelRMSNorm(nn.Module):
@@ -71,6 +72,10 @@ class TensorParallelRMSNorm(nn.Module):
         sharded_weight = distribute_tensor(full_weight, tp_mesh, [Shard(0)])
         self.weight = nn.Parameter(sharded_weight, requires_grad=weight.requires_grad)
 
+    # Dynamo currently traces through distributed.nn's autograd Function and
+    # drops the matching all-reduce from its backward graph. Keep this small
+    # collective-aware norm eager while compiling the surrounding Wan block.
+    @torch.compiler.disable
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         if hidden_states.shape[-1] != self.local_hidden_size:
             raise RuntimeError(
@@ -104,17 +109,41 @@ def _replace_attention_norm(
     norm_name: str,
     *,
     tp_mesh: DeviceMesh,
-) -> None:
+) -> bool:
     norm = getattr(attention, norm_name)
-    if not isinstance(norm, nn.RMSNorm):
-        raise TypeError(f"Wan tensor parallelism requires torch.nn.RMSNorm at {norm_name}; got {type(norm).__name__}")
+    is_liger = False
+    if isinstance(norm, nn.RMSNorm):
+        eps = float(norm.eps)
+    else:
+        # Liger is installed before the TP mesh exists. Its RMSNorm kernel
+        # normalizes only the local hidden shard, which would change Wan's
+        # global-across-heads Q/K semantics. Accept its module and preserve
+        # the weight while installing the collective-aware implementation.
+        try:
+            from liger_kernel.transformers import LigerRMSNorm
+        except ImportError:
+            LigerRMSNorm = None
+        if LigerRMSNorm is None or not isinstance(norm, LigerRMSNorm):
+            raise TypeError(
+                f"Wan tensor parallelism requires torch.nn.RMSNorm or LigerRMSNorm at {norm_name}; "
+                f"got {type(norm).__name__}"
+            )
+        if float(norm.offset) != 0.0:
+            raise ValueError(f"Wan TP requires zero-offset LigerRMSNorm at {norm_name}, got {norm.offset}")
+        eps = float(norm.variance_epsilon)
+        is_liger = True
     if norm.weight is None:
         raise ValueError(f"Wan tensor parallelism requires affine RMSNorm at {norm_name}")
+    if norm.weight.ndim != 1:
+        raise TypeError(
+            f"Wan tensor parallelism requires a 1D RMSNorm weight at {norm_name}; got shape={tuple(norm.weight.shape)}"
+        )
     setattr(
         attention,
         norm_name,
-        TensorParallelRMSNorm(norm.weight, eps=float(norm.eps), tp_mesh=tp_mesh),
+        TensorParallelRMSNorm(norm.weight, eps=eps, tp_mesh=tp_mesh),
     )
+    return is_liger
 
 
 def parallelize_wan_transformer(
@@ -132,7 +161,7 @@ def parallelize_wan_transformer(
         raise ValueError(f"Wan tensor parallelism requires a 1D TP mesh, got ndim={tp_mesh.ndim}")
     tp_size = int(tp_mesh.size())
     if tp_size <= 1:
-        return WanTensorParallelStats(blocks=0, attentions=0, linears=0, rms_norms=0)
+        return WanTensorParallelStats(blocks=0, attentions=0, linears=0, rms_norms=0, liger_rms_norms=0)
 
     previous_tp_size = getattr(transformer, "_wan_tensor_parallel_size", None)
     if previous_tp_size is not None:
@@ -147,6 +176,7 @@ def parallelize_wan_transformer(
     plan: dict[str, ColwiseParallel | RowwiseParallel] = {}
     attention_count = 0
     norm_count = 0
+    liger_norm_count = 0
     linear_count = 0
 
     for block_idx, block in enumerate(blocks):
@@ -188,11 +218,11 @@ def parallelize_wan_transformer(
             plan[out_fqn] = RowwiseParallel()
             linear_count += 1
 
-            _replace_attention_norm(attention, "norm_q", tp_mesh=tp_mesh)
-            _replace_attention_norm(attention, "norm_k", tp_mesh=tp_mesh)
+            liger_norm_count += int(_replace_attention_norm(attention, "norm_q", tp_mesh=tp_mesh))
+            liger_norm_count += int(_replace_attention_norm(attention, "norm_k", tp_mesh=tp_mesh))
             norm_count += 2
             if getattr(attention, "add_k_proj", None) is not None:
-                _replace_attention_norm(attention, "norm_added_k", tp_mesh=tp_mesh)
+                liger_norm_count += int(_replace_attention_norm(attention, "norm_added_k", tp_mesh=tp_mesh))
                 norm_count += 1
 
             attention.heads = heads // tp_size
@@ -218,4 +248,5 @@ def parallelize_wan_transformer(
         attentions=attention_count,
         linears=linear_count,
         rms_norms=norm_count,
+        liger_rms_norms=liger_norm_count,
     )

@@ -87,8 +87,17 @@ rollout seeds, reward, and replay inputs. Expensive VAE/CPU rewards run on TP
 rank 0 and are broadcast to its partner; rewards that call the Wan policy are
 marked `requires_policy_forward` and execute collectively on every TP rank.
 The current TP implementation is RL-only and deliberately rejects LoRA,
-HSDP, expert parallel, split RL, trainable text encoders, Liger RMSNorm, and
-`torch.compile` rather than silently running a partially sharded topology.
+HSDP, expert parallel, split RL, and trainable text encoders. Liger and
+`torch.compile` are supported together with TP, with two semantic safeguards:
+all current Wan RMSNorms are the global-across-head Q/K norms, so TP converts
+the initially installed Liger modules to its collective-aware norm; and that
+small collective-aware norm stays outside Dynamo because compiling through
+`distributed.nn` otherwise loses the matching backward all-reduce. The rest
+of each Wan block remains eligible for compilation. Modules are compiled in
+place so their checkpoint/state-dict identity is unchanged. The custom bf16
+activation-checkpoint path uses ambient autocast around non-reentrant
+`checkpoint()` so PyTorch records and restores it for recompute; an autocast
+`context_fn` is not compile-compatible in PyTorch 2.11.
 
 Expert parallel changes the effective model loaded on each rank. Ranks in group 0 load/train only `transformer`; ranks in group 1 load/train only `transformer_2`. The checkpoint runtime still writes the same `high/` and `low/` layout regardless of whether a flat or expert-parallel trainer produced the checkpoint.[^checkpoint-runtime]
 

@@ -371,10 +371,6 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
             incompatible.append("hsdp=True")
         if cfg.lora_rank > 0:
             incompatible.append("LoRA")
-        if cfg.use_liger_kernel:
-            incompatible.append("Liger RMSNorm")
-        if cfg.torch_compile:
-            incompatible.append("torch_compile")
         if cfg.train_text_encoder:
             incompatible.append("train_text_encoder")
         if incompatible:
@@ -708,13 +704,22 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
             raise RuntimeError("TP mesh must be initialized before parallelizing the Wan transformer")
         stats = parallelize_wan_transformer(transformer, self.tp_mesh)
         logger.info(
-            "Tensor-parallelized {}: blocks={} attentions={} linears={} global_rms_norms={}",
+            "Tensor-parallelized {}: blocks={} attentions={} linears={} global_rms_norms={} "
+            "converted_liger_rms_norms={}",
             name,
             stats.blocks,
             stats.attentions,
             stats.linears,
             stats.rms_norms,
+            stats.liger_rms_norms,
         )
+        if stats.liger_rms_norms:
+            logger.warning(
+                "TP converted {} Liger Q/K RMSNorm modules in {} to the collective-aware implementation; "
+                "local Liger normalization would change Wan semantics",
+                stats.liger_rms_norms,
+                name,
+            )
 
     # ------------------------------------------------------------------
     # EMA
@@ -743,16 +748,16 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         if cfg.torch_compile_mode is not None:
             compile_kwargs["mode"] = cfg.torch_compile_mode
         if self.model.vae is not None:
-            self.model.vae = torch.compile(self.model.vae, **compile_kwargs)
+            self.model.vae.compile(**compile_kwargs)
             logger.info("Compiled vae")
         if not cfg.train_text_encoder and self.model.text_encoder is not None:
-            self.model.text_encoder = torch.compile(self.model.text_encoder, **compile_kwargs)
+            self.model.text_encoder.compile(**compile_kwargs)
             logger.info("Compiled text_encoder")
         if self.model.transformer is not None:
-            self.model.transformer = torch.compile(self.model.transformer, **compile_kwargs)
+            self.model.transformer.compile(**compile_kwargs)
             logger.info("Compiled transformer")
         if self.model.transformer_2 is not None:
-            self.model.transformer_2 = torch.compile(self.model.transformer_2, **compile_kwargs)
+            self.model.transformer_2.compile(**compile_kwargs)
             logger.info("Compiled transformer_2")
         logger.info("torch.compile enabled (backend={}, mode={})", cfg.torch_compile_backend, cfg.torch_compile_mode)
 

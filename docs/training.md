@@ -163,6 +163,9 @@ hsdp: false
 tensor_parallel_size: 2
 expert_parallel: false
 lora_rank: 0
+use_liger_kernel: true
+torch_compile: true
+torch_compile_backend: inductor
 grpo_shared_prompt_batch: false
 batch_size: 4  # per DP replica: 4 x DP4 = 16 global prompts
 grpo_fsdp_sync_each_backward: true
@@ -187,6 +190,30 @@ the VAE to CPU after rule rewards, recovering replay/Adam headroom; both are
 restored automatically before the next raw batch. The GRPO launcher defaults
 the CUDA allocator to `expandable_segments:True` unless the operator already
 set an override.[^base-rl][^wan-tp]
+
+With TP, `use_liger_kernel: true` is compatibility-safe but is not currently a
+Liger RMSNorm speedup: Wan A14B's RMSNorm modules are precisely the Q/K norms
+whose statistic spans all TP-sharded heads, so they are converted to the
+collective-aware TP implementation. `torch_compile` still compiles the
+surrounding Transformer, T5, and VAE graphs. The TP RMSNorm is an intentional
+eager graph boundary; tracing its `distributed.nn` autograd collective gives a
+numerically correct forward but an incorrect backward in current PyTorch.
+The fp32-load/bf16-FSDP activation-checkpoint wrapper puts autocast around
+`checkpoint()` and relies on non-reentrant checkpointing to restore that
+ambient state during recompute. Do not pass an autocast `context_fn`: PyTorch
+2.11 Dynamo only supports `TorchDispatchMode` checkpoint contexts. In-place
+`Module.compile()` preserves DCP/state-dict names. Inductor/Triton also needs a
+working host C compiler and the matching Python development headers (for this
+Python 3.12 environment, `Python.h` from `python3.12-dev`); install them
+system-wide or include their directories in `CPATH` before launch.
+
+The production-shape Liger+Inductor validation completed one optimizer step on
+eight 80-GiB H100s with TP2 x FSDP4, 16 global prompts, `G=16`, `T=30`, 17
+replay timesteps, both A14B experts, raw T5/VAE, `vbvr_rule`, gradient clipping,
+and AdamW at lr=1e-5. It took 4,096.42 seconds and reached 59.4 GiB allocated /
+64.5 GiB reserved per process (about 69.1 GiB per card in `nvidia-smi`), with no
+OOM. This establishes end-to-end memory feasibility; it is not a controlled
+compile-speed benchmark.
 
 ## Reward Functions
 

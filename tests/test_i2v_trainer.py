@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import torch
 
+from src.models.wan_i2v import _make_autocast_checkpoint_func
 from src.trainer.i2v_trainer import I2VTrainer, _final_video_latents
 
 
@@ -40,3 +41,23 @@ def test_i2v_train_step_uses_final_latent_from_cos_chain_batch():
     assert loss.item() == 1.0
     assert trainer.model.video_latents is final
     assert trainer.model.prompt_dropout == 0.25
+
+
+def test_autocast_checkpoint_function_is_torch_compile_compatible():
+    class CheckpointedLinear(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(4, 4)
+            self.checkpoint = _make_autocast_checkpoint_func(torch.bfloat16)
+
+        def forward(self, inputs):
+            return self.checkpoint(self.linear, inputs)
+
+    model = CheckpointedLinear()
+    model.compile(backend="eager")
+    inputs = torch.randn(2, 4, requires_grad=True)
+
+    model(inputs).square().mean().backward()
+
+    assert inputs.grad is not None
+    assert model.linear.weight.grad is not None

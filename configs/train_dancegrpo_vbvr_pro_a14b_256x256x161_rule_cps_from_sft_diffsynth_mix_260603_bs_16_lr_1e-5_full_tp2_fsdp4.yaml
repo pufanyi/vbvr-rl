@@ -10,7 +10,7 @@ height: 256
 width: 256
 fps: 16
 
-output_dir: storage/checkpoints/dancegrpo_vbvr_pro_a14b_256x256x161_rule_cps_from_sft_diffsynth_mix_260603_bs16_lr_1e-5_full_tp2_fsdp4
+output_dir: storage/checkpoints/dancegrpo_vbvr_pro_a14b_256x256x161_rule_cps_from_sft_diffsynth_mix_260603_bs16_lr_1e-5_full_tp2_fsdp4_liger_compile
 resume_from: storage/checkpoints/sft_diffsynth_mix_260603/checkpoint-epoch1
 reset_dataloader: true
 auto_resume: true
@@ -57,6 +57,15 @@ expert_parallel: false
 train_experts: both
 lora_rank: 0
 
+# All Wan RMSNorms are global-across-head Q/K norms. Liger is accepted first,
+# then TP replaces those local kernels with its collective-aware equivalent.
+# Inductor compiles the surrounding Wan/T5/VAE graphs while leaving that small
+# TP collective as an eager graph boundary for correct backward semantics.
+use_liger_kernel: true
+torch_compile: true
+torch_compile_backend: inductor
+torch_compile_mode: null
+
 # With only four data replicas, the standard path preserves the 16-prompt
 # batch without forcing batch_size <= DP as shared-prompt mode would.
 grpo_shared_prompt_batch: false
@@ -91,4 +100,4 @@ vbvr_reward_keep_tmp: false
 vbvr_reward_unsupported_score: 0.0
 
 wandb_project: wan-dancegrpo-vbvr-pro-a14b
-wandb_run_name: dancegrpo_vbvr_pro_a14b_256x256x161_rule_cps_bs16_lr1e-5_full_tp2_fsdp4
+wandb_run_name: dancegrpo_vbvr_pro_a14b_256x256x161_rule_cps_bs16_lr1e-5_full_tp2_fsdp4_liger_compile

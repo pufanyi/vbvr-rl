@@ -8,7 +8,6 @@ single transformer with expanded per-token timesteps.
 import html
 import json
 import math
-from contextlib import nullcontext
 from pathlib import Path
 
 import ftfy
@@ -64,21 +63,25 @@ def _make_autocast_checkpoint_func(dtype: torch.dtype):
                 device_type = arg.device.type
                 break
 
-        def context_fn():
-            if device_type == "cuda":
-                return (
-                    torch.autocast(device_type=device_type, dtype=dtype),
-                    torch.autocast(device_type=device_type, dtype=dtype),
-                )
-            return nullcontext(), nullcontext()
+        def run_checkpoint():
+            return checkpoint(
+                module.__call__,
+                *args,
+                use_reentrant=False,
+                determinism_check="none",
+            )
 
-        return checkpoint(
-            module.__call__,
-            *args,
-            use_reentrant=False,
-            context_fn=context_fn,
-            determinism_check="none",
-        )
+        if device_type != "cuda":
+            return run_checkpoint()
+
+        # Non-reentrant checkpointing records the ambient autocast state and
+        # restores it for recomputation. Keeping autocast around checkpoint()
+        # therefore gives forward/recompute the same bf16 behavior without a
+        # context_fn. PyTorch 2.11 Dynamo only accepts TorchDispatchMode-based
+        # checkpoint context functions, and rejects our former nested autocast
+        # context_fn before the first compiled Wan block can run.
+        with torch.autocast(device_type=device_type, dtype=dtype):
+            return run_checkpoint()
 
     return _gradient_checkpointing_func
 
