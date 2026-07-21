@@ -7,6 +7,10 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
+from src.eval.vbvr_run_evaluation_parallel import _normalize_evalkit_result, evalkit_source_sha256
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -22,6 +26,9 @@ def _write_fake_evalkit(path: Path) -> None:
 
             class NumpyEncoder(json.JSONEncoder):
                 pass
+
+
+            TASK_EVALUATOR_MAP = {"fake-task": object}
 
 
             def collect_videos(model_path):
@@ -98,32 +105,36 @@ def _run_cli(
     expected: int,
     *,
     relative_paths: bool = False,
+    expected_source_sha256: str | None = None,
 ):
     def cli_path(path: Path) -> str:
         return os.path.relpath(path, _REPO_ROOT) if relative_paths else str(path)
 
+    command = [
+        sys.executable,
+        "-m",
+        "src.eval.vbvr_run_evaluation_parallel",
+        "--model_path",
+        cli_path(model_path),
+        "--gt_base",
+        cli_path(gt_base),
+        "--output_dir",
+        cli_path(output_dir),
+        "--evalkit_dir",
+        cli_path(fake_evalkit),
+        "--expected_videos",
+        str(expected),
+        "--num_workers",
+        "2",
+        "--threads_per_worker",
+        "3",
+        "--device",
+        "cpu",
+        "--expected_evalkit_source_sha256",
+        expected_source_sha256 or evalkit_source_sha256(fake_evalkit),
+    ]
     return subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "src.eval.vbvr_run_evaluation_parallel",
-            "--model_path",
-            cli_path(model_path),
-            "--gt_base",
-            cli_path(gt_base),
-            "--output_dir",
-            cli_path(output_dir),
-            "--evalkit_dir",
-            cli_path(fake_evalkit),
-            "--expected_videos",
-            str(expected),
-            "--num_workers",
-            "2",
-            "--threads_per_worker",
-            "3",
-            "--device",
-            "cpu",
-        ],
+        command,
         cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
@@ -173,3 +184,108 @@ def test_expected_video_count_fails_before_scoring(tmp_path: Path):
     assert completed.returncode == 1
     assert "Expected exactly 4 videos, but EvalKit discovered 3" in completed.stderr
     assert not output_dir.exists()
+
+
+def test_evalkit_source_mismatch_fails_before_scoring(tmp_path: Path):
+    fake_evalkit = tmp_path / "fake_evalkit"
+    model_path = tmp_path / "model_videos"
+    gt_base = tmp_path / "gt"
+    output_dir = tmp_path / "results"
+    _write_fake_evalkit(fake_evalkit)
+    model_path.mkdir()
+    gt_base.mkdir()
+
+    completed = _run_cli(
+        fake_evalkit,
+        model_path,
+        gt_base,
+        output_dir,
+        expected=3,
+        expected_source_sha256="0" * 64,
+    )
+
+    assert completed.returncode == 1
+    assert "EvalKit source fingerprint mismatch" in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_cpu_worker_hides_cuda_after_an_earlier_torch_probe():
+    script = textwrap.dedent(
+        """
+        import json
+        import os
+
+        import torch
+
+        from src.eval.vbvr_run_evaluation_parallel import _hide_cuda_for_cpu_worker
+
+        before = {
+            "available": torch.cuda.is_available(),
+            "count": torch.cuda.device_count(),
+        }
+        _hide_cuda_for_cpu_worker()
+        after = {
+            "available": torch.cuda.is_available(),
+            "count": torch.cuda.device_count(),
+            "visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+            "nvml_check": os.environ.get("PYTORCH_NVML_BASED_CUDA_CHECK"),
+        }
+        print(json.dumps({"before": before, "after": after}))
+        """
+    )
+    env = os.environ.copy()
+    env.pop("CUDA_VISIBLE_DEVICES", None)
+    env.pop("PYTORCH_NVML_BASED_CUDA_CHECK", None)
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=_REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    state = json.loads(completed.stdout)
+    assert state["after"] == {
+        "available": False,
+        "count": 0,
+        "visible_devices": "",
+        "nvml_check": "1",
+    }
+
+
+def test_evalkit_fingerprint_covers_annotations_and_requirements(tmp_path: Path):
+    fake_evalkit = tmp_path / "fake_evalkit"
+    _write_fake_evalkit(fake_evalkit)
+    annotations = fake_evalkit / "annotations"
+    annotations.mkdir()
+    annotation = annotations / "sample.json"
+    annotation.write_text('{"answer": 1}\n')
+    requirements = fake_evalkit / "requirements.txt"
+    requirements.write_text("numpy\n")
+
+    initial = evalkit_source_sha256(fake_evalkit)
+    annotation.write_text('{"answer": 2}\n')
+    after_annotation = evalkit_source_sha256(fake_evalkit)
+    requirements.write_text("numpy==2.0\n")
+    after_requirements = evalkit_source_sha256(fake_evalkit)
+
+    assert initial != after_annotation
+    assert after_annotation != after_requirements
+
+
+@pytest.mark.parametrize(
+    ("result", "error"),
+    [
+        (None, "expected a mapping"),
+        ({}, "missing required 'score'"),
+        ({"score": "0.5"}, "score must be numeric"),
+        ({"score": float("nan")}, "score must be finite"),
+        ({"score": 0.5, "dimensions": []}, "dimensions must be a mapping"),
+    ],
+)
+def test_evalkit_result_schema_is_strict(result: object, error: str):
+    with pytest.raises((KeyError, TypeError, ValueError), match=error):
+        _normalize_evalkit_result(result)

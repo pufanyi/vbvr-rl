@@ -141,6 +141,71 @@ def write_manifest(path: Path, manifest: dict[str, object]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def verify_recorded_manifest(
+    path: Path,
+    *,
+    expected_stage: str | None = None,
+    require_complete: bool = False,
+    sections: tuple[str, ...] | None = None,
+) -> tuple[bool, str]:
+    """Recompute the artifact fingerprints stored in an existing manifest.
+
+    Unlike :func:`manifest_matches`, this does not require callers to rebuild
+    the original CLI arguments. It is intended for consumers such as sweep
+    skip logic and report generation, which must not trust a provenance label
+    after its recorded result or media artifacts have been replaced.
+    """
+    source = path.expanduser().resolve()
+    if not source.is_file():
+        return False, f"provenance manifest is missing: {source}"
+    try:
+        manifest = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return False, f"could not read provenance manifest {source}: {exc}"
+    if not isinstance(manifest, dict):
+        return False, f"provenance manifest is not a JSON object: {source}"
+    if manifest.get("schema_version") != _SCHEMA_VERSION:
+        return False, f"unsupported provenance schema in {source}: {manifest.get('schema_version')!r}"
+    if expected_stage is not None and manifest.get("stage") != expected_stage:
+        return False, (
+            f"provenance stage mismatch in {source}: "
+            f"expected={expected_stage!r}, actual={manifest.get('stage')!r}"
+        )
+    values = manifest.get("values")
+    if not isinstance(values, dict):
+        return False, f"provenance values are missing or invalid: {source}"
+    if require_complete and values.get("state") != "complete":
+        return False, f"provenance manifest is not complete: {source}"
+
+    fingerprinters = {
+        "files": fingerprint_file,
+        "trees": fingerprint_tree,
+        "output_files": fingerprint_file,
+        "output_trees": fingerprint_tree,
+        "media_trees": fingerprint_media_tree,
+    }
+    selected = sections or tuple(fingerprinters)
+    unknown = [section for section in selected if section not in fingerprinters]
+    if unknown:
+        return False, f"unknown provenance artifact section {unknown[0]!r}"
+
+    for section in selected:
+        artifacts = manifest.get(section)
+        if not isinstance(artifacts, dict):
+            return False, f"provenance section {section!r} is missing or invalid: {source}"
+        fingerprint = fingerprinters[section]
+        for name, recorded in sorted(artifacts.items()):
+            if not isinstance(recorded, dict) or not isinstance(recorded.get("path"), str):
+                return False, f"invalid recorded artifact {section}.{name} in {source}"
+            try:
+                current = fingerprint(Path(recorded["path"]))
+            except Exception as exc:
+                return False, f"could not fingerprint {section}.{name} from {source}: {exc}"
+            if current != recorded:
+                return False, f"recorded artifact changed: {section}.{name} in {source}"
+    return True, ""
+
+
 def manifest_matches(path: Path, expected: dict[str, object], *, inputs_only: bool = False) -> tuple[bool, str]:
     source = path.expanduser().resolve()
     if not source.is_file():

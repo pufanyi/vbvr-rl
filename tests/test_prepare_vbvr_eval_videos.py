@@ -8,6 +8,7 @@ from pathlib import Path
 from src.cli.prepare_vbvr_eval_videos import (
     VideoPreparationError,
     compute_output_fps,
+    prepare_video,
     prepare_videos,
     probe_video,
 )
@@ -77,6 +78,28 @@ class TestPrepareVBVREvalVideos(unittest.TestCase):
         self.assertEqual(compute_output_fps(Fraction(16, 1), 161, 5.0), Fraction(33, 1))
         self.assertEqual(compute_output_fps(Fraction(60, 1), 161, 5.0), Fraction(60, 1))
         self.assertEqual(compute_output_fps(Fraction(16, 1), 165, 5.0), Fraction(33, 1))
+
+    def test_prepare_one_video_uses_the_batch_contract(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source = root / "source.mp4"
+            output = root / "prepared.mp4"
+            _make_video(source, frames=17, fps=8, size="80x40")
+
+            result = prepare_video(
+                source,
+                output,
+                width=64,
+                height=64,
+                max_duration=2.0,
+            )
+            info = probe_video(output)
+
+            self.assertEqual(result.status, "processed")
+            self.assertEqual((info.width, info.height), (64, 64))
+            self.assertEqual(info.frame_count, 17)
+            self.assertEqual(info.average_fps, Fraction(9, 1))
+            self.assertLessEqual(info.duration, 2.0)
 
     def test_recursive_resize_pad_retime_and_valid_skip(self):
         with tempfile.TemporaryDirectory() as tmpdir:

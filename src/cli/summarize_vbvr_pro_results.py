@@ -12,7 +12,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from src.eval.evaluation_provenance import verify_recorded_manifest
+
 RESULT_RELATIVE_PATH = Path("scores/eval_1024x1024_161f_5s_vbvr_results.json")
+SCORE_PROVENANCE_NAME = "score-provenance.json"
 DANCE_RUN_RE = re.compile(r"^dancegrpo_vbvr_pro_5b_checkpoint-(?P<step>\d+)(?:-cps-noise-(?P<noise>\d+(?:\.\d+)?))?$")
 CATEGORY_ORDER = ("Abstraction", "Spatiality", "Transformation", "Perception", "Knowledge")
 
@@ -29,6 +32,8 @@ class RunResult:
     task_scores: dict[str, float]
     task_meta: dict[str, tuple[str, str]]
     task_counts: dict[str, int]
+    evalkit_revision: str
+    evalkit_source_sha256: str
 
     @property
     def overall(self) -> float:
@@ -59,8 +64,45 @@ def _classify_run(name: str) -> tuple[str, int | None, str, float | None]:
     return "Other", None, "Unknown", None
 
 
-def _load_run(run_dir: Path, expected_samples: int) -> RunResult:
+def _load_run(
+    run_dir: Path,
+    expected_samples: int,
+    expected_evalkit_source_sha256: str | None = None,
+) -> RunResult:
     result_path = run_dir / RESULT_RELATIVE_PATH
+    provenance_path = run_dir / SCORE_PROVENANCE_NAME
+    if not provenance_path.is_file():
+        raise ValueError(f"{run_dir.name}: missing {SCORE_PROVENANCE_NAME}")
+    provenance = json.loads(provenance_path.read_text())
+    if provenance.get("schema_version") != 1:
+        raise ValueError(f"{run_dir.name}: unsupported or missing score provenance schema")
+    if provenance.get("stage") != "vbvr-pro-score":
+        raise ValueError(f"{run_dir.name}: score provenance stage is not vbvr-pro-score")
+    values = provenance.get("values", {})
+    if values.get("state") != "complete":
+        raise ValueError(f"{run_dir.name}: score provenance is not complete")
+    evalkit_revision = values.get("evalkit_revision")
+    evalkit_source_sha256 = values.get("evalkit_source_sha256")
+    if not isinstance(evalkit_revision, str) or not evalkit_revision:
+        raise ValueError(f"{run_dir.name}: score provenance is missing evalkit_revision")
+    if not isinstance(evalkit_source_sha256, str) or len(evalkit_source_sha256) != 64:
+        raise ValueError(f"{run_dir.name}: score provenance is missing evalkit_source_sha256")
+    if expected_evalkit_source_sha256 and evalkit_source_sha256 != expected_evalkit_source_sha256:
+        raise ValueError(
+            f"{run_dir.name}: scorer fingerprint {evalkit_source_sha256} "
+            f"does not match expected {expected_evalkit_source_sha256}"
+        )
+    recorded_result = provenance.get("output_files", {}).get("result", {})
+    if recorded_result.get("path") != str(result_path.resolve()):
+        raise ValueError(f"{run_dir.name}: score provenance is not bound to its standard result JSON")
+    matches, detail = verify_recorded_manifest(
+        provenance_path,
+        expected_stage="vbvr-pro-score",
+        require_complete=True,
+        sections=("output_files",),
+    )
+    if not matches:
+        raise ValueError(f"{run_dir.name}: {detail}")
     result = json.loads(result_path.read_text())
     samples = result.get("samples")
     if not isinstance(samples, list) or len(samples) != expected_samples:
@@ -95,10 +137,16 @@ def _load_run(run_dir: Path, expected_samples: int) -> RunResult:
         task_scores=task_scores,
         task_meta=task_meta,
         task_counts=dict(task_counts),
+        evalkit_revision=evalkit_revision,
+        evalkit_source_sha256=evalkit_source_sha256,
     )
 
 
-def discover_runs(root: Path, expected_samples: int = 500) -> tuple[list[RunResult], list[tuple[str, str]]]:
+def discover_runs(
+    root: Path,
+    expected_samples: int = 500,
+    expected_evalkit_source_sha256: str | None = None,
+) -> tuple[list[RunResult], list[tuple[str, str]]]:
     runs: list[RunResult] = []
     skipped: list[tuple[str, str]] = []
     for run_dir in sorted((path for path in root.iterdir() if path.is_dir()), key=lambda path: path.name):
@@ -108,7 +156,7 @@ def discover_runs(root: Path, expected_samples: int = 500) -> tuple[list[RunResu
                 skipped.append((run_dir.name, "missing standard result JSON"))
             continue
         try:
-            runs.append(_load_run(run_dir, expected_samples))
+            runs.append(_load_run(run_dir, expected_samples, expected_evalkit_source_sha256))
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             skipped.append((run_dir.name, str(exc)))
 
@@ -123,6 +171,12 @@ def discover_runs(root: Path, expected_samples: int = 500) -> tuple[list[RunResu
             run.name,
         )
     )
+    scorer_hashes = {run.evalkit_source_sha256 for run in runs}
+    if len(scorer_hashes) > 1:
+        raise ValueError(
+            "Refusing to mix VBVR-Pro results from multiple scorer fingerprints: "
+            + ", ".join(sorted(scorer_hashes))
+        )
     return runs, skipped
 
 
@@ -163,6 +217,8 @@ def write_all_run_summary(runs: list[RunResult], skipped: list[tuple[str, str]],
             *CATEGORY_ORDER,
             "Samples",
             "Tasks",
+            "EvalKit Revision",
+            "EvalKit Source SHA-256",
             "Result JSON",
         ]
     )
@@ -180,10 +236,16 @@ def write_all_run_summary(runs: list[RunResult], skipped: list[tuple[str, str]],
                 *(_category_score(run, category) for category in CATEGORY_ORDER),
                 run.sample_count,
                 len(run.task_scores),
+                run.evalkit_revision,
+                run.evalkit_source_sha256,
                 str(run.result_path),
             ]
         )
-    _format_sheet(sheet, [72, 16, 18, 12, 18, 14, 14, 16, 16, 16, 18, 16, 16, 12, 10, 90], list(range(6, 14)))
+    _format_sheet(
+        sheet,
+        [72, 16, 18, 12, 18, 14, 14, 16, 16, 16, 18, 16, 16, 12, 10, 42, 68, 90],
+        list(range(6, 14)),
+    )
 
     skipped_sheet = workbook.create_sheet("Skipped")
     skipped_sheet.append(["Run", "Reason"])
@@ -502,8 +564,13 @@ def generate_reports(
     root: Path,
     output_dir: Path,
     expected_samples: int = 500,
+    expected_evalkit_source_sha256: str | None = None,
 ) -> tuple[Path, Path, Path, Path, Path, int, int]:
-    runs, skipped = discover_runs(root, expected_samples=expected_samples)
+    runs, skipped = discover_runs(
+        root,
+        expected_samples=expected_samples,
+        expected_evalkit_source_sha256=expected_evalkit_source_sha256,
+    )
     if not runs:
         raise ValueError(f"No complete standard results found under {root}")
     all_runs_path = output_dir / "all_run_summary.xlsx"
@@ -521,16 +588,30 @@ def generate_reports(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Summarize completed VBVR-Pro main_v2 evaluations into Excel files.")
-    parser.add_argument("--root", type=Path, default=Path("storage/eval_out/vbvr_pro_main_v2"))
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=Path("storage/eval_out/vbvr_pro_main_v2_evalkit_eb977da6"),
+    )
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--expected-samples", type=int, default=500)
+    parser.add_argument(
+        "--expected-evalkit-source-sha256",
+        default="eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c",
+        help="Only include complete runs with this exact scorer-contract fingerprint",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     output_dir = args.output_dir or args.root / "reports"
-    paths = generate_reports(args.root, output_dir, expected_samples=args.expected_samples)
+    paths = generate_reports(
+        args.root,
+        output_dir,
+        expected_samples=args.expected_samples,
+        expected_evalkit_source_sha256=args.expected_evalkit_source_sha256,
+    )
     for path in paths[:5]:
         print(path)
     print(f"Complete runs: {paths[5]}; skipped/incomplete runs: {paths[6]}")

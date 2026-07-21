@@ -281,6 +281,52 @@ def _prepare_one(
         temp_path.unlink(missing_ok=True)
 
 
+def prepare_video(
+    source_path: Path,
+    output_path: Path,
+    *,
+    width: int = 1024,
+    height: int = 1024,
+    max_duration: float = 5.0,
+    crf: int = 12,
+    ffmpeg: str = "ffmpeg",
+    ffprobe: str = "ffprobe",
+    force: bool = True,
+) -> ProcessResult:
+    """Prepare one video with the exact contract used by VBVR-Pro evaluation.
+
+    Training rewards call this entry point so their generated videos go through
+    the same scale/pad/retime/encode/validation path as the final batch
+    evaluation. Every source frame is retained.
+    """
+    source = source_path.expanduser().resolve()
+    output = output_path.expanduser().resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"Input video does not exist: {source}")
+    if source == output:
+        raise ValueError("source_path and output_path must be different files")
+    if width <= 0 or height <= 0 or width % 2 or height % 2:
+        raise ValueError(f"width and height must be positive even integers, got {width}x{height}")
+    if max_duration <= 0:
+        raise ValueError(f"max_duration must be positive, got {max_duration}")
+    if not 0 <= crf <= 51:
+        raise ValueError(f"crf must be in [0, 51], got {crf}")
+    _require_executable(ffmpeg)
+    _require_executable(ffprobe)
+    return _prepare_one(
+        source,
+        output,
+        Path(source.name),
+        width=width,
+        height=height,
+        max_duration=max_duration,
+        crf=crf,
+        ffmpeg=ffmpeg,
+        ffprobe=ffprobe,
+        force=force,
+    )
+
+
 def _discover_mp4s(root: Path, *, exclude: Path | None = None) -> list[Path]:
     paths: list[Path] = []
     for path in root.rglob("*"):

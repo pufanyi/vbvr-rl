@@ -6,6 +6,7 @@ from src.eval.evaluation_provenance import (
     main,
     manifest_matches,
     refresh_manifest_outputs,
+    verify_recorded_manifest,
     write_manifest,
 )
 
@@ -144,6 +145,39 @@ def test_promote_rechecks_inputs_and_fingerprints_outputs(tmp_path: Path):
     assert main(complete) == 0
     output.write_bytes(b"video-two")
     assert main([*complete, "--quiet"]) == 1
+
+
+def test_verify_recorded_manifest_recomputes_outputs(tmp_path: Path):
+    source = tmp_path / "source.txt"
+    output = tmp_path / "result.json"
+    source.write_text("input")
+    output.write_text('{"score": 1}')
+    manifest_path = tmp_path / "provenance.json"
+    manifest = build_manifest(
+        stage="vbvr-pro-score",
+        values={"state": "complete"},
+        files={"source": str(source)},
+        trees={},
+        output_files={"result": str(output)},
+    )
+    write_manifest(manifest_path, manifest)
+
+    assert verify_recorded_manifest(
+        manifest_path,
+        expected_stage="vbvr-pro-score",
+        require_complete=True,
+    ) == (True, "")
+    assert not verify_recorded_manifest(manifest_path, expected_stage="other-stage")[0]
+
+    output.write_text('{"score": 0}')
+    matches, detail = verify_recorded_manifest(
+        manifest_path,
+        expected_stage="vbvr-pro-score",
+        require_complete=True,
+        sections=("output_files",),
+    )
+    assert not matches
+    assert "output_files.result" in detail
 
 
 def test_refresh_outputs_requires_exact_complete_inputs(tmp_path: Path):

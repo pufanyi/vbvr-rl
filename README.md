@@ -42,6 +42,10 @@ fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8
 # Single-node A14B full fine-tuning: TP2 x FSDP4, global prompt batch 16.
 fish scripts/train/grpo.fish --nproc 8 --config \
   configs/train_dancegrpo_vbvr_pro_a14b_256x256x161_rule_cps_from_sft_diffsynth_mix_260603_bs_16_lr_1e-5_full_tp2_fsdp4.yaml
+
+# Four-node counterpart: TP2 x FSDP16, still global prompt batch 16.
+# Run the same command on every scheduler node with WORLD_SIZE=4 and RANK=0..3.
+fish scripts/train/dancegrpo_vbvr_pro_a14b_full_tp2_4node.fish
 ```
 
 On-policy correction:

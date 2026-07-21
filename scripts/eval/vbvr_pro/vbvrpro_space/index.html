@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Explore VBVR-Pro task scores, baseline deltas, and every scored video across the strict In-Domain DanceGRPO sweep."
+    />
+    <meta name="theme-color" content="#f3f0e8" />
+    <title>VBVR-Pro Output Explorer</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <nav class="topbar" aria-label="Primary">
+          <a class="brand" href="./" aria-label="VBVR-Pro Output Explorer home">
+            <span class="brand-mark" aria-hidden="true">V</span>
+            <span>VBVR·PRO / OUTPUT ATLAS</span>
+          </a>
+          <div class="topbar-meta">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span id="dataset-status">Loading evaluation archive…</span>
+          </div>
+        </nav>
+
+        <div class="hero-grid">
+          <div>
+            <p class="eyebrow">WAN2.2 TI2V-5B · DANCEGRPO</p>
+            <h1>See where training moved the needle.</h1>
+            <p class="hero-copy">
+              Task-level change, sample-level evidence, and every scored video from the
+              strict In-Domain sweep—always grounded against the same SFT baseline.
+            </p>
+          </div>
+          <div class="hero-stamp" aria-label="Dataset summary">
+            <div class="stamp-number" id="hero-run-count">20</div>
+            <div class="stamp-label">evaluated runs</div>
+            <div class="stamp-rule"></div>
+            <div class="stamp-detail">
+              <span id="hero-video-count">10,500</span> videos ·
+              <span id="hero-task-count">100</span> tasks
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section class="control-deck" aria-labelledby="run-selection-title">
+          <div class="section-heading compact">
+            <div>
+              <p class="section-index">01 / RUN SELECTION</p>
+              <h2 id="run-selection-title">Choose a checkpoint and sampler</h2>
+            </div>
+            <div class="baseline-pill">
+              <span>BASELINE</span>
+              SFT epoch 1
+            </div>
+          </div>
+
+          <div class="run-controls">
+            <label class="select-field">
+              <span>Checkpoint</span>
+              <select id="checkpoint-select" aria-label="Checkpoint"></select>
+            </label>
+            <fieldset class="mode-fieldset">
+              <legend>Sampling mode</legend>
+              <div id="mode-switcher" class="mode-switcher"></div>
+            </fieldset>
+          </div>
+
+          <div id="score-cards" class="score-cards" aria-live="polite"></div>
+        </section>
+
+        <section class="trend-section" aria-labelledby="trend-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-index">02 / SCORE TRAJECTORY</p>
+              <h2 id="trend-title">Overall score across training</h2>
+            </div>
+            <p class="section-note">Step 0 is the shared SFT ODE baseline; all runs use the same 500 samples.</p>
+          </div>
+          <div class="chart-card">
+            <div id="trend-legend" class="trend-legend" aria-label="Chart legend"></div>
+            <div id="trend-chart" class="trend-chart" role="img" aria-label="Overall score trend chart"></div>
+          </div>
+        </section>
+
+        <section class="task-section" aria-labelledby="task-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-index">03 / TASK LEDGER</p>
+              <h2 id="task-title">Every task, ranked by change</h2>
+            </div>
+            <p id="task-summary" class="section-note"></p>
+          </div>
+
+          <div class="task-toolbar">
+            <label class="search-field">
+              <span class="sr-only">Search tasks</span>
+              <svg aria-hidden="true" viewBox="0 0 24 24">
+                <path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" />
+              </svg>
+              <input id="task-search" type="search" placeholder="Search exact task_name…" autocomplete="off" />
+            </label>
+
+            <div id="domain-filter" class="domain-filter" aria-label="Domain filter">
+              <button class="active" type="button" data-domain="all">All</button>
+              <button type="button" data-domain="In_Domain">In-Domain</button>
+              <button type="button" data-domain="Out_of_Domain">Out-of-Domain</button>
+            </div>
+
+            <label class="sort-field">
+              <span>Sort</span>
+              <select id="task-sort">
+                <option value="delta-desc">Largest gain</option>
+                <option value="delta-asc">Largest drop</option>
+                <option value="score-desc">Highest score</option>
+                <option value="score-asc">Lowest score</option>
+                <option value="name-asc">Task name</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="task-table-wrap">
+            <table class="task-table">
+              <thead>
+                <tr>
+                  <th scope="col">Task</th>
+                  <th scope="col">Domain / category</th>
+                  <th scope="col">Current</th>
+                  <th scope="col">Baseline</th>
+                  <th scope="col">Δ vs baseline</th>
+                  <th scope="col"><span class="sr-only">Inspect</span></th>
+                </tr>
+              </thead>
+              <tbody id="task-table-body"></tbody>
+            </table>
+            <div id="empty-state" class="empty-state" hidden>
+              No tasks match this filter.
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <span>VBVR-PRO · MAIN_V2</span>
+        <span>MANIFEST 326F7BDA · EVALKIT 42A1593D</span>
+      </footer>
+    </div>
+
+    <dialog id="task-dialog" class="task-dialog">
+      <div class="dialog-shell">
+        <header class="dialog-header">
+          <div>
+            <p id="dialog-kicker" class="section-index"></p>
+            <h2 id="dialog-title"></h2>
+            <p id="dialog-raw-name" class="raw-task-name"></p>
+          </div>
+          <button id="dialog-close" class="close-button" type="button" aria-label="Close task detail">×</button>
+        </header>
+
+        <div class="dialog-body">
+          <div id="dialog-metrics" class="dialog-metrics"></div>
+          <details class="prompt-panel">
+            <summary>Evaluation prompt</summary>
+            <p id="dialog-prompt"></p>
+          </details>
+
+          <div class="sample-heading">
+            <div>
+              <p class="section-index">SAMPLE EVIDENCE</p>
+              <h3>Selected run vs SFT baseline</h3>
+            </div>
+            <p>Five matched samples. Scores are exact values from the scorer JSON.</p>
+          </div>
+          <div id="sample-grid" class="sample-grid"></div>
+        </div>
+      </div>
+    </dialog>
+
+    <div id="loading-overlay" class="loading-overlay" role="status">
+      <div class="loading-card">
+        <div class="loading-mark">V</div>
+        <p>Indexing the evaluation archive</p>
+        <div class="loading-line"><span></span></div>
+      </div>
+    </div>
+
+    <script src="./app.js" defer></script>
+  </body>
+</html>

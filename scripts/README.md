@@ -30,4 +30,20 @@ fish scripts/convert/dcp_to_diffusers.fish
 ```
 
 Most fish launchers source `scripts/lib/env.fish`, which changes to the repo
-root, activates `.venv`, and exports `PYTHONPATH`.
+root, activates `.venv`, exports `PYTHONPATH`, and makes matching Python
+development headers available to Triton through `CPATH` when possible. The
+multi-node GRPO launcher also preflights the Triton CUDA driver before loading
+the model.
+
+When a cluster image has Python 3.12 runtime files but no `Python.h`, provision
+the ignored shared toolchain once before submitting the multi-node job:
+
+```fish
+fish scripts/dev/bootstrap_triton_python_headers.fish
+```
+
+The bootstrap uses `uv`, then forces a fresh-cache Triton driver compilation.
+`scripts/lib/env.fish` discovers the resulting versioned include directory on
+every node without downloading during launch. For a cheap scheduler-wide check,
+set `WAN_TRAINER_TRITON_PREFLIGHT_ONLY=1` on all nodes; rerun without it after
+all nodes report that the preflight passed.

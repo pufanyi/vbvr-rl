@@ -85,6 +85,28 @@ def test_rl_config_rejects_cps_noise_range_for_other_sde_formulas():
         RLConfig(grpo_sde_formula="dancegrpo", grpo_cps_noise_scale_range=(0.0, 1.0))
 
 
+def test_rl_config_requires_explicit_vbvr_evalkit_pin():
+    with pytest.raises(ValueError, match="requires vbvr_reward_evalkit_dir"):
+        RLConfig(grpo_reward_fn="vbvr_rule")
+    with pytest.raises(ValueError, match="requires vbvr_reward_evalkit_source_sha256"):
+        RLConfig(grpo_reward_fn="vbvr_rule", vbvr_reward_evalkit_dir="evalkit")
+
+
+def test_rl_config_validates_vbvr_evalkit_digest():
+    with pytest.raises(ValueError, match="64-character hexadecimal"):
+        RLConfig(
+            grpo_reward_fn="vbvr_rule",
+            vbvr_reward_evalkit_dir="evalkit",
+            vbvr_reward_evalkit_source_sha256="not-a-digest",
+        )
+    cfg = RLConfig(
+        grpo_reward_fn="vbvr_rule",
+        vbvr_reward_evalkit_dir="evalkit",
+        vbvr_reward_evalkit_source_sha256="A" * 64,
+    )
+    assert cfg.vbvr_reward_evalkit_source_sha256 == "a" * 64
+
+
 def test_dancegrpo_samples_deterministic_cps_noise_once_per_prompt_group():
     trainer = DanceGRPOTrainer.__new__(DanceGRPOTrainer)
     trainer.cfg = SimpleNamespace(

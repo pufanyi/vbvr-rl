@@ -299,9 +299,7 @@ class I2VDataset(Dataset):
             excluded_sample_ids: set[str] = set()
             for excluded_split in exclude_sample_ids_from:
                 if excluded_split not in record:
-                    raise ValueError(
-                        f"VBVR-Pro record for {task_name} has no exclusion split {excluded_split!r}"
-                    )
+                    raise ValueError(f"VBVR-Pro record for {task_name} has no exclusion split {excluded_split!r}")
                 excluded_sample_ids.update(str(sample_id) for sample_id in record[excluded_split])
             if excluded_sample_ids:
                 sample_ids = [sample_id for sample_id in sample_ids if str(sample_id) not in excluded_sample_ids]
@@ -358,11 +356,9 @@ class I2VDataset(Dataset):
         task_names = set(str(name) for name in (allowed or []))
         if allowed_from_evalkit is not None:
             evalkit_path = cls._resolve_config_path(allowed_from_evalkit, parent_dir)
-            if str(evalkit_path) not in sys.path:
-                sys.path.insert(0, str(evalkit_path))
-            from vbvr_bench.evaluators import TASK_EVALUATOR_MAP
+            from src.eval.vbvr_run_evaluation_parallel import evalkit_supported_task_names
 
-            task_names.update(str(name) for name in TASK_EVALUATOR_MAP)
+            task_names.update(evalkit_supported_task_names(evalkit_path))
         return frozenset(task_names)
 
     @staticmethod
@@ -640,6 +636,7 @@ class I2VDataset(Dataset):
             "videos": [video],
             "image": image,
             "prompt": prompt,
+            "sample_prompt": prompt,
             "sample_task_name": sample.task_name,
             "sample_tar": f"{sample.task_name}.tar",
             "sample_index_in_tar": sample.sample_index,

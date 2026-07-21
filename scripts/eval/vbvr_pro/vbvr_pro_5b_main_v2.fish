@@ -18,18 +18,32 @@ set -q CONVERTED_MODEL[1]; or set CONVERTED_MODEL storage/models/dcp_converted_5
 set -q GT_BASE[1]; or set GT_BASE /mnt/aigc/xujunxiang/VR_Data/VBVR-Bench_Pro-video
 set -q SPLIT_MANIFEST[1]; or set SPLIT_MANIFEST /mnt/aigc/xujunxiang/Code/VBVR-Pro/scripts/split_manifest.json
 
-set -q EVALKIT_DIR[1]; or set EVALKIT_DIR storage/evalkits/vbvr-evalkit-interleave-main_v2
+set -q EVALKIT_DIR[1]; or set EVALKIT_DIR storage/evalkits/vbvr-evalkit-interleave-main_v2-6fedd9d9
 set -q EVALKIT_REPO[1]; or set EVALKIT_REPO git@github.com:xujunxiangwork/VBVR-Evalkit-Interleave.git
-set -q EVALKIT_REV[1]; or set EVALKIT_REV 42a1593d8e493370c768be8e43646f0e0a9d8525
+set -q EVALKIT_REV[1]; or set EVALKIT_REV 6fedd9d9edb8daafa56aca8e53885aa8ad6f6037
+set -q EVALKIT_SOURCE_SHA256[1]; or set EVALKIT_SOURCE_SHA256 eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c
+set -q EVALKIT_INSTALL_LOCK[1]; or set EVALKIT_INSTALL_LOCK $EVALKIT_DIR.install.lock
+set -q EVALKIT_INSTALL_WAIT_SECONDS[1]; or set EVALKIT_INSTALL_WAIT_SECONDS 1800
+set -q EVALKIT_INSTALL_POLL_SECONDS[1]; or set EVALKIT_INSTALL_POLL_SECONDS 2
 set -q EASYOCR_SOURCE_MODELS[1]; or set EASYOCR_SOURCE_MODELS /mnt/aigc/xujunxiang/Code/VBVR-Bench/VBVR-EvalKit/easyocr_models
 
-set -q OUTPUT_ROOT[1]; or set OUTPUT_ROOT storage/eval_out/vbvr_pro_main_v2/dancegrpo_vbvr_pro_5b_checkpoint-1200
+set -q OUTPUT_ROOT[1]; or set OUTPUT_ROOT storage/eval_out/vbvr_pro_main_v2_evalkit_eb977da6/dancegrpo_vbvr_pro_5b_checkpoint-1200
 set -q EVAL_JSON[1]; or set EVAL_JSON $OUTPUT_ROOT/eval_samples.json
 set -q GENERATED_DIR[1]; or set GENERATED_DIR $OUTPUT_ROOT/generated_256x256x161
 set -q PREPARED_DIR[1]; or set PREPARED_DIR $OUTPUT_ROOT/eval_1024x1024_161f_5s
 set -q SCORE_DIR[1]; or set SCORE_DIR $OUTPUT_ROOT/scores
 set -q EASYOCR_ROOT[1]; or set EASYOCR_ROOT storage/evalkits/easyocr-shared
-set -q CONVERSION_PROVENANCE[1]; or set CONVERSION_PROVENANCE $CONVERTED_MODEL.wan-trainer-provenance.json
+set -q PRECONVERTED_MODEL[1]; or set PRECONVERTED_MODEL 0
+if test "$PRECONVERTED_MODEL" = 1
+    # Direct Diffusers inputs must carry their own immutable conversion/import
+    # record. Generation provenance fingerprints both this file and the full
+    # model tree.
+    set -q CONVERSION_PROVENANCE[1]
+    or set CONVERSION_PROVENANCE $CONVERTED_MODEL/conversion_metadata.json
+else
+    set -q CONVERSION_PROVENANCE[1]
+    or set CONVERSION_PROVENANCE $CONVERTED_MODEL.wan-trainer-provenance.json
+end
 set -q GENERATION_PROVENANCE[1]; or set GENERATION_PROVENANCE $OUTPUT_ROOT/generation-provenance.json
 set -q PREPARATION_PROVENANCE[1]; or set PREPARATION_PROVENANCE $OUTPUT_ROOT/preparation-provenance.json
 set -q SCORE_PROVENANCE[1]; or set SCORE_PROVENANCE $OUTPUT_ROOT/score-provenance.json
@@ -81,6 +95,8 @@ contains -- $GENERATION_MODE ode cps
 or _fail "GENERATION_MODE must be ode or cps, got $GENERATION_MODE"
 contains -- $ODE_SOLVER unipc euler
 or _fail "ODE_SOLVER must be unipc or euler, got $ODE_SOLVER"
+contains -- $PRECONVERTED_MODEL 0 1
+or _fail "PRECONVERTED_MODEL must be 0 or 1, got $PRECONVERTED_MODEL"
 if test $GENERATION_MODE = cps
     $PYTHON -c 'import sys; value=float(sys.argv[1]); raise SystemExit(0 if 0.0 <= value <= 1.0 else 1)' \
         $CPS_NOISE_LEVEL
@@ -90,6 +106,8 @@ end
 if set -q DRY_RUN[1]
     echo "[dry-run] mode=$GENERATION_MODE checkpoint=$CHECKPOINT"
     echo "[dry-run] converted_model=$CONVERTED_MODEL output_root=$OUTPUT_ROOT"
+    echo "[dry-run] preconverted_model=$PRECONVERTED_MODEL conversion_provenance=$CONVERSION_PROVENANCE"
+    echo "[dry-run] evalkit=$EVALKIT_DIR revision=$EVALKIT_REV source_sha256=$EVALKIT_SOURCE_SHA256"
     if test $GENERATION_MODE = cps
         echo "[dry-run] cps_noise_level=$CPS_NOISE_LEVEL steps=$NUM_INFERENCE_STEPS cfg=$GUIDANCE_SCALE"
     else
@@ -149,6 +167,32 @@ function _conversion_provenance
 end
 
 set -g _vbvr_conversion_lock_held 0
+set -g _vbvr_evalkit_install_lock_held 0
+
+function _release_evalkit_install_lock --on-event fish_exit
+    if test "$_vbvr_evalkit_install_lock_held" != 1
+        return 0
+    end
+    command rm -f -- "$EVALKIT_INSTALL_LOCK/owner"
+    if not command rmdir -- "$EVALKIT_INSTALL_LOCK" 2>/dev/null
+        echo "[warn] could not remove EvalKit install lock directory: $EVALKIT_INSTALL_LOCK" >&2
+        return 1
+    end
+    set -g _vbvr_evalkit_install_lock_held 0
+end
+
+function _try_acquire_evalkit_install_lock
+    command mkdir -- "$EVALKIT_INSTALL_LOCK" 2>/dev/null; or return 1
+    set -g _vbvr_evalkit_install_lock_held 1
+    printf 'host=%s\npid=%s\nrevision=%s\nstarted_at=%s\n' \
+        (hostname) "$fish_pid" "$EVALKIT_REV" (date --iso-8601=seconds) \
+        >"$EVALKIT_INSTALL_LOCK/owner"
+    or begin
+        _release_evalkit_install_lock
+        return 1
+    end
+    return 0
+end
 
 function _release_conversion_lock --on-event fish_exit
     if test "$_vbvr_conversion_lock_held" != 1
@@ -281,6 +325,15 @@ function _score_provenance
     set -l mode $argv[1]
     set -l state $argv[2]
     set -l result_file $argv[3]
+    set -l current_evalkit_source_sha256 ($PYTHON -c '
+import sys
+from src.eval.vbvr_run_evaluation_parallel import evalkit_source_sha256
+print(evalkit_source_sha256(sys.argv[1]))
+' $EVALKIT_DIR); or return 1
+    if test "$current_evalkit_source_sha256" != "$EVALKIT_SOURCE_SHA256"
+        echo "[error] EvalKit source fingerprint changed or does not match the pin: expected=$EVALKIT_SOURCE_SHA256 actual=$current_evalkit_source_sha256" >&2
+        return 1
+    end
     set -l output_args
     if test $mode = promote
         set output_args --output-file result=$result_file
@@ -292,11 +345,17 @@ function _score_provenance
         --stage vbvr-pro-score \
         --value state=$state \
         --value evalkit_revision=$EVALKIT_REV \
+        --value evalkit_revision_actual=$evalkit_revision_actual \
+        --value evalkit_source_sha256=$current_evalkit_source_sha256 \
+        --value scorer_dependencies=$scorer_dependency_versions \
         --value device=cpu \
         --value workers=$SCORE_WORKERS \
         --value threads_per_worker=$SCORE_THREADS_PER_WORKER \
         --file preparation_provenance=$PREPARATION_PROVENANCE \
         --file scorer_entrypoint=$EVALKIT_DIR/run_evaluation.py \
+        --file scorer_requirements=$EVALKIT_DIR/requirements.txt \
+        --file easyocr_craft=$EASYOCR_ROOT/model/craft_mlt_25k.pth \
+        --file easyocr_english=$EASYOCR_ROOT/model/english_g2.pth \
         --file scorer_wrapper=src/eval/vbvr_run_evaluation_parallel.py \
         --tree prepared_videos=$PREPARED_DIR \
         --tree ground_truth=$GT_BASE \
@@ -312,11 +371,57 @@ test $visible_count -ge $NUM_GPUS; or _fail "CUDA_DEVICES exposes $visible_count
 set -gx CUDA_VISIBLE_DEVICES $CUDA_DEVICES
 
 if not test -f $EVALKIT_DIR/run_evaluation.py
-    if test -e $EVALKIT_DIR
-        _fail "EvalKit directory exists but is incomplete: $EVALKIT_DIR"
+    set -l evalkit_parent (dirname $EVALKIT_DIR)
+    mkdir -p $evalkit_parent; or exit 1
+    set -l evalkit_waited_seconds 0
+    set -l evalkit_wait_announced 0
+    while not test -f $EVALKIT_DIR/run_evaluation.py
+        if test -e $EVALKIT_DIR
+            _fail "EvalKit directory exists but is incomplete: $EVALKIT_DIR"
+        end
+        if _try_acquire_evalkit_install_lock
+            if test -f $EVALKIT_DIR/run_evaluation.py
+                _release_evalkit_install_lock; or exit 1
+                break
+            end
+            set -l evalkit_staging $EVALKIT_DIR.tmp-$fish_pid
+            test ! -e $evalkit_staging
+            or _fail "temporary EvalKit checkout already exists: $evalkit_staging"
+            echo "[evalkit] fetching exact revision $EVALKIT_REV from $EVALKIT_REPO"
+            git init -q $evalkit_staging; or exit 1
+            git -C $evalkit_staging remote add origin $EVALKIT_REPO; or exit 1
+            git -C $evalkit_staging fetch --depth 1 origin $EVALKIT_REV; or exit 1
+            git -C $evalkit_staging checkout -q --detach FETCH_HEAD; or exit 1
+            command mv -T -- $evalkit_staging $EVALKIT_DIR; or exit 1
+            _release_evalkit_install_lock; or exit 1
+            break
+        end
+        if test $evalkit_wait_announced -eq 0
+            echo "[wait] another job owns the EvalKit install lock: $EVALKIT_INSTALL_LOCK"
+            set evalkit_wait_announced 1
+        end
+        if test $evalkit_waited_seconds -ge $EVALKIT_INSTALL_WAIT_SECONDS
+            test -f "$EVALKIT_INSTALL_LOCK/owner"; and cat "$EVALKIT_INSTALL_LOCK/owner" >&2
+            _fail "timed out after $EVALKIT_INSTALL_WAIT_SECONDS seconds waiting for EvalKit install lock"
+        end
+        sleep $EVALKIT_INSTALL_POLL_SECONDS
+        set evalkit_waited_seconds (math $evalkit_waited_seconds + $EVALKIT_INSTALL_POLL_SECONDS)
     end
-    echo "[evalkit] cloning main_v2 from $EVALKIT_REPO"
-    git clone --depth 1 --branch main_v2 $EVALKIT_REPO $EVALKIT_DIR; or exit 1
+end
+
+set -g evalkit_source_sha256 ($PYTHON -c '
+import sys
+from src.eval.vbvr_run_evaluation_parallel import evalkit_source_sha256
+print(evalkit_source_sha256(sys.argv[1]))
+' $EVALKIT_DIR)
+test "$evalkit_source_sha256" = "$EVALKIT_SOURCE_SHA256"
+or _fail "EvalKit source fingerprint mismatch: expected=$EVALKIT_SOURCE_SHA256 actual=$evalkit_source_sha256 path=$EVALKIT_DIR"
+
+set -g evalkit_revision_actual unavailable
+if git -C $EVALKIT_DIR rev-parse --is-inside-work-tree >/dev/null 2>&1
+    set evalkit_revision_actual (git -C $EVALKIT_DIR rev-parse HEAD); or exit 1
+    test "$evalkit_revision_actual" = "$EVALKIT_REV"
+    or _fail "EvalKit Git revision mismatch: expected=$EVALKIT_REV actual=$evalkit_revision_actual path=$EVALKIT_DIR"
 end
 
 mkdir -p $EASYOCR_ROOT/model $EASYOCR_ROOT/user_network; or exit 1
@@ -345,90 +450,115 @@ end
 
 $PYTHON -c 'import easyocr, norfair, scipy, skimage' 2>/dev/null
 or _fail "main_v2 dependencies are missing; install norfair and easyocr into .venv before scoring"
+set -g scorer_dependency_versions ($PYTHON -c '
+import importlib.metadata
+import json
 
-mkdir -p (dirname "$CONVERTED_MODEL") (dirname "$CONVERSION_PROVENANCE"); or exit 1
-set -l conversion_action skipped
-set -l conversion_waited_seconds 0
-set -l conversion_wait_announced 0
-while true
-    if test -f "$CONVERTED_MODEL/model_index.json"; and _conversion_provenance check complete --quiet
-        break
-    end
+packages = ("easyocr", "norfair", "numpy", "opencv-python", "scipy", "scikit-image", "torch")
+print(json.dumps(
+    {name: importlib.metadata.version(name) for name in packages},
+    sort_keys=True,
+    separators=(",", ":"),
+))
+'); or _fail "could not record main_v2 scorer dependency versions"
+test -n "$scorer_dependency_versions"
+or _fail "main_v2 scorer dependency version record is empty"
 
-    if _try_acquire_conversion_lock
-        # The winner must re-check after taking the lock: another process may
-        # have completed conversion between the first check and mkdir.
+if test "$PRECONVERTED_MODEL" = 1
+    test -f "$CONVERTED_MODEL/model_index.json"
+    or _fail "preconverted Diffusers model is incomplete: $CONVERTED_MODEL"
+    test -f "$CONVERSION_PROVENANCE"
+    or _fail "preconverted model provenance is missing: $CONVERSION_PROVENANCE"
+    _validate_converted_model
+    or _fail "preconverted model failed structural validation: $CONVERTED_MODEL"
+    _converted_model_is_stable
+    or _fail "preconverted model is still being modified: $CONVERTED_MODEL"
+    echo "[skip] validated stable preconverted model and provenance: $CONVERTED_MODEL"
+else
+    mkdir -p (dirname "$CONVERTED_MODEL") (dirname "$CONVERSION_PROVENANCE"); or exit 1
+    set -l conversion_action skipped
+    set -l conversion_waited_seconds 0
+    set -l conversion_wait_announced 0
+    while true
         if test -f "$CONVERTED_MODEL/model_index.json"; and _conversion_provenance check complete --quiet
-            _release_conversion_lock; or exit 1
             break
         end
 
-        if test -f "$CONVERTED_MODEL/model_index.json"
-            # Recover only the known concurrent-writer failure mode. Inputs
-            # must still be byte-for-byte identical to the recorded complete
-            # provenance, and the final model must be valid and stable.
-            if not _conversion_provenance check-inputs complete --quiet
-                _conversion_provenance check complete
-                or _fail "converted model provenance inputs are missing or stale; use a fresh CONVERTED_MODEL or reconvert explicitly"
+        if _try_acquire_conversion_lock
+            # The winner must re-check after taking the lock: another process may
+            # have completed conversion between the first check and mkdir.
+            if test -f "$CONVERTED_MODEL/model_index.json"; and _conversion_provenance check complete --quiet
+                _release_conversion_lock; or exit 1
+                break
             end
-            echo "[repair] validating stable converted model before refreshing stale output fingerprints"
-            _validate_converted_model; or _fail "converted model failed structural validation: $CONVERTED_MODEL"
-            _converted_model_is_stable; or _fail "converted model is still being modified: $CONVERTED_MODEL"
-            _conversion_provenance refresh-outputs complete
-            or _fail "could not refresh converted model output provenance: $CONVERSION_PROVENANCE"
-            set conversion_action repaired
+
+            if test -f "$CONVERTED_MODEL/model_index.json"
+                # Recover only the known concurrent-writer failure mode. Inputs
+                # must still be byte-for-byte identical to the recorded complete
+                # provenance, and the final model must be valid and stable.
+                if not _conversion_provenance check-inputs complete --quiet
+                    _conversion_provenance check complete
+                    or _fail "converted model provenance inputs are missing or stale; use a fresh CONVERTED_MODEL or reconvert explicitly"
+                end
+                echo "[repair] validating stable converted model before refreshing stale output fingerprints"
+                _validate_converted_model; or _fail "converted model failed structural validation: $CONVERTED_MODEL"
+                _converted_model_is_stable; or _fail "converted model is still being modified: $CONVERTED_MODEL"
+                _conversion_provenance refresh-outputs complete
+                or _fail "could not refresh converted model output provenance: $CONVERSION_PROVENANCE"
+                set conversion_action repaired
+                _release_conversion_lock; or exit 1
+                break
+            end
+
+            if test -d "$CONVERTED_MODEL"; and test -n (find "$CONVERTED_MODEL" -mindepth 1 -print -quit 2>/dev/null)
+                _fail "converted model directory is incomplete: $CONVERTED_MODEL"
+            end
+
+            echo "[convert] $CHECKPOINT -> $CONVERTED_MODEL (raw weights, no EMA)"
+            _conversion_provenance write in_progress_resume; or exit 1
+            $PYTHON -m src.cli.convert_dcp_to_diffusers \
+                --checkpoint "$CHECKPOINT" \
+                --output "$CONVERTED_MODEL" \
+                --base_model "$BASE_MODEL" \
+                --torch_dtype bfloat16 \
+                --device cuda:0 \
+                --no-use_ema \
+                --merge_lora \
+                --safe_serialization \
+                --max_shard_size 10GB \
+                --no-fastvideo_compat
+            or exit 1
+            _validate_converted_model; or _fail "newly converted model failed structural validation: $CONVERTED_MODEL"
+            _converted_model_is_stable; or _fail "newly converted model is still being modified: $CONVERTED_MODEL"
+            _conversion_provenance promote in_progress_resume; or exit 1
+            set conversion_action converted
             _release_conversion_lock; or exit 1
             break
         end
 
-        if test -d "$CONVERTED_MODEL"; and test -n (find "$CONVERTED_MODEL" -mindepth 1 -print -quit 2>/dev/null)
-            _fail "converted model directory is incomplete: $CONVERTED_MODEL"
+        if test $conversion_wait_announced -eq 0
+            echo "[wait] another job owns the conversion lock: $CONVERSION_LOCK"
+            set conversion_wait_announced 1
         end
-
-        echo "[convert] $CHECKPOINT -> $CONVERTED_MODEL (raw weights, no EMA)"
-        _conversion_provenance write in_progress_resume; or exit 1
-        $PYTHON -m src.cli.convert_dcp_to_diffusers \
-            --checkpoint "$CHECKPOINT" \
-            --output "$CONVERTED_MODEL" \
-            --base_model "$BASE_MODEL" \
-            --torch_dtype bfloat16 \
-            --device cuda:0 \
-            --no-use_ema \
-            --merge_lora \
-            --safe_serialization \
-            --max_shard_size 10GB \
-            --no-fastvideo_compat
-        or exit 1
-        _validate_converted_model; or _fail "newly converted model failed structural validation: $CONVERTED_MODEL"
-        _converted_model_is_stable; or _fail "newly converted model is still being modified: $CONVERTED_MODEL"
-        _conversion_provenance promote in_progress_resume; or exit 1
-        set conversion_action converted
-        _release_conversion_lock; or exit 1
-        break
-    end
-
-    if test $conversion_wait_announced -eq 0
-        echo "[wait] another job owns the conversion lock: $CONVERSION_LOCK"
-        set conversion_wait_announced 1
-    end
-    if test $conversion_waited_seconds -ge $CONVERSION_PROVENANCE_WAIT_SECONDS
-        if test -f "$CONVERSION_LOCK/owner"
-            echo "[error] conversion lock owner:" >&2
-            command cat "$CONVERSION_LOCK/owner" >&2
+        if test $conversion_waited_seconds -ge $CONVERSION_PROVENANCE_WAIT_SECONDS
+            if test -f "$CONVERSION_LOCK/owner"
+                echo "[error] conversion lock owner:" >&2
+                command cat "$CONVERSION_LOCK/owner" >&2
+            end
+            _fail "timed out after $CONVERSION_PROVENANCE_WAIT_SECONDS seconds waiting for conversion lock: $CONVERSION_LOCK"
         end
-        _fail "timed out after $CONVERSION_PROVENANCE_WAIT_SECONDS seconds waiting for conversion lock: $CONVERSION_LOCK"
+        sleep $CONVERSION_PROVENANCE_POLL_SECONDS
+        set conversion_waited_seconds (math "$conversion_waited_seconds + $CONVERSION_PROVENANCE_POLL_SECONDS")
     end
-    sleep $CONVERSION_PROVENANCE_POLL_SECONDS
-    set conversion_waited_seconds (math "$conversion_waited_seconds + $CONVERSION_PROVENANCE_POLL_SECONDS")
-end
 
-switch $conversion_action
-    case converted
-        echo "[done] converted model and provenance are complete: $CONVERTED_MODEL"
-    case repaired
-        echo "[done] refreshed converted model output provenance: $CONVERSION_PROVENANCE"
-    case '*'
-        echo "[skip] converted model and provenance are complete: $CONVERTED_MODEL"
+    switch $conversion_action
+        case converted
+            echo "[done] converted model and provenance are complete: $CONVERTED_MODEL"
+        case repaired
+            echo "[done] refreshed converted model output provenance: $CONVERSION_PROVENANCE"
+        case '*'
+            echo "[skip] converted model and provenance are complete: $CONVERTED_MODEL"
+    end
 end
 
 if set -q CONVERSION_ONLY[1]
@@ -589,6 +719,7 @@ env CUDA_VISIBLE_DEVICES= EASYOCR_MODULE_PATH=(realpath $EASYOCR_ROOT) \
     --gt_base $GT_BASE \
     --output_dir $SCORE_DIR \
     --evalkit_dir $EVALKIT_DIR \
+    --expected_evalkit_source_sha256 $EVALKIT_SOURCE_SHA256 \
     --expected_videos $EXPECTED_VIDEOS \
     --device cpu \
     --num_workers $SCORE_WORKERS \

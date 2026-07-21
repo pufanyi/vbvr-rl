@@ -71,6 +71,18 @@ def test_tp_requires_world_size_divisibility():
         BaseRLTrainer._init_tensor_parallel(trainer, _tp_cfg())
 
 
+def test_tp2_four_node_topology_preserves_bs16_with_local_batch_one():
+    cfg = _tp_cfg(batch_size=1)
+    trainer = _trainer_state(rank=31, world_size=32)
+
+    BaseRLTrainer._init_tensor_parallel(trainer, cfg)
+
+    assert trainer.dp_size == 16
+    assert trainer.dp_rank == 15
+    assert trainer.tp_rank == 1
+    assert cfg.batch_size * trainer.dp_size == 16
+
+
 def test_tp_accepts_liger_and_torch_compile():
     trainer = _trainer_state()
     BaseRLTrainer._init_tensor_parallel(

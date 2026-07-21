@@ -66,9 +66,45 @@ set -l master_port (set -q MASTER_PORT; and echo $MASTER_PORT; or echo 29500)
 set -l project_root (realpath (dirname (status filename))/../..)
 cd $project_root
 
-echo "Launching DanceGRPO multi-node training: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$master_port"
+echo "Preparing DanceGRPO multi-node training: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$master_port"
 
 source (dirname (status filename))/../lib/env.fish
+
+# Match the single-node GRPO runtime defaults. Long A14B replay repeatedly
+# all-gathers large FSDP blocks, so expandable segments reduce fragmentation.
+set -q PYTORCH_CUDA_ALLOC_CONF; or set -gx PYTORCH_CUDA_ALLOC_CONF expandable_segments:True
+set -q WAN_TRAINER_DECORD_NUM_THREADS; or set -gx WAN_TRAINER_DECORD_NUM_THREADS 1
+# Keep compiler artifacts node-local. The repository and user home may be
+# shared across nodes, while /tmp is private to each scheduler pod.
+set -q TRITON_CACHE_DIR; or set -gx TRITON_CACHE_DIR /tmp/wan-trainer-triton-cache
+
+# torch.compile is lazy: merely wrapping the modules does not prove that
+# Inductor/Triton can build its CUDA driver helper. Run the exact driver setup
+# once per node before spending minutes loading and sharding the model.
+set -l skip_triton_preflight 0
+set -q WAN_TRAINER_SKIP_TRITON_PREFLIGHT; and set skip_triton_preflight $WAN_TRAINER_SKIP_TRITON_PREFLIGHT
+set -l triton_preflight_only 0
+set -q WAN_TRAINER_TRITON_PREFLIGHT_ONLY; and set triton_preflight_only $WAN_TRAINER_TRITON_PREFLIGHT_ONLY
+if test "$triton_preflight_only" = "1"
+    set skip_triton_preflight 0
+end
+if test "$skip_triton_preflight" != "1"
+    .venv/bin/python -c \
+        'from triton.runtime import driver; print(f"[preflight] Triton target: {driver.active.get_current_target()}")'
+    or begin
+        echo "ERROR: Triton preflight failed on node $RANK before torchrun." >&2
+        echo "Install matching Python development headers or set WAN_TRAINER_PYTHON_INCLUDE/CPATH." >&2
+        echo "For the shared project toolchain, run fish scripts/dev/bootstrap_triton_python_headers.fish once." >&2
+        exit 1
+    end
+end
+
+if test "$triton_preflight_only" = "1"
+    echo "[preflight] Node $RANK passed; WAN_TRAINER_TRITON_PREFLIGHT_ONLY=1, exiting before torchrun."
+    exit 0
+end
+
+echo "Launching DanceGRPO multi-node training: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$master_port"
 
 torchrun \
     --nnodes=$WORLD_SIZE \

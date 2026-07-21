@@ -36,8 +36,10 @@ import hashlib
 import importlib
 import importlib.util
 import json
+import math
 import os
 import sys
+from collections.abc import Mapping
 from multiprocessing import Pool
 from pathlib import Path
 from types import ModuleType
@@ -55,8 +57,40 @@ _REQUIRED_EVALKIT_API = (
     "init_results",
     "print_results",
     "evaluate_single_video",
+    "TASK_EVALUATOR_MAP",
 )
 _WORKER_REK: ModuleType | None = None
+
+
+def evalkit_source_sha256(evalkit_dir: Path | str) -> str:
+    """Fingerprint the complete bundled EvalKit scoring contract.
+
+    Besides executable Python, main_v2 reads task annotation JSON files at
+    runtime. Requirements are included as well so a dependency-contract edit
+    cannot retain the same fingerprint. External OCR weights and installed
+    package versions are recorded separately by the evaluation launcher.
+    """
+    directory = Path(evalkit_dir).expanduser().resolve()
+    files = [
+        directory / "run_evaluation.py",
+        *sorted((directory / "vbvr_bench").rglob("*.py")),
+        *sorted(path for path in (directory / "annotations").rglob("*") if path.is_file()),
+    ]
+    requirements = directory / "requirements.txt"
+    if requirements.is_file():
+        files.append(requirements)
+    missing = [path for path in files if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"EvalKit source is incomplete; missing: {missing[0]}")
+    digest = hashlib.sha256()
+    for path in files:
+        relative = path.relative_to(directory).as_posix().encode()
+        data = path.read_bytes()
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    return digest.hexdigest()
 
 
 def _module_is_from(module: ModuleType, directory: Path) -> bool:
@@ -133,12 +167,76 @@ def _configure_worker_threads(threads: int) -> None:
         torch.set_num_interop_threads(1)
 
 
-def _init_worker(evalkit_dir: str, threads_per_worker: int) -> None:
+def _cuda_unavailable() -> bool:
+    """Return the fixed CUDA availability contract for CPU scorer workers."""
+    return False
+
+
+def _hide_cuda_for_cpu_worker() -> None:
+    """Make CUDA unavailable even when PyTorch probed it before worker init.
+
+    Spawned workers import the training entrypoint before their initializer
+    runs. If that import probes CUDA, clearing ``CUDA_VISIBLE_DEVICES`` here
+    can leave ``torch.cuda.is_available()`` true while ``device_count()`` is
+    zero. EasyOCR then selects CUDA and fails while loading its checkpoint.
+    """
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    os.environ["PYTORCH_NVML_BASED_CUDA_CHECK"] = "1"
+
+    import torch
+
+    # This process is dedicated to CPU scoring. Keep third-party evaluators
+    # from selecting CUDA based on a runtime probe cached before the
+    # initializer hid the devices.
+    torch.cuda.is_available = _cuda_unavailable
+
+
+def _init_worker(
+    evalkit_dir: str,
+    threads_per_worker: int,
+    easyocr_module_path: str | None = None,
+    hide_cuda: bool = True,
+) -> None:
+    """Initialize one isolated scorer worker.
+
+    Training calls this through a spawned process pool. The spawned interpreter
+    may import PyTorch before this initializer, so CPU availability is enforced
+    explicitly rather than relying only on import order.
+    """
     global _WORKER_REK
+    if hide_cuda:
+        _hide_cuda_for_cpu_worker()
+    if easyocr_module_path:
+        os.environ["EASYOCR_MODULE_PATH"] = str(Path(easyocr_module_path).expanduser().resolve())
     _configure_worker_threads(threads_per_worker)
     directory = Path(evalkit_dir).resolve()
     os.chdir(directory)
     _WORKER_REK = _load_evalkit(directory)
+
+
+def _normalize_evalkit_result(result: object) -> dict:
+    """Validate the stable per-video EvalKit result contract."""
+    if not isinstance(result, Mapping):
+        raise TypeError(f"EvalKit returned {type(result).__name__}, expected a mapping")
+    if "score" not in result:
+        raise KeyError("EvalKit result is missing required 'score'")
+    raw_score = result["score"]
+    if isinstance(raw_score, (bool, str, bytes)):
+        raise TypeError(f"EvalKit score must be numeric, got {type(raw_score).__name__}")
+    try:
+        score = float(raw_score)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"EvalKit score must be numeric, got {type(raw_score).__name__}") from exc
+    if not math.isfinite(score):
+        raise ValueError(f"EvalKit score must be finite, got {score}")
+    dimensions = result.get("dimensions", {})
+    if not isinstance(dimensions, Mapping):
+        raise TypeError(f"EvalKit dimensions must be a mapping, got {type(dimensions).__name__}")
+    return {
+        "score": score,
+        "dimensions": dict(dimensions),
+        "error": result.get("error"),
+    }
 
 
 def _score_one(task: dict) -> dict:
@@ -151,6 +249,7 @@ def _score_one(task: dict) -> dict:
         task["gt_info"],
         task["device"],
     )
+    normalized = _normalize_evalkit_result(result)
     return {
         "video_path": task["video_path"],
         "video_file": task["video_file"],
@@ -158,10 +257,14 @@ def _score_one(task: dict) -> dict:
         "split": task["split"],
         "category": task["category"],
         "folder": task["folder"],
-        "score": float(result.get("score", 0.0)),
-        "dimensions": result.get("dimensions", {}),
-        "error": result.get("error", None),
+        **normalized,
     }
+
+
+def evalkit_supported_task_names(evalkit_dir: Path | str) -> frozenset[str]:
+    """Return the task registry from one path-verified EvalKit checkout."""
+    module = _load_evalkit(evalkit_dir)
+    return frozenset(module.TASK_EVALUATOR_MAP)
 
 
 def _positive_int(value: str) -> int:
@@ -191,6 +294,13 @@ def main() -> int:
         help="EvalKit checkout containing run_evaluation.py (default: repository third_party checkout)",
     )
     ap.add_argument(
+        "--expected_evalkit_source_sha256",
+        help=(
+            "Expected SHA-256 fingerprint of the complete bundled EvalKit "
+            "scoring contract; fail before scoring on a mismatch"
+        ),
+    )
+    ap.add_argument(
         "--expected_videos",
         type=_positive_int,
         default=None,
@@ -212,6 +322,13 @@ def main() -> int:
     gt_base = args.gt_base.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
     try:
+        source_sha256 = evalkit_source_sha256(evalkit_dir)
+        if args.expected_evalkit_source_sha256 and source_sha256 != args.expected_evalkit_source_sha256.lower():
+            raise RuntimeError(
+                "EvalKit source fingerprint mismatch: "
+                f"expected={args.expected_evalkit_source_sha256.lower()}, "
+                f"actual={source_sha256}, path={evalkit_dir}"
+            )
         rek = _load_evalkit(evalkit_dir)
     except Exception as exc:
         print(f"[error] Failed to load EvalKit from {args.evalkit_dir}: {exc}", file=sys.stderr)
@@ -220,7 +337,10 @@ def main() -> int:
     model_path = str(model_path_obj)
     model_name = os.path.basename(model_path.rstrip("/"))
 
-    print(f"\n{'=' * 60}\nEvaluating: {model_name}\nPath: {model_path}\n{'=' * 60}")
+    print(
+        f"\n{'=' * 60}\nEvaluating: {model_name}\nPath: {model_path}\n"
+        f"EvalKit source SHA-256: {source_sha256}\n{'=' * 60}"
+    )
 
     videos = rek.collect_videos(model_path)
     if not videos:

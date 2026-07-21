@@ -391,21 +391,73 @@ class RLConfig(TrainConfig):
     # ------------------------------------------------------------------
     # VBVR rule reward (grpo_reward_fn: "vbvr_rule")
     # ------------------------------------------------------------------
-    # Decode generated latents to temporary mp4 files and score with the
-    # vendored VBVR EvalKit task-specific rule evaluator.
+    # Decode generated latents, apply the final-eval video preparation contract,
+    # and score through the pinned main_v2 EvalKit entrypoint.
     vbvr_reward_evalkit_dir: str | None = None
+    vbvr_reward_evalkit_source_sha256: str | None = None
+    vbvr_reward_easyocr_module_path: str | None = None
     vbvr_reward_device: str = "cpu"
     vbvr_reward_fps: int = 16
+    vbvr_reward_prepared_width: int = 1024
+    vbvr_reward_prepared_height: int = 1024
+    vbvr_reward_max_duration_seconds: float = 5.0
+    vbvr_reward_prepare_crf: int = 12
     vbvr_reward_decode_batch_size: int = 1
+    # Spawned scorer processes per reward-producing rank. Keep this low: on
+    # eight-GPU nodes, one worker per rank already gives eight CPU scorers.
     vbvr_reward_cpu_workers: int = 1
+    vbvr_reward_cpu_threads_per_worker: int = 1
+    vbvr_reward_use_process_pool: bool = True
     vbvr_reward_task_specific_only: bool = True
+    vbvr_reward_fail_on_error: bool = True
     vbvr_reward_tmp_dir: str = "storage/tmp/vbvr_rule_reward"
     vbvr_reward_keep_tmp: bool = False
     vbvr_reward_unsupported_score: float = 0.0
 
-    @field_validator("vbvr_reward_decode_batch_size", "vbvr_reward_cpu_workers")
+    @field_validator("vbvr_reward_evalkit_source_sha256")
+    @classmethod
+    def _validate_vbvr_reward_evalkit_source_sha256(cls, v: str | None):
+        if v is None:
+            return v
+        normalized = v.lower()
+        if len(normalized) != 64 or any(character not in "0123456789abcdef" for character in normalized):
+            raise ValueError("vbvr_reward_evalkit_source_sha256 must be a 64-character hexadecimal digest")
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_vbvr_reward_evalkit_pin(self):
+        if self.grpo_reward_fn != "vbvr_rule":
+            return self
+        if not self.vbvr_reward_evalkit_dir:
+            raise ValueError("grpo_reward_fn='vbvr_rule' requires vbvr_reward_evalkit_dir")
+        if not self.vbvr_reward_evalkit_source_sha256:
+            raise ValueError("grpo_reward_fn='vbvr_rule' requires vbvr_reward_evalkit_source_sha256")
+        return self
+
+    @field_validator(
+        "vbvr_reward_fps",
+        "vbvr_reward_prepared_width",
+        "vbvr_reward_prepared_height",
+        "vbvr_reward_decode_batch_size",
+        "vbvr_reward_cpu_workers",
+        "vbvr_reward_cpu_threads_per_worker",
+    )
     @classmethod
     def _validate_positive_vbvr_reward_fields(cls, v: int):
         if v <= 0:
             raise ValueError(f"VBVR reward positive integer fields must be > 0, got {v}")
+        return v
+
+    @field_validator("vbvr_reward_max_duration_seconds")
+    @classmethod
+    def _validate_positive_vbvr_reward_duration(cls, v: float):
+        if v <= 0:
+            raise ValueError(f"vbvr_reward_max_duration_seconds must be > 0, got {v}")
+        return v
+
+    @field_validator("vbvr_reward_prepare_crf")
+    @classmethod
+    def _validate_vbvr_reward_crf(cls, v: int):
+        if not 0 <= v <= 51:
+            raise ValueError(f"vbvr_reward_prepare_crf must be in [0, 51], got {v}")
         return v

@@ -2,9 +2,10 @@ import json
 from pathlib import Path
 
 from openpyxl import load_workbook
-from pytest import approx
+from pytest import approx, raises
 
-from src.cli.summarize_vbvr_pro_results import RESULT_RELATIVE_PATH, generate_reports
+from src.cli.summarize_vbvr_pro_results import RESULT_RELATIVE_PATH, _load_run, generate_reports
+from src.eval.evaluation_provenance import build_manifest, write_manifest
 
 
 def _write_result(root: Path, run_name: str, task_a: tuple[float, float], task_b: tuple[float, float]) -> None:
@@ -43,6 +44,29 @@ def _write_result(root: Path, run_name: str, task_a: tuple[float, float], task_b
     path = root / run_name / RESULT_RELATIVE_PATH
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(result))
+    provenance = build_manifest(
+        stage="vbvr-pro-score",
+        values={
+            "state": "complete",
+            "evalkit_revision": "a" * 40,
+            "evalkit_source_sha256": "b" * 64,
+        },
+        files={},
+        trees={},
+        output_files={"result": str(path)},
+    )
+    write_manifest(root / run_name / "score-provenance.json", provenance)
+
+
+def test_load_run_rejects_result_replaced_after_provenance(tmp_path: Path) -> None:
+    root = tmp_path / "results"
+    run_name = "dancegrpo_vbvr_pro_5b_checkpoint-300"
+    _write_result(root, run_name, (0.2, 0.4), (0.6, 0.8))
+    result_path = root / run_name / RESULT_RELATIVE_PATH
+    result_path.write_text(result_path.read_text() + "\n")
+
+    with raises(ValueError, match="recorded artifact changed"):
+        _load_run(root / run_name, expected_samples=4)
 
 
 def test_generate_reports(tmp_path: Path) -> None:

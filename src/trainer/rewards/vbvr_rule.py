@@ -1,24 +1,37 @@
 """VBVR EvalKit rule reward for GRPO.
 
-This reward mirrors the rule-based evaluation path used for VBVR reporting:
-decode generated latents to temporary videos, then call the vendored EvalKit
-task-specific evaluator for the sample's task. GT latents are decoded only
-when original GT video/first/final-frame paths are not available in metadata.
+The reward intentionally uses the same main_v2 entrypoint and generated-video
+preparation contract as final VBVR-Pro reporting. Generated latents are decoded
+to a temporary source MP4, resized/padded/retimed through the shared evaluator
+preparer, and scored in isolated CPU processes with CUDA hidden.
 """
 
 from __future__ import annotations
 
-import sys
+import atexit
+import math
+import multiprocessing
 import tempfile
 import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, ClassVar
 
 import torch
 from loguru import logger
 
+from src.cli.prepare_vbvr_eval_videos import prepare_video
+from src.eval.vbvr_run_evaluation_parallel import (
+    _init_worker,
+    _load_evalkit,
+    _normalize_evalkit_result,
+    _score_one,
+    evalkit_source_sha256,
+)
+from src.eval.vbvr_run_evaluation_parallel import (
+    evalkit_supported_task_names as _evalkit_supported_task_names,
+)
 from src.trainer.rewards.base import BaseReward
 from src.trainer.rewards.registry import register_reward
 
@@ -31,51 +44,124 @@ def _resolve_evalkit_path(evalkit_dir: str | None = None) -> Path:
 
 def _ensure_evalkit_path(evalkit_dir: str | None = None) -> Path:
     evalkit = _resolve_evalkit_path(evalkit_dir)
-    if not (evalkit / "vbvr_bench").exists():
+    if not (evalkit / "run_evaluation.py").is_file():
+        raise FileNotFoundError(f"VBVR EvalKit path does not contain run_evaluation.py: {evalkit}")
+    if not (evalkit / "vbvr_bench").is_dir():
         raise FileNotFoundError(f"VBVR EvalKit path does not contain vbvr_bench: {evalkit}")
-    if str(evalkit) not in sys.path:
-        sys.path.insert(0, str(evalkit))
     return evalkit
 
 
 def evalkit_supported_task_names(evalkit_dir: str | None = None) -> frozenset[str]:
-    _ensure_evalkit_path(evalkit_dir)
+    return _evalkit_supported_task_names(_ensure_evalkit_path(evalkit_dir))
 
-    from vbvr_bench.evaluators import TASK_EVALUATOR_MAP
 
-    return frozenset(TASK_EVALUATOR_MAP)
+def _evalkit_uses_easyocr(evalkit: Path) -> bool:
+    return any("easyocr.Reader" in path.read_text(errors="ignore") for path in (evalkit / "vbvr_bench").rglob("*.py"))
 
 
 @register_reward("vbvr_rule")
 class VBVRRuleReward(BaseReward):
-    """Reward = VBVR EvalKit task-specific rule score in [0, 1]."""
+    """Reward = final VBVR-Pro main_v2 task-specific rule score."""
 
     requires_vae: ClassVar[bool] = True
 
     def __init__(self, trainer, cfg) -> None:
         super().__init__(trainer, cfg)
         self._evalkit = _ensure_evalkit_path(cfg.vbvr_reward_evalkit_dir)
+        if str(cfg.vbvr_reward_device).lower() != "cpu":
+            raise ValueError("Aligned VBVR-Pro reward requires vbvr_reward_device='cpu'")
+        if not bool(cfg.vbvr_reward_task_specific_only):
+            raise ValueError("main_v2 final evaluation always uses task_specific_only=True")
 
-        from vbvr_bench.evaluators import get_evaluator
-
+        actual_source_sha256 = evalkit_source_sha256(self._evalkit)
+        expected_source_sha256 = cfg.vbvr_reward_evalkit_source_sha256
+        if not expected_source_sha256:
+            raise ValueError(
+                "vbvr_rule requires vbvr_reward_evalkit_source_sha256; "
+                "an unpinned EvalKit can silently change the training reward"
+            )
+        if actual_source_sha256 != str(expected_source_sha256).lower():
+            raise RuntimeError(
+                "VBVR EvalKit source fingerprint mismatch: "
+                f"expected={str(expected_source_sha256).lower()}, "
+                f"actual={actual_source_sha256}, path={self._evalkit}"
+            )
+        self._evalkit_source_sha256 = actual_source_sha256
         self._task_evaluator_map = evalkit_supported_task_names(str(self._evalkit))
-        self._get_evalkit_evaluator = get_evaluator
-        self._evaluators: dict[str, Any] = {}
-        self._thread_local = threading.local()
+
+        easyocr_module_path = cfg.vbvr_reward_easyocr_module_path
+        self._easyocr_module_path = (
+            str(Path(easyocr_module_path).expanduser().resolve()) if easyocr_module_path else None
+        )
+        if self._easyocr_module_path and not Path(self._easyocr_module_path).is_dir():
+            raise FileNotFoundError(f"EasyOCR module path does not exist: {self._easyocr_module_path}")
+        if _evalkit_uses_easyocr(self._evalkit) and not (self._evalkit / "easyocr_models").exists():
+            raise FileNotFoundError(
+                f"main_v2 requires {self._evalkit / 'easyocr_models'} to exist (a symlink is allowed)"
+            )
+
         self._error_lock = threading.Lock()
         self._score_workers = max(1, int(cfg.vbvr_reward_cpu_workers))
+        self._score_threads_per_worker = max(1, int(cfg.vbvr_reward_cpu_threads_per_worker))
+        tensor_parallel_enabled = bool(getattr(trainer, "tensor_parallel_enabled", False))
+        tensor_parallel_rank = int(getattr(trainer, "tp_rank", 0))
+        self._active_score_rank = not tensor_parallel_enabled or tensor_parallel_rank == 0
+
+        self._process_executor: ProcessPoolExecutor | None = None
+        self._local_evalkit = None
+        if self._active_score_rank and bool(cfg.vbvr_reward_use_process_pool):
+            self._process_executor = ProcessPoolExecutor(
+                max_workers=self._score_workers,
+                mp_context=multiprocessing.get_context("spawn"),
+                initializer=_init_worker,
+                initargs=(
+                    str(self._evalkit),
+                    self._score_threads_per_worker,
+                    self._easyocr_module_path,
+                    True,
+                ),
+            )
+            atexit.register(self.close)
+        elif self._active_score_rank:
+            # Intended for focused unit tests only. Production uses isolated
+            # processes so main_v2/EasyOCR cannot allocate on training GPUs.
+            self._local_evalkit = _load_evalkit(self._evalkit)
+
         self._score_executor = (
             ThreadPoolExecutor(
                 max_workers=self._score_workers,
                 thread_name_prefix=f"vbvr-rule-rank{trainer.rank}",
             )
-            if self._score_workers > 1
+            if self._active_score_rank and self._score_workers > 1
             else None
         )
         self._warned_unsupported: set[str] = set()
         self._error_count = 0
         self._tmp_root = Path(cfg.vbvr_reward_tmp_dir) / f"rank{trainer.rank}"
         self._tmp_root.mkdir(parents=True, exist_ok=True)
+
+        if trainer.rank == 0:
+            logger.info(
+                "VBVR reward aligned with final eval: evalkit={} source_sha256={} "
+                "prepared={}x{} max_duration={}s scorer_processes={} threads/process={}",
+                self._evalkit,
+                self._evalkit_source_sha256,
+                cfg.vbvr_reward_prepared_width,
+                cfg.vbvr_reward_prepared_height,
+                cfg.vbvr_reward_max_duration_seconds,
+                self._score_workers,
+                self._score_threads_per_worker,
+            )
+
+    def close(self) -> None:
+        process_executor = self._process_executor
+        self._process_executor = None
+        if process_executor is not None:
+            process_executor.shutdown(wait=True, cancel_futures=True)
+        score_executor = self._score_executor
+        self._score_executor = None
+        if score_executor is not None:
+            score_executor.shutdown(wait=True, cancel_futures=True)
 
     @torch.no_grad()
     def __call__(
@@ -91,21 +177,22 @@ class VBVRRuleReward(BaseReward):
     ) -> torch.Tensor:
         del condition, prompt_embeds, indices
 
-        B = generated_latents.shape[0]
+        batch_size = generated_latents.shape[0]
         device = generated_latents.device
 
         # EP double-count guard: the expert-parallel GRPO path sums high+low rewards.
         if expert_filter == "high":
-            return torch.zeros(B, device=device, dtype=torch.float32)
-
-        if meta is None or "sample_tar" not in meta:
+            return torch.zeros(batch_size, device=device, dtype=torch.float32)
+        if not self._active_score_rank:
+            raise RuntimeError("VBVR reward was called on a non-scoring tensor-parallel rank")
+        if meta is None or not any(key in meta for key in ("sample_task_name", "task_name", "sample_tar")):
             raise RuntimeError(
-                "VBVRRuleReward requires WebDataset JSON metadata with 'tar'. "
-                "Expected VBVRLatentDataset to expose it as 'sample_tar'."
+                "VBVRRuleReward requires task metadata. Expected sample_task_name "
+                "or sample_tar plus the original GT paths."
             )
 
         rewards = torch.full(
-            (B,),
+            (batch_size,),
             float(self.cfg.vbvr_reward_unsupported_score),
             device=device,
             dtype=torch.float32,
@@ -113,11 +200,11 @@ class VBVRRuleReward(BaseReward):
         decode_bs = max(1, int(self.cfg.vbvr_reward_decode_batch_size))
         task_names: list[str] = []
         supported_indices: list[int] = []
-        for i in range(B):
-            task_name = self._task_name(meta, i)
+        for index in range(batch_size):
+            task_name = self._task_name(meta, index)
             task_names.append(task_name)
             if self._is_supported(task_name):
-                supported_indices.append(i)
+                supported_indices.append(index)
 
         score_jobs: list[tuple[int, dict[str, Any]]] = []
         for start in range(0, len(supported_indices), decode_bs):
@@ -126,6 +213,8 @@ class VBVRRuleReward(BaseReward):
             gt_video_paths = [self._meta_path(meta, "sample_gt_video_path", i) for i in batch_indices]
             gt_first_frame_paths = [self._meta_path(meta, "sample_gt_first_frame", i) for i in batch_indices]
             gt_final_frame_paths = [self._meta_path(meta, "sample_gt_final_frame", i) for i in batch_indices]
+            gt_metadata_paths = [self._meta_path(meta, "sample_metadata_path", i) for i in batch_indices]
+            gt_source_dirs = [self._meta_path(meta, "sample_source_dir", i) for i in batch_indices]
             needs_gt_decode = [
                 video_path is None or first_path is None or final_path is None
                 for video_path, first_path, final_path in zip(
@@ -149,34 +238,33 @@ class VBVRRuleReward(BaseReward):
             else:
                 decoded = self.trainer.model.decode_latents(gen_latents)
             videos = self._to_uint8_videos(decoded)
-            n = len(batch_indices)
-            gen_videos = videos[:n]
-            gt_videos = videos[n:] if any(needs_gt_decode) else [None] * n
+            count = len(batch_indices)
+            gen_videos = videos[:count]
+            gt_videos = videos[count:] if any(needs_gt_decode) else [None] * count
 
-            for local_i, i in enumerate(batch_indices):
-                task_name = task_names[i]
-                prompt = self._meta_item(meta, "sample_prompt", i, default="")
+            for local_index, index in enumerate(batch_indices):
                 score_jobs.append(
                     (
-                        i,
+                        index,
                         {
-                            "task_name": task_name,
-                            "prompt": str(prompt or ""),
-                            "gen_video": gen_videos[local_i],
-                            "gt_video": gt_videos[local_i],
-                            "gt_video_path": gt_video_paths[local_i],
-                            "gt_first_frame_path": gt_first_frame_paths[local_i],
-                            "gt_final_frame_path": gt_final_frame_paths[local_i],
-                            "sample_id": self._sample_id(meta, i),
+                            "task_name": task_names[index],
+                            "prompt": str(self._meta_item(meta, "sample_prompt", index, default="") or ""),
+                            "gen_video": gen_videos[local_index],
+                            "gt_video": gt_videos[local_index],
+                            "gt_video_path": gt_video_paths[local_index],
+                            "gt_first_frame_path": gt_first_frame_paths[local_index],
+                            "gt_final_frame_path": gt_final_frame_paths[local_index],
+                            "gt_metadata_path": gt_metadata_paths[local_index],
+                            "gt_source_dir": gt_source_dirs[local_index],
+                            "sample_id": self._sample_id(meta, index),
                         },
                     )
                 )
 
             del decoded
 
-        for i, score in self._score_jobs(score_jobs):
-            rewards[i] = score
-
+        for index, score in self._score_jobs(score_jobs):
+            rewards[index] = score
         return rewards
 
     def _is_supported(self, task_name: str) -> bool:
@@ -192,31 +280,13 @@ class VBVRRuleReward(BaseReward):
                 )
         return False
 
-    def _evaluator(self, task_name: str):
-        if self._score_workers > 1:
-            evaluators = getattr(self._thread_local, "evaluators", None)
-            if evaluators is None:
-                evaluators = {}
-                self._thread_local.evaluators = evaluators
-            evaluator = evaluators.get(task_name)
-            if evaluator is None:
-                evaluator = self._get_evalkit_evaluator(task_name, self.cfg.vbvr_reward_device)
-                evaluators[task_name] = evaluator
-            return evaluator
-
-        evaluator = self._evaluators.get(task_name)
-        if evaluator is None:
-            evaluator = self._get_evalkit_evaluator(task_name, self.cfg.vbvr_reward_device)
-            self._evaluators[task_name] = evaluator
-        return evaluator
-
     def _score_jobs(self, jobs: list[tuple[int, dict[str, Any]]]) -> list[tuple[int, float]]:
         if not jobs:
             return []
         if self._score_executor is None or len(jobs) == 1:
-            return [(i, self._score_video_pair(**kwargs)) for i, kwargs in jobs]
-        futures = [(i, self._score_executor.submit(self._score_video_pair, **kwargs)) for i, kwargs in jobs]
-        return [(i, future.result()) for i, future in futures]
+            return [(index, self._score_video_pair(**kwargs)) for index, kwargs in jobs]
+        futures = [(index, self._score_executor.submit(self._score_video_pair, **kwargs)) for index, kwargs in jobs]
+        return [(index, future.result()) for index, future in futures]
 
     def _score_video_pair(
         self,
@@ -228,33 +298,49 @@ class VBVRRuleReward(BaseReward):
         gt_video_path: str | None,
         gt_first_frame_path: str | None,
         gt_final_frame_path: str | None,
+        gt_metadata_path: str | None,
+        gt_source_dir: str | None,
         sample_id: str,
     ) -> float:
-        if self.cfg.vbvr_reward_keep_tmp:
-            workdir = self._tmp_root / f"{sample_id}-{uuid.uuid4().hex[:8]}"
-            workdir.mkdir(parents=True, exist_ok=False)
-            return self._score_in_dir(
-                workdir,
-                task_name,
-                prompt,
-                gen_video,
-                gt_video,
-                gt_video_path=gt_video_path,
-                gt_first_frame_path=gt_first_frame_path,
-                gt_final_frame_path=gt_final_frame_path,
-            )
+        try:
+            if self.cfg.vbvr_reward_keep_tmp:
+                workdir = self._tmp_root / f"{sample_id}-{uuid.uuid4().hex[:8]}"
+                workdir.mkdir(parents=True, exist_ok=False)
+                return self._score_in_dir(
+                    workdir,
+                    task_name,
+                    prompt,
+                    gen_video,
+                    gt_video,
+                    gt_video_path=gt_video_path,
+                    gt_first_frame_path=gt_first_frame_path,
+                    gt_final_frame_path=gt_final_frame_path,
+                    gt_metadata_path=gt_metadata_path,
+                    gt_source_dir=gt_source_dir,
+                )
 
-        with tempfile.TemporaryDirectory(prefix=f"{sample_id}-", dir=self._tmp_root) as tmp:
-            return self._score_in_dir(
-                Path(tmp),
-                task_name,
-                prompt,
-                gen_video,
-                gt_video,
-                gt_video_path=gt_video_path,
-                gt_first_frame_path=gt_first_frame_path,
-                gt_final_frame_path=gt_final_frame_path,
-            )
+            with tempfile.TemporaryDirectory(prefix=f"{sample_id}-", dir=self._tmp_root) as tmp:
+                return self._score_in_dir(
+                    Path(tmp),
+                    task_name,
+                    prompt,
+                    gen_video,
+                    gt_video,
+                    gt_video_path=gt_video_path,
+                    gt_first_frame_path=gt_first_frame_path,
+                    gt_final_frame_path=gt_final_frame_path,
+                    gt_metadata_path=gt_metadata_path,
+                    gt_source_dir=gt_source_dir,
+                )
+        except Exception as exc:
+            with self._error_lock:
+                self._error_count += 1
+                error_count = self._error_count
+            if self.trainer.rank == 0 and error_count <= 10:
+                logger.warning("VBVR rule reward failed for task '{}': {}", task_name, exc)
+            if bool(self.cfg.vbvr_reward_fail_on_error):
+                raise RuntimeError(f"VBVR main_v2 reward failed for task {task_name}: {exc}") from exc
+            return float(self.cfg.vbvr_reward_unsupported_score)
 
     def _score_in_dir(
         self,
@@ -267,66 +353,96 @@ class VBVRRuleReward(BaseReward):
         gt_video_path: str | None,
         gt_first_frame_path: str | None,
         gt_final_frame_path: str | None,
+        gt_metadata_path: str | None,
+        gt_source_dir: str | None,
     ) -> float:
-        gen_path = workdir / "generated.mp4"
+        raw_gen_path = workdir / "generated_raw.mp4"
+        prepared_gen_path = workdir / "generated.mp4"
         fallback_gt_path = workdir / "ground_truth.mp4"
         fallback_first_path = workdir / "first_frame.png"
         fallback_final_path = workdir / "final_frame.png"
 
-        try:
-            self._write_video(gen_path, gen_video)
-            if gt_video_path is None:
-                if gt_video is None:
-                    raise RuntimeError("Cannot write fallback GT video without decoded GT frames")
-                self._write_video(fallback_gt_path, gt_video)
-                gt_video_path = str(fallback_gt_path)
-            if gt_first_frame_path is None:
-                if gt_video is None:
-                    raise RuntimeError("Cannot write fallback GT first frame without decoded GT frames")
-                self._write_image(fallback_first_path, gt_video[0])
-                gt_first_frame_path = str(fallback_first_path)
-            if gt_final_frame_path is None:
-                if gt_video is None:
-                    raise RuntimeError("Cannot write fallback GT final frame without decoded GT frames")
-                self._write_image(fallback_final_path, gt_video[-1])
-                gt_final_frame_path = str(fallback_final_path)
+        self._write_video(raw_gen_path, gen_video)
+        prepare_video(
+            raw_gen_path,
+            prepared_gen_path,
+            width=int(self.cfg.vbvr_reward_prepared_width),
+            height=int(self.cfg.vbvr_reward_prepared_height),
+            max_duration=float(self.cfg.vbvr_reward_max_duration_seconds),
+            crf=int(self.cfg.vbvr_reward_prepare_crf),
+            force=True,
+        )
+        if gt_video_path is None:
+            if gt_video is None:
+                raise RuntimeError("Cannot write fallback GT video without decoded GT frames")
+            self._write_video(fallback_gt_path, gt_video)
+            gt_video_path = str(fallback_gt_path)
+        if gt_first_frame_path is None:
+            if gt_video is None:
+                raise RuntimeError("Cannot write fallback GT first frame without decoded GT frames")
+            self._write_image(fallback_first_path, gt_video[0])
+            gt_first_frame_path = str(fallback_first_path)
+        if gt_final_frame_path is None:
+            if gt_video is None:
+                raise RuntimeError("Cannot write fallback GT final frame without decoded GT frames")
+            self._write_image(fallback_final_path, gt_video[-1])
+            gt_final_frame_path = str(fallback_final_path)
 
-            result = self._evaluator(task_name).evaluate(
-                {
-                    "video_path": str(gen_path),
-                    "task_name": task_name,
-                    "gt_video_path": gt_video_path,
-                    "gt_first_frame": gt_first_frame_path,
-                    "gt_final_frame": gt_final_frame_path,
-                    "prompt": prompt,
-                    "no_ssim_fallback": True,
-                },
-                task_specific_only=bool(self.cfg.vbvr_reward_task_specific_only),
-            )
-            return float(max(0.0, min(1.0, result.get("score", 0.0))))
-        except Exception as exc:
-            with self._error_lock:
-                self._error_count += 1
-                error_count = self._error_count
-            if self.trainer.rank == 0 and error_count <= 10:
-                logger.warning("VBVR rule reward failed for task '{}': {}", task_name, exc)
-            return 0.0
+        gt_info: dict[str, Any] = {
+            "gt_video_path": gt_video_path,
+            "gt_first_frame": gt_first_frame_path,
+            "gt_final_frame": gt_final_frame_path,
+            "prompt": prompt,
+        }
+        if gt_source_dir:
+            gt_info["gt_path"] = gt_source_dir
+        if gt_metadata_path:
+            # main_v2 accepts an ordered list so v2 metadata can precede legacy
+            # annotation fallbacks. Raw VBVR-Pro supplies the v2 file directly.
+            gt_info["metafile_path"] = [gt_metadata_path]
+
+        task = {
+            "video_path": str(prepared_gen_path),
+            "video_file": prepared_gen_path.name,
+            "task_name": task_name,
+            "split": "",
+            "category": "",
+            "folder": "",
+            "gt_info": gt_info,
+            "device": "cpu",
+        }
+        result = self._evaluate_task(task)
+        error = result.get("error")
+        if error:
+            raise RuntimeError(str(error))
+        score = float(result["score"])
+        if not math.isfinite(score):
+            raise RuntimeError(f"EvalKit returned non-finite score: {score}")
+        if not 0.0 <= score <= 1.0:
+            raise RuntimeError(f"EvalKit returned score outside [0, 1]: {score}")
+        return score
+
+    def _evaluate_task(self, task: dict[str, Any]) -> dict[str, Any]:
+        if self._process_executor is not None:
+            return self._process_executor.submit(_score_one, task).result()
+        if self._local_evalkit is None:
+            raise RuntimeError("VBVR scorer is not initialized on this rank")
+        result = self._local_evalkit.evaluate_single_video(
+            task["video_path"],
+            task["task_name"],
+            task["gt_info"],
+            task["device"],
+        )
+        return _normalize_evalkit_result(result)
 
     def _write_video(self, path: Path, video) -> None:
-        import cv2
+        from diffusers.utils import export_to_video
+        from PIL import Image
 
         if video.ndim != 4:
             raise ValueError(f"Expected video shape (T,H,W,C), got {video.shape}")
-        height, width = video.shape[1], video.shape[2]
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(str(path), fourcc, float(self.cfg.vbvr_reward_fps), (width, height))
-        if not writer.isOpened():
-            raise RuntimeError(f"Failed to open cv2.VideoWriter for {path}")
-        try:
-            for frame in video:
-                writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-        finally:
-            writer.release()
+        frames = [Image.fromarray(frame) for frame in video]
+        export_to_video(frames, str(path), fps=int(self.cfg.vbvr_reward_fps))
 
     @staticmethod
     def _write_image(path: Path, frame) -> None:
@@ -338,8 +454,9 @@ class VBVRRuleReward(BaseReward):
 
     @staticmethod
     def _to_uint8_videos(decoded: torch.Tensor):
-        videos = ((decoded.clamp(-1.0, 1.0) + 1.0) * 127.5).round().to(torch.uint8)
-        return videos.permute(0, 2, 3, 4, 1).contiguous().cpu().numpy()
+        from src.inference.outputs import uint8_from_decoded
+
+        return uint8_from_decoded(decoded)
 
     def _task_name(self, meta: dict[str, Any], index: int) -> str:
         for key in ("sample_task_name", "task_name"):
@@ -349,11 +466,14 @@ class VBVRRuleReward(BaseReward):
         tar_name = str(self._meta_item(meta, "sample_tar", index, default=""))
         task_name = Path(tar_name).stem
         if not task_name:
-            raise RuntimeError("VBVRRuleReward could not infer task_name from sample_tar metadata")
+            raise RuntimeError("VBVRRuleReward could not infer task_name from sample metadata")
         return task_name
 
     def _sample_id(self, meta: dict[str, Any], index: int) -> str:
         task = self._task_name(meta, index)
+        explicit = self._meta_item(meta, "sample_id", index, default=None)
+        if explicit:
+            return f"{task}-{explicit}"
         sample_index = self._meta_item(meta, "sample_index_in_tar", index, default=index)
         return f"{task}-{sample_index}"
 

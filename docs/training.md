@@ -117,6 +117,81 @@ DanceGRPO does:
 
 For LoRA runs, the reference policy is the base model with adapters disabled. For full fine-tuning, frozen reference transformer copies are created before FSDP sharding.[^base-grpo]
 
+### VBVR-Pro `main_v2` Reward Contract
+
+`vbvr_rule` uses the same observable contract as final VBVR-Pro reporting,
+rather than calling a task evaluator directly on the native 256x256 training
+video. Pin both the EvalKit path and its full source-tree fingerprint, and keep
+the final-eval preparation parameters explicit:
+
+```yaml
+grpo_reward_fn: vbvr_rule
+vbvr_reward_evalkit_dir: storage/evalkits/vbvr-evalkit-interleave-main_v2-6fedd9d9
+vbvr_reward_evalkit_source_sha256: eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c
+vbvr_reward_device: cpu
+vbvr_reward_prepared_width: 1024
+vbvr_reward_prepared_height: 1024
+vbvr_reward_max_duration_seconds: 5.0
+vbvr_reward_prepare_crf: 12
+vbvr_reward_use_process_pool: true
+vbvr_reward_fail_on_error: true
+```
+
+The pinned digest covers `run_evaluation.py`, all Python under `vbvr_bench`,
+bundled annotation files, and `requirements.txt`. Both the path and digest are
+mandatory for `vbvr_rule`; an implicit fallback scorer is rejected.
+
+The reward shares inference's canonical decoded-tensor-to-uint8 conversion,
+writes those frames through Diffusers `export_to_video`, matching the CPS/ODE
+generation entrypoints, then calls the shared evaluator preparation function.
+All 161 frames are retained; only the canvas and playback rate change, so a
+161-frame sample is scored at 1024x1024 and 33 FPS. It forwards the sample
+prompt, GT directory, and metadata file and invokes the exact
+`main_v2 run_evaluation.evaluate_single_video` entrypoint.[^vbvr-rule][^vbvr-prepare][^vbvr-eval-wrapper]
+
+Scoring happens in spawned CPU workers with CUDA hidden. This is required for
+EasyOCR tasks and also prevents evaluator imports from inheriting training-GPU
+state. `vbvr_reward_cpu_workers` counts processes per reward-producing rank;
+the standard eight-GPU configs use one process with 16 bounded native threads
+per rank (or per TP pair), rather than eight processes on every rank. EvalKit
+errors, non-finite scores, and scores outside `[0, 1]` stop training by
+default.
+
+After changing video encoding, preparation, metadata, or scorer code, run
+`scripts/dev/validate_vbvr_reward_alignment.py` on both a normal geometric
+task and an EasyOCR task. The validator independently builds the training and
+final-generation video paths from the same RGB frames, requires raw and prepared
+decoded frames to be identical, and requires the isolated scorer results to
+match exactly.[^vbvr-alignment-validator]
+
+To keep the same 5B lr=1e-6 DanceGRPO setting while training on the dedicated
+VBVR-Pro RL split with the latest scorer, use
+`configs/train_dancegrpo_vbvr_pro_5b_256x256x161_rule_cps_from_nsft_bs_32_lr_1e-6_manifest_rl_evalkit_6fedd9d9.yaml`.
+Its data descriptor selects `split: rl` from `split_manifest_rl.json` and uses
+the explicit `/mnt/umm/users/xujunxiang/VBVR-Pro_10k` root. The verified
+manifest contains 50 In-Domain tasks and 50,000 samples, so the YAML sets
+`dataset_size: 50000`. It fixes the Flow-CPS coefficient at `0.7` (with no
+`grpo_cps_noise_scale_range`) and isolates output, W&B, and reward-temp paths
+with `cps0p7` plus the `_manifest_rl_evalkit_6fedd9d9` suffix. Because the original fp32 DCP
+epoch-1 checkpoint is absent, it initializes model weights from the completed
+`storage/models/dcp_converted_5b/sft_vbvr_5b_256x256x161_full_lr_1e-5_checkpoint-epoch1-main-v2`
+Diffusers conversion and sets `resume_from: null`. This starts fresh optimizer
+and dataloader state, and the fp32 training load cannot recover precision already
+discarded by the BF16 conversion.
+
+The unsuffixed config remains pinned to historical revision `42a1593d` for
+reproducibility. Do not resume one of its checkpoints with the
+`evalkit_6fedd9d9` config: the scorer update changes the RL objective.
+
+The following smoke result belongs to the historical `42a1593d` scorer, not
+the new objective. An eight-H100 one-step executable smoke completed with this initialization and
+dataset contract, fixed CPS 0.7, Liger, fresh-cache Inductor compilation, the
+aligned `main_v2` reward, full-FT backward/AdamW, and a complete DCP save. The
+reduced batch-8/G=2/T=2 validation reported reward `0.7310 +/- 0.2571`, grad norm
+`0.0024`, and 35.5/39.3 GiB peak allocated/reserved memory per rank. This proves
+the pipeline and compiler-header path; it is not a production G=32/T=30 or
+four-node throughput result.
+
 ## DanceGRPO-Style Replay
 
 `DanceGRPOTrainer` keeps the standard single-group execution path for normal launches, supports a shared-prompt
@@ -204,8 +279,23 @@ ambient state during recompute. Do not pass an autocast `context_fn`: PyTorch
 2.11 Dynamo only supports `TorchDispatchMode` checkpoint contexts. In-place
 `Module.compile()` preserves DCP/state-dict names. Inductor/Triton also needs a
 working host C compiler and the matching Python development headers (for this
-Python 3.12 environment, `Python.h` from `python3.12-dev`); install them
-system-wide or include their directories in `CPATH` before launch.
+Python 3.12 environment, `Python.h` from `python3.12-dev`). The shared launcher
+environment first checks an explicit `WAN_TRAINER_PYTHON_INCLUDE`, the system
+include directory, and `CPATH`; if those are missing, it checks the ignored
+shared `storage/toolchains/uv-python` tree and then an already-installed
+user-level uv Python with the same major/minor ABI. It exports the selected
+include through `CPATH` without downloading during launch. On runtime-only
+cluster images, provision and fresh-cache validate the shared tree once with:
+
+```fish
+fish scripts/dev/bootstrap_triton_python_headers.fish
+```
+
+Multi-node GRPO uses a node-local Triton cache and runs a small driver preflight
+on every node before `torchrun`, so a missing compiler/header fails before model
+loading. Set `WAN_TRAINER_TRITON_PREFLIGHT_ONLY=1` for a cheap all-node
+preflight job, then remove it for training. Installing the exact development
+package in the production image remains preferred.
 
 The production-shape Liger+Inductor validation completed one optimizer step on
 eight 80-GiB H100s with TP2 x FSDP4, 16 global prompts, `G=16`, `T=30`, 17
@@ -239,6 +329,15 @@ Use the GRPO launcher for DanceGRPO:
 fish scripts/train/grpo.fish --nproc 8 --config configs/train_grpo_maze.yaml
 fish scripts/train/grpo.fish --nproc 8 --config configs/train_dancegrpo_maze.yaml
 fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8
+```
+
+For the four-node full-FT A14B TP2 run, use the fixed wrapper on every node.
+It requires `WORLD_SIZE=4`, maps 32 ranks to DP16 x TP2, overrides the local
+batch to 1 to preserve 16 global prompts, and uses a separate FSDP16 output/run
+name:
+
+```fish
+fish scripts/train/dancegrpo_vbvr_pro_a14b_full_tp2_4node.fish
 ```
 
 Use the correction launcher for `CorrectionConfig`:
@@ -278,3 +377,7 @@ fish scripts/train/i2v_correction.fish --nproc 8 -- --config configs/train_corre
 [^reward-registry]: [`src/trainer/rewards/registry.py`](../src/trainer/rewards/registry.py)
 [^neg-loss]: [`src/trainer/rewards/neg_loss.py`](../src/trainer/rewards/neg_loss.py)
 [^maze-reward]: [`src/trainer/rewards/maze.py`](../src/trainer/rewards/maze.py)
+[^vbvr-rule]: [`src/trainer/rewards/vbvr_rule.py`](../src/trainer/rewards/vbvr_rule.py)
+[^vbvr-prepare]: [`src/cli/prepare_vbvr_eval_videos.py`](../src/cli/prepare_vbvr_eval_videos.py)
+[^vbvr-eval-wrapper]: [`src/eval/vbvr_run_evaluation_parallel.py`](../src/eval/vbvr_run_evaluation_parallel.py)
+[^vbvr-alignment-validator]: [`scripts/dev/validate_vbvr_reward_alignment.py`](../scripts/dev/validate_vbvr_reward_alignment.py)

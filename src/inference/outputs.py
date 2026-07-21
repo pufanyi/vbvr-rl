@@ -25,7 +25,7 @@ from .inputs import PreparedInput
 # ----------------------------------------------------------------------
 # Latent -> uint8 video
 # ----------------------------------------------------------------------
-def _uint8_from_decoded(decoded: torch.Tensor) -> np.ndarray:
+def uint8_from_decoded(decoded: torch.Tensor) -> np.ndarray:
     """(B, C, T, H, W) in [-1, 1] -> (B, T, H, W, C) uint8."""
     decoded = ((decoded.clamp(-1.0, 1.0) + 1.0) * 127.5).round().to(torch.uint8)
     return decoded.permute(0, 2, 3, 4, 1).contiguous().cpu().numpy()
@@ -35,7 +35,7 @@ def decode_batch_to_uint8(model: WanI2VForTraining, latents: torch.Tensor) -> np
     """Decode a batch of latents to (B, T, H, W, C) uint8 frames."""
     with torch.no_grad():
         decoded = model.decode_latents(latents)
-    return _uint8_from_decoded(decoded)
+    return uint8_from_decoded(decoded)
 
 
 def decode_latents_to_uint8(model: WanI2VForTraining, latents: torch.Tensor) -> np.ndarray:

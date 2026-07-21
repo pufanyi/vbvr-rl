@@ -84,11 +84,20 @@ dancegrpo_timestep_selection_ratio: 0.6
 
 # VBVR-Pro interleave EvalKit rule reward. Raw dataset metadata passes the
 # original GT first/final/video paths through to the scorer.
-vbvr_reward_evalkit_dir: /mnt/aigc/xujunxiang/Code/Share/vbvr-evalkit-interleave
+vbvr_reward_evalkit_dir: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/evalkits/vbvr-evalkit-interleave-main_v2
+vbvr_reward_evalkit_source_sha256: f99edd06fd39b5025a0a46871fc7280f7353d47e8de45b627a0b0711318fd258
+vbvr_reward_easyocr_module_path: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/evalkits/easyocr-shared
 vbvr_reward_device: cpu
 vbvr_reward_fps: 16
 vbvr_reward_decode_batch_size: 8
-vbvr_reward_cpu_workers: 16
+vbvr_reward_cpu_workers: 1
+vbvr_reward_cpu_threads_per_worker: 16
+vbvr_reward_use_process_pool: true
+vbvr_reward_prepared_width: 1024
+vbvr_reward_prepared_height: 1024
+vbvr_reward_max_duration_seconds: 5.0
+vbvr_reward_prepare_crf: 12
+vbvr_reward_fail_on_error: true
 vbvr_reward_task_specific_only: true
 vbvr_reward_tmp_dir: storage/tmp/vbvr_pro_a14b_rule_reward
 vbvr_reward_keep_tmp: false

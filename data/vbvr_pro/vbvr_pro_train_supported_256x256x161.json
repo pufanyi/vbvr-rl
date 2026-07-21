@@ -7,7 +7,7 @@
       "/mnt/umm/users/xujunxiang/VBVR-Pro"
     ],
     "split": "train",
-    "allowed_task_names_from_evalkit": "/mnt/aigc/xujunxiang/Code/Share/vbvr-evalkit-interleave",
+    "allowed_task_names_from_evalkit": "/mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/evalkits/vbvr-evalkit-interleave-main_v2",
     "check_files": false,
     "num_frames": 161,
     "height": 256,
