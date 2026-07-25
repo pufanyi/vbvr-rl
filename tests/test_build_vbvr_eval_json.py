@@ -1,9 +1,12 @@
 import json
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
-from src.eval.build_vbvr_eval_json import build_entries
+from src.cli.prepare_vbvr_eval_videos import VideoInfo
+from src.eval import build_vbvr_eval_json
+from src.eval.build_vbvr_eval_json import build_entries, derive_generation_num_frames
 
 
 def _write_sample(root: Path, domain: str, task: str, index: str, prompt: str) -> None:
@@ -52,3 +55,52 @@ def test_build_entries_validates_flattened_sample_against_manifest(tmp_path: Pat
     (sample / "metadata.json").write_text(json.dumps({"task_id": "stale-id"}), encoding="utf-8")
     with pytest.raises(ValueError, match="Manifest mismatch"):
         build_entries(tmp_path, split_manifest=manifest)
+
+
+@pytest.mark.parametrize(
+    ("ground_truth_frames", "expected"),
+    [
+        (10, 9),
+        (60, 61),
+        (62, 61),
+        (64, 65),
+        (282, 281),
+    ],
+)
+def test_derive_generation_num_frames_matches_diffusers_wan_alignment(ground_truth_frames: int, expected: int):
+    assert (
+        derive_generation_num_frames(
+            ground_truth_frame_count=ground_truth_frames,
+            ground_truth_fps=Fraction(16, 1),
+            generation_fps=16,
+        )
+        == expected
+    )
+
+
+def test_build_entries_can_embed_gt_derived_generation_length(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    _write_sample(tmp_path, "In-Domain_50", "task", "00000", "prompt")
+    ground_truth = tmp_path / "In-Domain_50/task/00000/ground_truth.mp4"
+    ground_truth.write_bytes(b"video")
+    monkeypatch.setattr(
+        build_vbvr_eval_json,
+        "probe_video",
+        lambda path: VideoInfo(
+            width=1024,
+            height=1024,
+            frame_count=60,
+            average_fps=Fraction(16, 1),
+            nominal_fps=Fraction(16, 1),
+            duration=3.75,
+        ),
+    )
+
+    entries = build_entries(tmp_path, generation_fps=16)
+
+    assert entries[0]["ground_truth_video"] == str(ground_truth.resolve())
+    assert entries[0]["ground_truth_width"] == 1024
+    assert entries[0]["ground_truth_height"] == 1024
+    assert entries[0]["ground_truth_frame_count"] == 60
+    assert entries[0]["ground_truth_fps"] == 16.0
+    assert entries[0]["generation_fps"] == 16
+    assert entries[0]["num_frames"] == 61

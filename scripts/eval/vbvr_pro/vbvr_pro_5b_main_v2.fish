@@ -53,6 +53,8 @@ set -q EXPECTED_VIDEOS[1]; or set EXPECTED_VIDEOS 500
 set -q NUM_GPUS[1]; or set NUM_GPUS 8
 set -q CUDA_DEVICES[1]; or set CUDA_DEVICES 0,1,2,3,4,5,6,7
 set -q NUM_FRAMES[1]; or set NUM_FRAMES 161
+set -q USE_ITEM_NUM_FRAMES[1]; or set USE_ITEM_NUM_FRAMES 0
+set -q TEMPORAL_ALIGNMENT[1]; or set TEMPORAL_ALIGNMENT 4
 set -q HEIGHT[1]; or set HEIGHT 256
 set -q WIDTH[1]; or set WIDTH 256
 set -q INFER_FPS[1]; or set INFER_FPS 16
@@ -97,6 +99,16 @@ contains -- $ODE_SOLVER unipc euler
 or _fail "ODE_SOLVER must be unipc or euler, got $ODE_SOLVER"
 contains -- $PRECONVERTED_MODEL 0 1
 or _fail "PRECONVERTED_MODEL must be 0 or 1, got $PRECONVERTED_MODEL"
+contains -- $USE_ITEM_NUM_FRAMES 0 1
+or _fail "USE_ITEM_NUM_FRAMES must be 0 or 1, got $USE_ITEM_NUM_FRAMES"
+if test "$USE_ITEM_NUM_FRAMES" = 1; and test "$GENERATION_MODE" != ode
+    _fail "USE_ITEM_NUM_FRAMES currently requires GENERATION_MODE=ode"
+end
+if test "$USE_ITEM_NUM_FRAMES" = 1
+    $PYTHON -c 'import sys; value=int(sys.argv[1]); raise SystemExit(0 if value > 0 else 1)' \
+        $TEMPORAL_ALIGNMENT
+    or _fail "TEMPORAL_ALIGNMENT must be a positive integer, got $TEMPORAL_ALIGNMENT"
+end
 if test $GENERATION_MODE = cps
     $PYTHON -c 'import sys; value=float(sys.argv[1]); raise SystemExit(0 if 0.0 <= value <= 1.0 else 1)' \
         $CPS_NOISE_LEVEL
@@ -257,6 +269,12 @@ function _generation_provenance
     set -l generator_source src/cli/eval_i2v.py
     set -l sampler_args
     set -l generator_file_args
+    set -l frame_contract_args
+    if test "$USE_ITEM_NUM_FRAMES" = 1
+        set frame_contract_args \
+            --value num_frames_mode=gt_duration \
+            --value temporal_alignment=$TEMPORAL_ALIGNMENT
+    end
     if test $GENERATION_MODE = cps
         set generator_source src/cli/eval_i2v_cps.py
         set sampler_args \
@@ -276,6 +294,7 @@ function _generation_provenance
         --value height=$HEIGHT \
         --value width=$WIDTH \
         --value num_frames=$NUM_FRAMES \
+        $frame_contract_args \
         --value fps=$INFER_FPS \
         --value num_inference_steps=$NUM_INFERENCE_STEPS \
         --value guidance_scale=$GUIDANCE_SCALE \
@@ -362,7 +381,11 @@ print(evalkit_source_sha256(sys.argv[1]))
         $output_args
 end
 
-for required in $CHECKPOINT $BASE_MODEL $GT_BASE $SPLIT_MANIFEST $EASYOCR_SOURCE_MODELS
+set -l required_paths $GT_BASE $SPLIT_MANIFEST $EASYOCR_SOURCE_MODELS
+if test "$PRECONVERTED_MODEL" = 0
+    set -a required_paths $CHECKPOINT $BASE_MODEL
+end
+for required in $required_paths
     test -e $required; or _fail "required path does not exist: $required"
 end
 
@@ -567,13 +590,24 @@ if set -q CONVERSION_ONLY[1]
 end
 
 echo "[manifest] validating the flattened bench against $SPLIT_MANIFEST"
-$PYTHON -m src.eval.build_vbvr_eval_json \
+set -l eval_json_args \
     --gt_base $GT_BASE \
     --split_manifest $SPLIT_MANIFEST \
     --output $EVAL_JSON \
     --layout domain \
     --expected_samples $EXPECTED_VIDEOS
+if test "$USE_ITEM_NUM_FRAMES" = 1
+    set -a eval_json_args \
+        --generation_fps $INFER_FPS \
+        --temporal_alignment $TEMPORAL_ALIGNMENT
+end
+$PYTHON -m src.eval.build_vbvr_eval_json $eval_json_args
 or exit 1
+
+set -l item_num_frames_args
+if test "$USE_ITEM_NUM_FRAMES" = 1
+    set item_num_frames_args --use_item_num_frames
+end
 
 set -l generated_valid 0
 if $PYTHON -m src.cli.eval_i2v \
@@ -583,6 +617,7 @@ if $PYTHON -m src.cli.eval_i2v \
         --width $WIDTH \
         --num_frames $NUM_FRAMES \
         --fps $INFER_FPS \
+        $item_num_frames_args \
         --validate_only >/dev/null 2>&1
     set generated_valid 1
 end
@@ -615,7 +650,11 @@ end
 if test $generated_valid -eq 1; and test $generation_provenance_complete -eq 1
     echo "[skip] generated videos passed provenance, exact path, and media validation"
 else
-    echo "[generate] resuming or repairing $generated_count/$EXPECTED_VIDEOS videos with $NUM_GPUS-GPU DP"
+    if test "$USE_ITEM_NUM_FRAMES" = 1
+        echo "[generate] resuming or repairing $generated_count/$EXPECTED_VIDEOS GT-duration-matched videos with $NUM_GPUS-GPU DP"
+    else
+        echo "[generate] resuming or repairing $generated_count/$EXPECTED_VIDEOS videos with $NUM_GPUS-GPU DP"
+    end
     set -l generation_run_state in_progress_resume
     if test $force_generation -eq 1
         set generation_run_state in_progress_rewrite
@@ -632,6 +671,7 @@ else
         --guidance_scale $GUIDANCE_SCALE \
         --fps $INFER_FPS \
         --seed $SEED
+    set -a generation_args $item_num_frames_args
     set -l generation_module src.cli.eval_i2v
     if test $GENERATION_MODE = cps
         set generation_module src.cli.eval_i2v_cps
@@ -654,6 +694,7 @@ else
         --width $WIDTH \
         --num_frames $NUM_FRAMES \
         --fps $INFER_FPS \
+        $item_num_frames_args \
         --validate_only
     or _fail "generated video set failed exact path or media validation"
     _generation_provenance promote $generation_run_state; or exit 1

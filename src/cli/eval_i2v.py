@@ -78,6 +78,11 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--height", type=int, default=None, help="Fixed output height (must be used with --width)")
     parser.add_argument("--width", type=int, default=None, help="Fixed output width (must be used with --height)")
     parser.add_argument("--num_frames", type=int, default=81, help="Number of frames to generate")
+    parser.add_argument(
+        "--use_item_num_frames",
+        action="store_true",
+        help="Use each eval item's integer num_frames value, falling back to --num_frames when absent",
+    )
     parser.add_argument("--guidance_scale", type=float, default=3.5, help="Guidance scale")
     parser.add_argument("--num_inference_steps", type=int, default=50, help="Number of inference steps")
     parser.add_argument("--fps", type=int, default=16, help="Output video FPS")
@@ -161,6 +166,13 @@ def _expected_output_paths(data: list[dict], output_dir: Path) -> tuple[Path, ..
     return tuple(output_dir / path for path in sorted(expected))
 
 
+def _item_num_frames(item: dict, index: int, *, default: int, enabled: bool) -> int:
+    value = item.get("num_frames", default) if enabled else default
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"Eval item {index} num_frames must be a positive integer, got {value!r}")
+    return value
+
+
 def _video_validation_error(path: Path, *, width: int, height: int, num_frames: int, fps: float) -> str | None:
     if not path.is_file() or path.stat().st_size == 0:
         return "file is missing or empty"
@@ -237,6 +249,7 @@ def _validate_output_set(
     height: int,
     num_frames: int,
     fps: float,
+    use_item_num_frames: bool = False,
 ) -> int:
     _cleanup_stale_temporary_videos(output_dir)
     expected_paths = _expected_output_paths(data, output_dir)
@@ -258,12 +271,16 @@ def _validate_output_set(
         errors.append(f"missing={len(missing)}: {', '.join(str(path) for path in missing[:10])}")
     if extra:
         errors.append(f"extra={len(extra)}: {', '.join(str(path) for path in extra[:10])}")
+    item_by_relative = {
+        _output_path(Path(), _sample_name(item, index)): (index, item) for index, item in enumerate(data)
+    }
     for relative_path in sorted(expected_relative & actual_relative):
+        index, item = item_by_relative[relative_path]
         reason = _video_validation_error(
             output_dir / relative_path,
             width=width,
             height=height,
-            num_frames=num_frames,
+            num_frames=_item_num_frames(item, index, default=num_frames, enabled=use_item_num_frames),
             fps=fps,
         )
         if reason is not None:
@@ -365,6 +382,7 @@ def main(argv: list[str] | None = None) -> int:
             height=args.height,
             num_frames=args.num_frames,
             fps=args.fps,
+            use_item_num_frames=args.use_item_num_frames,
         )
         print(f"Validated {validated} videos in {output_dir}", flush=True)
         return 0
@@ -413,6 +431,7 @@ def main(argv: list[str] | None = None) -> int:
     # ---- Generate ----
     for count, idx in enumerate(my_indices):
         item = data[idx]
+        num_frames = _item_num_frames(item, idx, default=args.num_frames, enabled=args.use_item_num_frames)
 
         # Determine output filename
         name = _sample_name(item, idx)
@@ -443,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
             out_path,
             width=width,
             height=height,
-            num_frames=args.num_frames,
+            num_frames=num_frames,
             fps=args.fps,
             force=args.force,
         ):
@@ -462,7 +481,7 @@ def main(argv: list[str] | None = None) -> int:
             negative_prompt=args.negative_prompt,
             height=height,
             width=width,
-            num_frames=args.num_frames,
+            num_frames=num_frames,
             guidance_scale=args.guidance_scale,
             num_inference_steps=args.num_inference_steps,
             generator=generator,
@@ -477,14 +496,17 @@ def main(argv: list[str] | None = None) -> int:
                 tmp_path,
                 width=width,
                 height=height,
-                num_frames=args.num_frames,
+                num_frames=num_frames,
                 fps=args.fps,
             ):
                 raise RuntimeError(f"Generated video failed validation: {tmp_path}")
             tmp_path.replace(out_path)
         finally:
             tmp_path.unlink(missing_ok=True)
-        print(f"[rank {rank}] [{count + 1}/{len(my_indices)}] Saved {out_path}", flush=True)
+        print(
+            f"[rank {rank}] [{count + 1}/{len(my_indices)}] Saved {out_path} ({num_frames} frames)",
+            flush=True,
+        )
 
     if world_size > 1:
         _barrier(device)
@@ -498,6 +520,7 @@ def main(argv: list[str] | None = None) -> int:
                 height=args.height,
                 num_frames=args.num_frames,
                 fps=args.fps,
+                use_item_num_frames=args.use_item_num_frames,
             )
         except Exception as exc:
             validation_error = exc

@@ -15,7 +15,10 @@ Usage:
 import argparse
 import json
 import re
+from fractions import Fraction
 from pathlib import Path
+
+from src.cli.prepare_vbvr_eval_videos import probe_video
 
 DOMAINS = {
     "In-Domain_50": "In_Domain",
@@ -69,6 +72,18 @@ def parse_args():
         default=None,
         help="Validate flattened sample metadata against this VBVR-Pro bench manifest",
     )
+    parser.add_argument(
+        "--generation_fps",
+        type=int,
+        default=None,
+        help="Derive a per-sample generation length from each ground-truth video's duration at this FPS",
+    )
+    parser.add_argument(
+        "--temporal_alignment",
+        type=int,
+        default=4,
+        help="Temporal VAE alignment used with --generation_fps; generated lengths are alignment*k+1",
+    )
     return parser.parse_args()
 
 
@@ -91,6 +106,28 @@ def _load_manifest_bench(path: Path) -> dict[str, tuple[str, list[str]]]:
     return expected
 
 
+def derive_generation_num_frames(
+    *,
+    ground_truth_frame_count: int,
+    ground_truth_fps: Fraction,
+    generation_fps: int,
+    temporal_alignment: int = 4,
+) -> int:
+    """Match GT duration at ``generation_fps`` using Diffusers Wan's ``alignment*k+1`` rule."""
+    if ground_truth_frame_count <= 0:
+        raise ValueError(f"ground_truth_frame_count must be positive, got {ground_truth_frame_count}")
+    if ground_truth_fps <= 0:
+        raise ValueError(f"ground_truth_fps must be positive, got {ground_truth_fps}")
+    if generation_fps <= 0:
+        raise ValueError(f"generation_fps must be positive, got {generation_fps}")
+    if temporal_alignment <= 0:
+        raise ValueError(f"temporal_alignment must be positive, got {temporal_alignment}")
+
+    exact_frames = Fraction(ground_truth_frame_count * generation_fps, 1) / ground_truth_fps
+    requested_frames = max(1, (2 * exact_frames.numerator + exact_frames.denominator) // (2 * exact_frames.denominator))
+    return requested_frames // temporal_alignment * temporal_alignment + 1
+
+
 def build_entries(
     gt_base: Path,
     *,
@@ -98,7 +135,13 @@ def build_entries(
     split: str = "Open_60",
     task_filter: set[str] | None = None,
     split_manifest: Path | None = None,
-) -> list[dict[str, str]]:
+    generation_fps: int | None = None,
+    temporal_alignment: int = 4,
+) -> list[dict[str, object]]:
+    if generation_fps is not None and generation_fps <= 0:
+        raise ValueError(f"generation_fps must be positive, got {generation_fps}")
+    if temporal_alignment <= 0:
+        raise ValueError(f"temporal_alignment must be positive, got {temporal_alignment}")
     manifest_bench = _load_manifest_bench(split_manifest) if split_manifest is not None else None
     seen_manifest_samples: set[tuple[str, int]] = set()
     entries = []
@@ -146,16 +189,37 @@ def build_entries(
                         )
                     seen_manifest_samples.add((task_name, sample_index))
                 output_root = domain_dir if layout == "domain" else split
-                entries.append(
-                    {
-                        "name": f"{output_root}/{task_name}/{sample_dir.name}",
-                        "image": str(first_frame.resolve()),
-                        "prompt": prompt_file.read_text(encoding="utf-8").strip(),
-                        "task_name": task_name,
-                        "video_idx": sample_dir.name,
-                        "domain": domain_label,
-                    }
-                )
+                entry: dict[str, object] = {
+                    "name": f"{output_root}/{task_name}/{sample_dir.name}",
+                    "image": str(first_frame.resolve()),
+                    "prompt": prompt_file.read_text(encoding="utf-8").strip(),
+                    "task_name": task_name,
+                    "video_idx": sample_dir.name,
+                    "domain": domain_label,
+                }
+                if generation_fps is not None:
+                    ground_truth_video = sample_dir / "ground_truth.mp4"
+                    if not ground_truth_video.is_file():
+                        raise FileNotFoundError(f"Missing ground-truth video: {ground_truth_video}")
+                    ground_truth_info = probe_video(ground_truth_video)
+                    entry.update(
+                        {
+                            "ground_truth_video": str(ground_truth_video.resolve()),
+                            "ground_truth_width": ground_truth_info.width,
+                            "ground_truth_height": ground_truth_info.height,
+                            "ground_truth_frame_count": ground_truth_info.frame_count,
+                            "ground_truth_fps": float(ground_truth_info.source_fps),
+                            "ground_truth_duration": ground_truth_info.duration,
+                            "generation_fps": generation_fps,
+                            "num_frames": derive_generation_num_frames(
+                                ground_truth_frame_count=ground_truth_info.frame_count,
+                                ground_truth_fps=ground_truth_info.source_fps,
+                                generation_fps=generation_fps,
+                                temporal_alignment=temporal_alignment,
+                            ),
+                        }
+                    )
+                entries.append(entry)
     if manifest_bench is not None:
         expected_samples = {
             (task_name, sample_index)
@@ -180,6 +244,8 @@ def main():
         split=args.split,
         task_filter=task_filter,
         split_manifest=args.split_manifest,
+        generation_fps=args.generation_fps,
+        temporal_alignment=args.temporal_alignment,
     )
     if args.expected_samples is not None and len(entries) != args.expected_samples:
         raise RuntimeError(f"Expected {args.expected_samples} eval samples, found {len(entries)} under {gt_base}")
