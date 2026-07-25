@@ -129,6 +129,10 @@ grpo_reward_fn: vbvr_rule
 vbvr_reward_evalkit_dir: storage/evalkits/vbvr-evalkit-interleave-main_v2-6fedd9d9
 vbvr_reward_evalkit_source_sha256: eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c
 vbvr_reward_device: cpu
+vbvr_reward_decode_batch_size: 8
+vbvr_reward_max_pending_jobs: 8
+vbvr_reward_cpu_workers: 2
+vbvr_reward_cpu_threads_per_worker: 8
 vbvr_reward_prepared_width: 1024
 vbvr_reward_prepared_height: 1024
 vbvr_reward_max_duration_seconds: 5.0
@@ -152,10 +156,35 @@ prompt, GT directory, and metadata file and invokes the exact
 Scoring happens in spawned CPU workers with CUDA hidden. This is required for
 EasyOCR tasks and also prevents evaluator imports from inheriting training-GPU
 state. `vbvr_reward_cpu_workers` counts processes per reward-producing rank;
-the standard eight-GPU configs use one process with 16 bounded native threads
-per rank (or per TP pair), rather than eight processes on every rank. EvalKit
-errors, non-finite scores, and scores outside `[0, 1]` stop training by
-default.
+keep the node-wide native-thread budget bounded when increasing it. The 5B
+manifest-RL configs use two processes with eight threads each per rank after
+that layout outperformed one process with 16 threads on a 50-task benchmark;
+other standard configs may retain one x 16 per rank (or per TP pair). EvalKit
+errors, non-finite scores, and scores outside `[0, 1]` stop training by default.
+
+`vbvr_rule` is a bounded producer-consumer pipeline. The training thread
+decodes each `vbvr_reward_decode_batch_size` chunk and immediately queues its
+samples for background video preparation and CPU scoring. DanceGRPO then
+continues the next GPU rollout chunk and resolves queued rewards, in submission
+order, only after all local rollout chunks have been produced. On TP runs only
+TP rank 0 produces rewards and the deferred resolve retains the existing TP
+broadcast order. `vbvr_reward_max_pending_jobs` bounds decoded samples retained
+per reward-producing rank; `0` selects
+`max(vbvr_reward_decode_batch_size, 2 * vbvr_reward_cpu_workers)`. The two 5B
+manifest-RL configs set it to `8`, one decoded rollout batch, so backpressure
+limits host memory while still overlapping the first batch's CPU work with the
+second GPU rollout.
+
+On 2026-07-25, an eight-H100 production-shape one-step smoke of the 161-frame
+DiffSynth step-35500 config used shared prompts with local `batch_size: 4`,
+`G=32`, `T=30`, two size-8 rollout/replay chunks, latest EvalKit, nonzero
+learning rate, gradient clipping, and AdamW. The two-worker x eight-thread
+pipeline completed in `204.18 s/step`, versus `251.32 s/step` for the prior
+one-worker x 16-thread serial-reward smoke: `47.14` seconds (`18.8%`) less wall
+time. Reward (`0.3141 +/- 0.2649`), grad norm (`0.0002`), and peak memory
+(`46.8/50.8 GiB` allocated/reserved) matched exactly. The corresponding
+81-frame config also completed a real step in `137.13 s`, with reward
+`0.3771 +/- 0.3251`, grad norm `0.0002`, and `40.6/45.0 GiB` peak memory.
 
 After changing video encoding, preparation, metadata, or scorer code, run
 `scripts/dev/validate_vbvr_reward_alignment.py` on both a normal geometric

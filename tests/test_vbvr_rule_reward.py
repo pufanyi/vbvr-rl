@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import textwrap
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -111,6 +112,7 @@ def _config(evalkit: Path, tmp_path: Path) -> SimpleNamespace:
         vbvr_reward_max_duration_seconds=1.0,
         vbvr_reward_prepare_crf=12,
         vbvr_reward_decode_batch_size=1,
+        vbvr_reward_max_pending_jobs=2,
         vbvr_reward_cpu_workers=1,
         vbvr_reward_cpu_threads_per_worker=1,
         vbvr_reward_use_process_pool=True,
@@ -203,5 +205,107 @@ def test_reward_uses_final_eval_contract_and_surfaces_errors(
                     None,
                     **kwargs,
                 )
+    finally:
+        reward.close()
+
+
+def test_reward_streams_first_decoded_batch_before_decoding_next(tmp_path: Path):
+    evalkit = tmp_path / "evalkit"
+    _write_fake_evalkit(evalkit)
+    source_dir = tmp_path / "gt-sample"
+    source_dir.mkdir()
+    gt_video = source_dir / "ground_truth.mp4"
+    gt_first = source_dir / "first_frame.png"
+    gt_final = source_dir / "final_frame.png"
+    metadata = source_dir / "metadata.json"
+    for path in (gt_video, gt_first, gt_final):
+        path.write_bytes(b"fixture")
+    metadata.write_text("{}")
+
+    score_started = threading.Event()
+    release_score = threading.Event()
+
+    class StreamingModel:
+        def __init__(self):
+            self.decode_calls = 0
+
+        def decode_latents(self, latents):
+            self.decode_calls += 1
+            if self.decode_calls == 2:
+                assert score_started.wait(timeout=5), "first decoded batch was not queued before the second decode"
+            return torch.zeros(latents.shape[0], 3, 2, 2, 2)
+
+    model = StreamingModel()
+    trainer = _trainer()
+    trainer.model = model
+    cfg = _config(evalkit, tmp_path)
+    cfg.vbvr_reward_use_process_pool = False
+    reward = VBVRRuleReward(trainer, cfg)
+
+    def fake_score_video_pair(*, sample_id: str, **_kwargs) -> float:
+        score_started.set()
+        assert release_score.wait(timeout=5)
+        return 0.25 if sample_id.endswith("-0") else 0.75
+
+    reward._score_video_pair = fake_score_video_pair
+    meta = {
+        "sample_task_name": ["fake-task", "fake-task"],
+        "sample_prompt": ["video prompt", "video prompt"],
+        "sample_id": ["0", "1"],
+        "sample_gt_video_path": [str(gt_video), str(gt_video)],
+        "sample_gt_first_frame": [str(gt_first), str(gt_first)],
+        "sample_gt_final_frame": [str(gt_final), str(gt_final)],
+        "sample_metadata_path": [str(metadata), str(metadata)],
+        "sample_source_dir": [str(source_dir), str(source_dir)],
+    }
+    latents = torch.zeros(2, 1)
+    try:
+        pending = reward.submit(latents, latents, latents, latents, meta=meta)
+        assert model.decode_calls == 2
+        assert score_started.is_set()
+        assert not pending.futures[0][1].done()
+
+        release_score.set()
+        assert torch.equal(pending.result(), torch.tensor([0.25, 0.75]))
+    finally:
+        release_score.set()
+        reward.close()
+
+
+def test_reward_submit_runs_full_spawned_scorer_pipeline(tmp_path: Path):
+    evalkit = tmp_path / "evalkit"
+    _write_fake_evalkit(evalkit)
+    source_dir = tmp_path / "gt-sample"
+    source_dir.mkdir()
+    gt_video = source_dir / "ground_truth.mp4"
+    gt_first = source_dir / "first_frame.png"
+    gt_final = source_dir / "final_frame.png"
+    metadata = source_dir / "metadata.json"
+    for path in (gt_video, gt_first, gt_final):
+        path.write_bytes(b"fixture")
+    metadata.write_text("{}")
+
+    class DecodeModel:
+        @staticmethod
+        def decode_latents(latents):
+            return torch.zeros(latents.shape[0], 3, 9, 32, 48)
+
+    trainer = _trainer()
+    trainer.model = DecodeModel()
+    reward = VBVRRuleReward(trainer, _config(evalkit, tmp_path))
+    meta = {
+        "sample_task_name": ["fake-task"],
+        "sample_prompt": ["video prompt"],
+        "sample_id": ["0"],
+        "sample_gt_video_path": [str(gt_video)],
+        "sample_gt_first_frame": [str(gt_first)],
+        "sample_gt_final_frame": [str(gt_final)],
+        "sample_metadata_path": [str(metadata)],
+        "sample_source_dir": [str(source_dir)],
+    }
+    latents = torch.zeros(1, 1)
+    try:
+        pending = reward.submit(latents, latents, latents, latents, meta=meta)
+        assert torch.equal(pending.result(), torch.tensor([0.75]))
     finally:
         reward.close()

@@ -107,6 +107,12 @@ def test_rl_config_validates_vbvr_evalkit_digest():
     assert cfg.vbvr_reward_evalkit_source_sha256 == "a" * 64
 
 
+def test_rl_config_validates_vbvr_reward_queue_bound():
+    assert RLConfig().vbvr_reward_max_pending_jobs == 0
+    with pytest.raises(ValueError, match="vbvr_reward_max_pending_jobs must be >= 0"):
+        RLConfig(vbvr_reward_max_pending_jobs=-1)
+
+
 def test_dancegrpo_samples_deterministic_cps_noise_once_per_prompt_group():
     trainer = DanceGRPOTrainer.__new__(DanceGRPOTrainer)
     trainer.cfg = SimpleNamespace(

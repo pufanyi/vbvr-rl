@@ -182,18 +182,16 @@ def test_reward_restores_offloaded_vae_for_latent_batches():
             return torch.zeros(generated.shape[0])
 
     vae = RecordingModule()
-    trainer = SimpleNamespace(
-        cfg=SimpleNamespace(grpo_offload_inference_models=True),
-        reward_fn=VAEReward(),
-        tensor_parallel_enabled=False,
-        tp_rank=0,
-        model=SimpleNamespace(vae=vae),
-        device=torch.device("cpu"),
-    )
+    trainer = BaseGRPOTrainer.__new__(BaseGRPOTrainer)
+    trainer.cfg = SimpleNamespace(grpo_offload_inference_models=True)
+    trainer.reward_fn = VAEReward()
+    trainer.tensor_parallel_enabled = False
+    trainer.tp_rank = 0
+    trainer.model = SimpleNamespace(vae=vae)
+    trainer.device = torch.device("cpu")
     generated = torch.zeros(2, 1)
 
-    rewards = BaseGRPOTrainer._compute_reward(
-        trainer,
+    rewards = trainer._compute_reward(
         generated,
         generated,
         generated,
@@ -203,3 +201,43 @@ def test_reward_restores_offloaded_vae_for_latent_batches():
 
     assert vae.devices == ["cpu"]
     assert rewards.shape == (2,)
+
+
+def test_reward_submit_defers_async_result_until_resolve():
+    events = []
+
+    class PendingReward:
+        def result(self):
+            events.append("resolve")
+            return torch.tensor([0.25, 0.75])
+
+    class AsyncReward:
+        requires_vae = False
+        requires_policy_forward = False
+
+        def submit(self, generated, _gt, _condition, _prompt, *, meta):
+            assert meta == {"sample": "metadata"}
+            events.append(("submit", generated.shape[0]))
+            return PendingReward()
+
+    trainer = BaseGRPOTrainer.__new__(BaseGRPOTrainer)
+    trainer.cfg = SimpleNamespace(grpo_offload_inference_models=False)
+    trainer.reward_fn = AsyncReward()
+    trainer.tensor_parallel_enabled = False
+    trainer.tp_rank = 0
+    trainer.model = SimpleNamespace(vae=None)
+    trainer.device = torch.device("cpu")
+    generated = torch.zeros(2, 1)
+
+    submission = trainer._submit_reward(
+        generated,
+        generated,
+        generated,
+        generated,
+        meta={"sample": "metadata"},
+    )
+
+    assert events == [("submit", 2)]
+    rewards = trainer._resolve_reward(submission)
+    assert events == [("submit", 2), "resolve"]
+    assert torch.equal(rewards, torch.tensor([0.25, 0.75]))

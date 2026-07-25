@@ -7,6 +7,7 @@ computation, and the outer training loop.  Concrete subclasses implement
 
 import time
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,16 @@ from src.trainer.config import RLConfig
 from src.trainer.flops import MFUMonitor, compute_wan_seq_len, estimate_wan_forward_flops, get_gpu_peak_flops_bf16
 from src.trainer.rewards import build_reward
 from src.trainer.utils import cosine_lr, format_eta, shard_transformer, to_model_pixels
+
+
+@dataclass(slots=True)
+class _RewardSubmission:
+    """One local reward computation that may still be running asynchronously."""
+
+    value: Any
+    batch_size: int
+    device: torch.device
+    evaluate_on_this_rank: bool
 
 
 def _repeat_meta(meta: dict[str, Any], cur_S: int) -> dict[str, Any]:
@@ -279,7 +290,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
         if moved_to_cpu and self.device.type == "cuda":
             torch.cuda.empty_cache()
 
-    def _compute_reward(
+    def _submit_reward(
         self,
         generated_latents: torch.Tensor,
         gt_video_latents: torch.Tensor,
@@ -287,13 +298,14 @@ class BaseGRPOTrainer(BaseRLTrainer):
         prompt_embeds: torch.Tensor,
         *,
         meta: dict[str, Any],
-    ) -> torch.Tensor:
-        """Evaluate one reward per sample and synchronize it within a TP group.
+    ) -> _RewardSubmission:
+        """Start one reward computation without forcing CPU scorers to finish.
 
         TP ranks execute one logical rollout together, so evaluating an
         expensive VAE/rule reward on every TP rank is redundant. More
-        importantly, synchronizing the result guarantees identical loss
-        scalars on the ranks participating in tensor-parallel backward.
+        importantly, all ranks defer the TP broadcast to
+        :meth:`_resolve_reward`, allowing CPU-only scorers to overlap the next
+        rollout chunk while preserving collective ordering.
         """
         reward_uses_policy = bool(getattr(self.reward_fn, "requires_policy_forward", False))
         evaluate_on_this_rank = not self.tensor_parallel_enabled or self.tp_rank == 0 or reward_uses_policy
@@ -313,27 +325,79 @@ class BaseGRPOTrainer(BaseRLTrainer):
             # rollout noise across the TP group.
             fork_devices = [self.device] if generated_latents.is_cuda else []
             with torch.random.fork_rng(devices=fork_devices):
-                rewards = self.reward_fn(
-                    generated_latents,
-                    gt_video_latents,
-                    condition,
-                    prompt_embeds,
-                    meta=meta,
-                ).reshape(-1)
-            if rewards.numel() != generated_latents.shape[0]:
+                submit = getattr(self.reward_fn, "submit", None)
+                if callable(submit):
+                    value = submit(
+                        generated_latents,
+                        gt_video_latents,
+                        condition,
+                        prompt_embeds,
+                        meta=meta,
+                    )
+                else:
+                    value = self.reward_fn(
+                        generated_latents,
+                        gt_video_latents,
+                        condition,
+                        prompt_embeds,
+                        meta=meta,
+                    )
+        else:
+            value = None
+        return _RewardSubmission(
+            value=value,
+            batch_size=generated_latents.shape[0],
+            device=generated_latents.device,
+            evaluate_on_this_rank=evaluate_on_this_rank,
+        )
+
+    def _resolve_reward(self, submission: _RewardSubmission) -> torch.Tensor:
+        """Wait for a submitted reward and synchronize it within a TP group."""
+        if submission.evaluate_on_this_rank:
+            value = submission.value
+            if not isinstance(value, torch.Tensor):
+                result = getattr(value, "result", None)
+                if not callable(result):
+                    raise TypeError(
+                        "Asynchronous reward submissions must be tensors or expose a callable result() method"
+                    )
+                value = result()
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(f"Reward must return a torch.Tensor, got {type(value).__name__}")
+            rewards = value.reshape(-1)
+            if rewards.numel() != submission.batch_size:
                 raise RuntimeError(
                     "Reward must return one scalar per generated sample, got "
-                    f"samples={generated_latents.shape[0]}, rewards={rewards.numel()}"
+                    f"samples={submission.batch_size}, rewards={rewards.numel()}"
                 )
-            rewards = rewards.to(device=generated_latents.device, dtype=torch.float32)
+            rewards = rewards.to(device=submission.device, dtype=torch.float32)
         else:
-            rewards = torch.empty(generated_latents.shape[0], device=generated_latents.device, dtype=torch.float32)
+            rewards = torch.empty(submission.batch_size, device=submission.device, dtype=torch.float32)
 
         if self.tensor_parallel_enabled:
             if self._tp_pg is None:
                 raise RuntimeError("TP reward synchronization requires an initialized TP process group")
             dist.broadcast(rewards, group=self._tp_pg, group_src=0)
         return rewards
+
+    def _compute_reward(
+        self,
+        generated_latents: torch.Tensor,
+        gt_video_latents: torch.Tensor,
+        condition: torch.Tensor,
+        prompt_embeds: torch.Tensor,
+        *,
+        meta: dict[str, Any],
+    ) -> torch.Tensor:
+        """Synchronous compatibility wrapper around submit/resolve."""
+        submission = self._submit_reward(
+            generated_latents,
+            gt_video_latents,
+            condition,
+            prompt_embeds,
+            meta=meta,
+        )
+        return self._resolve_reward(submission)
 
     # ------------------------------------------------------------------
     # Sampling schedule

@@ -29,6 +29,13 @@ class BaseReward:
     Override ``__call__`` and return a 1-D float32 tensor of shape ``(B,)``
     whose entries are the per-sample reward (higher = better).
 
+    CPU-bound rewards may additionally expose a ``submit`` method with the
+    same arguments. It may return either a tensor or a handle with a
+    zero-argument ``result()`` method. DanceGRPO submits all rollout chunks
+    first and resolves those handles before computing group advantages, which
+    lets CPU scoring overlap later GPU rollout chunks without changing reward
+    order or values.
+
     Class attributes:
         requires_vae: set True if the reward calls ``model.decode_latents``
             (or otherwise touches the VAE).  ``BaseRLTrainer._build_model``

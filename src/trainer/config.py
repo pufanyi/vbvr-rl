@@ -403,6 +403,9 @@ class RLConfig(TrainConfig):
     vbvr_reward_max_duration_seconds: float = 5.0
     vbvr_reward_prepare_crf: int = 12
     vbvr_reward_decode_batch_size: int = 1
+    # Maximum decoded samples waiting for CPU video preparation/scoring on
+    # each reward-producing rank. Zero selects max(decode_batch_size, 2*workers).
+    vbvr_reward_max_pending_jobs: int = 0
     # Spawned scorer processes per reward-producing rank. Keep this low: on
     # eight-GPU nodes, one worker per rank already gives eight CPU scorers.
     vbvr_reward_cpu_workers: int = 1
@@ -446,6 +449,13 @@ class RLConfig(TrainConfig):
     def _validate_positive_vbvr_reward_fields(cls, v: int):
         if v <= 0:
             raise ValueError(f"VBVR reward positive integer fields must be > 0, got {v}")
+        return v
+
+    @field_validator("vbvr_reward_max_pending_jobs")
+    @classmethod
+    def _validate_nonnegative_vbvr_reward_queue_size(cls, v: int):
+        if v < 0:
+            raise ValueError(f"vbvr_reward_max_pending_jobs must be >= 0, got {v}")
         return v
 
     @field_validator("vbvr_reward_max_duration_seconds")

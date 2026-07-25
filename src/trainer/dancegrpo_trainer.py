@@ -801,6 +801,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         shared_initial_latent = self._sample_group_initial_latents(condition, generator=init_generator)
 
         chunk_total = math.ceil(len(group_indices) / S)
+        pending_reward_chunks = []
         for chunk_idx, offset in enumerate(range(0, len(group_indices), S), start=1):
             groups = group_indices[offset : offset + S]
             cur_s = len(groups)
@@ -843,19 +844,18 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             )
             generate_seconds = time.monotonic() - generate_start
 
-            reward_start = time.monotonic()
-            reward_flat = self._compute_reward(
+            reward_submit_start = time.monotonic()
+            reward_submission = self._submit_reward(
                 traj["latents"][-1],
                 gt_s,
                 cond_s,
                 pe_s,
                 meta=meta_s,
             )
-            reward_seconds = time.monotonic() - reward_start
+            reward_submit_seconds = time.monotonic() - reward_submit_start
             transfer_start = time.monotonic()
             chunk_payload = {
                 "groups": groups,
-                "rewards": reward_flat.view(B, cur_s).to("cpu", non_blocking=True),
                 "latents": torch.stack([traj["latents"][idx] for idx in selected_t_idxs]).to(
                     "cpu",
                     non_blocking=True,
@@ -872,21 +872,43 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             if chunk_cps_noise_levels is not None:
                 chunk_payload["cps_noise_levels"] = chunk_cps_noise_levels.to("cpu", non_blocking=True)
             payload["chunks"].append(chunk_payload)
+            pending_reward_chunks.append((chunk_payload, reward_submission, groups, cur_s))
             if self._split_debug_enabled():
                 self._split_debug_log(
-                    "async_actor_chunk_done step={} chunk={}/{} groups={} reward_mean={:.4f} "
-                    "generate={:.2f}s reward={:.2f}s transfer={:.2f}s total={:.2f}s",
+                    "async_actor_chunk_queued step={} chunk={}/{} groups={} "
+                    "generate={:.2f}s reward_submit={:.2f}s transfer={:.2f}s total={:.2f}s",
                     step_id,
                     chunk_idx,
                     chunk_total,
                     groups,
-                    float(reward_flat.float().mean().item()),
                     generate_seconds,
-                    reward_seconds,
+                    reward_submit_seconds,
                     time.monotonic() - transfer_start,
                     time.monotonic() - chunk_start,
                 )
             del traj
+
+        reward_drain_start = time.monotonic()
+        for chunk_idx, (chunk_payload, reward_submission, groups, cur_s) in enumerate(
+            pending_reward_chunks,
+            start=1,
+        ):
+            reward_flat = self._resolve_reward(reward_submission)
+            chunk_payload["rewards"] = reward_flat.view(B, cur_s).to("cpu", non_blocking=True)
+            self._split_debug_log(
+                "async_actor_reward_resolved step={} chunk={}/{} groups={} reward_mean={:.4f}",
+                step_id,
+                chunk_idx,
+                chunk_total,
+                groups,
+                float(reward_flat.float().mean().item()),
+            )
+        self._split_debug_log(
+            "async_actor_reward_pipeline_done step={} chunks={} drain={:.2f}s",
+            step_id,
+            chunk_total,
+            time.monotonic() - reward_drain_start,
+        )
 
         if self._split_debug_enabled():
             self._split_debug_log(
@@ -1663,6 +1685,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         init_generator = torch.Generator(device=self.device).manual_seed(cfg.seed + 1_000_003 * global_step + 17)
         shared_initial_latent = self._sample_group_initial_latents(condition, generator=init_generator)
 
+        pending_reward_chunks = []
         for offset in range(0, len(group_indices), S):
             groups = group_indices[offset : offset + S]
             cur_s = len(groups)
@@ -1694,7 +1717,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 sde_formula=cfg.grpo_sde_formula,
             )
 
-            reward_flat = self._compute_reward(
+            reward_submission = self._submit_reward(
                 traj["latents"][-1],
                 gt_s,
                 cond_s,
@@ -1703,7 +1726,6 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             )
             chunk_payload = {
                 "groups": groups,
-                "rewards": reward_flat.view(B, cur_s).to("cpu", non_blocking=True),
                 "latents": torch.stack([traj["latents"][idx] for idx in selected_t_idxs]).to(
                     "cpu",
                     non_blocking=True,
@@ -1720,7 +1742,12 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             if chunk_cps_noise_levels is not None:
                 chunk_payload["cps_noise_levels"] = chunk_cps_noise_levels.to("cpu", non_blocking=True)
             payload["chunks"].append(chunk_payload)
+            pending_reward_chunks.append((chunk_payload, reward_submission, cur_s))
             del traj
+
+        for chunk_payload, reward_submission, cur_s in pending_reward_chunks:
+            reward_flat = self._resolve_reward(reward_submission)
+            chunk_payload["rewards"] = reward_flat.view(B, cur_s).to("cpu", non_blocking=True)
 
         dist.gather_object(payload, dst=self.train_global_ranks[0])
 
@@ -2086,7 +2113,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 m.eval()
 
         local_chunks = []
-        reward_parts = []
+        pending_reward_parts = []
         saved_rollout_videos = 0
         rollout_step_idx = int(self.train_state.step) + 1
         init_generator = torch.Generator(device=device).manual_seed(cfg.seed + 1_000_003 * self.train_state.step + 17)
@@ -2137,8 +2164,8 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             )
             debug_sync()
             rollout_seconds = time.monotonic() - chunk_start
-            reward_start = time.monotonic()
-            reward_flat = self._compute_reward(
+            reward_submit_start = time.monotonic()
+            reward_submission = self._submit_reward(
                 traj["latents"][-1],
                 gt_s,
                 cond_s,
@@ -2146,7 +2173,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 meta=meta_s,
             )
             debug_sync()
-            reward_seconds = time.monotonic() - reward_start
+            reward_submit_seconds = time.monotonic() - reward_submit_start
             saved_rollout_videos = self._maybe_save_rollout_videos(
                 final_latents=traj["latents"][-1],
                 step_idx=rollout_step_idx,
@@ -2154,7 +2181,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 groups=groups,
                 saved_count=saved_rollout_videos,
             )
-            reward_parts.append(reward_flat.view(-1))
+            pending_reward_parts.append((reward_submission, groups))
             del traj["noises"]
             traj["latents"] = [x.to("cpu", non_blocking=True) for x in traj["latents"]]
             traj["log_probs"] = [x.to("cpu", non_blocking=True) for x in traj["log_probs"]]
@@ -2164,17 +2191,37 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             debug_sync()
             self._split_debug_log(
                 "shared_prompt_rollout_chunk_done rank={} step={} prompt={} groups={} rollout={:.2f}s "
-                "reward={:.2f}s total={:.2f}s reward_mean={:.4f}",
+                "reward_submit={:.2f}s total={:.2f}s",
                 self.global_rank,
                 int(self.train_state.step),
                 prompt_idx,
                 groups,
                 rollout_seconds,
-                reward_seconds,
+                reward_submit_seconds,
                 time.monotonic() - chunk_start,
-                float(reward_flat.float().mean().item()),
             )
 
+        reward_drain_start = time.monotonic()
+        reward_parts = []
+        for reward_submission, groups in pending_reward_parts:
+            reward_flat = self._resolve_reward(reward_submission)
+            reward_parts.append(reward_flat.view(-1))
+            self._split_debug_log(
+                "shared_prompt_reward_resolved rank={} step={} prompt={} groups={} reward_mean={:.4f}",
+                self.global_rank,
+                int(self.train_state.step),
+                prompt_idx,
+                groups,
+                float(reward_flat.float().mean().item()),
+            )
+        self._split_debug_log(
+            "shared_prompt_reward_pipeline_done rank={} step={} prompt={} chunks={} drain={:.2f}s",
+            self.global_rank,
+            int(self.train_state.step),
+            prompt_idx,
+            len(pending_reward_parts),
+            time.monotonic() - reward_drain_start,
+        )
         local_rewards = torch.cat(reward_parts, dim=0)
         gather_start = time.monotonic()
         self._split_debug_log(
@@ -2366,7 +2413,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 m.eval()
 
         all_chunk_trajs = []
-        reward_chunks = []
+        pending_reward_chunks = []
         shared_initial_latent = self._sample_group_initial_latents(condition)
 
         for g_start in range(0, G, S):
@@ -2396,14 +2443,14 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 sde_formula=cfg.grpo_sde_formula,
             )
 
-            reward_flat = self._compute_reward(
+            reward_submission = self._submit_reward(
                 traj["latents"][-1],
                 gt_s,
                 cond_s,
                 pe_s,
                 meta=meta_s,
             )
-            reward_chunks.append(reward_flat.view(B, cur_s))
+            pending_reward_chunks.append((reward_submission, cur_s))
 
             del traj["noises"]
             traj["latents"] = [x.to("cpu", non_blocking=True) for x in traj["latents"]]
@@ -2412,6 +2459,9 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 traj["cps_noise_levels"] = chunk_cps_noise_levels.to("cpu", non_blocking=True)
             all_chunk_trajs.append((traj, cur_s))
 
+        reward_chunks = [
+            self._resolve_reward(reward_submission).view(B, cur_s) for reward_submission, cur_s in pending_reward_chunks
+        ]
         rewards = torch.cat(reward_chunks, dim=1)
         advantages = self._compute_advantages(rewards)
         self._offload_inference_models_for_replay()

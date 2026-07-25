@@ -14,7 +14,8 @@ import multiprocessing
 import tempfile
 import threading
 import uuid
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -36,6 +37,27 @@ from src.trainer.rewards.base import BaseReward
 from src.trainer.rewards.registry import register_reward
 
 _EVALKIT = Path(__file__).resolve().parents[3] / "third_party" / "VBVR-EvalKit"
+
+
+@dataclass(slots=True)
+class _PendingVBVRReward:
+    """Decoded VBVR samples queued for CPU preparation and scoring."""
+
+    batch_size: int
+    device: torch.device
+    unsupported_score: float
+    futures: list[tuple[int, Future[float]]]
+
+    def result(self) -> torch.Tensor:
+        values = [self.unsupported_score] * self.batch_size
+        try:
+            for index, future in self.futures:
+                values[index] = future.result()
+        except BaseException:
+            for _, future in self.futures:
+                future.cancel()
+            raise
+        return torch.tensor(values, device=self.device, dtype=torch.float32)
 
 
 def _resolve_evalkit_path(evalkit_dir: str | None = None) -> Path:
@@ -103,6 +125,9 @@ class VBVRRuleReward(BaseReward):
         self._error_lock = threading.Lock()
         self._score_workers = max(1, int(cfg.vbvr_reward_cpu_workers))
         self._score_threads_per_worker = max(1, int(cfg.vbvr_reward_cpu_threads_per_worker))
+        self._decode_batch_size = max(1, int(cfg.vbvr_reward_decode_batch_size))
+        configured_pending_jobs = int(getattr(cfg, "vbvr_reward_max_pending_jobs", 0))
+        self._max_pending_jobs = configured_pending_jobs or max(self._decode_batch_size, 2 * self._score_workers)
         tensor_parallel_enabled = bool(getattr(trainer, "tensor_parallel_enabled", False))
         tensor_parallel_rank = int(getattr(trainer, "tp_rank", 0))
         self._active_score_rank = not tensor_parallel_enabled or tensor_parallel_rank == 0
@@ -127,14 +152,17 @@ class VBVRRuleReward(BaseReward):
             # processes so main_v2/EasyOCR cannot allocate on training GPUs.
             self._local_evalkit = _load_evalkit(self._evalkit)
 
-        self._score_executor = (
+        self._score_executor: ThreadPoolExecutor | None = (
             ThreadPoolExecutor(
                 max_workers=self._score_workers,
                 thread_name_prefix=f"vbvr-rule-rank{trainer.rank}",
             )
-            if self._active_score_rank and self._score_workers > 1
+            if self._active_score_rank
             else None
         )
+        self._pending_slots = threading.BoundedSemaphore(self._max_pending_jobs) if self._active_score_rank else None
+        if self._active_score_rank and self._process_executor is None:
+            atexit.register(self.close)
         self._warned_unsupported: set[str] = set()
         self._error_count = 0
         self._tmp_root = Path(cfg.vbvr_reward_tmp_dir) / f"rank{trainer.rank}"
@@ -143,7 +171,8 @@ class VBVRRuleReward(BaseReward):
         if trainer.rank == 0:
             logger.info(
                 "VBVR reward aligned with final eval: evalkit={} source_sha256={} "
-                "prepared={}x{} max_duration={}s scorer_processes={} threads/process={}",
+                "prepared={}x{} max_duration={}s scorer_processes={} threads/process={} "
+                "max_pending_jobs={}",
                 self._evalkit,
                 self._evalkit_source_sha256,
                 cfg.vbvr_reward_prepared_width,
@@ -151,17 +180,18 @@ class VBVRRuleReward(BaseReward):
                 cfg.vbvr_reward_max_duration_seconds,
                 self._score_workers,
                 self._score_threads_per_worker,
+                self._max_pending_jobs,
             )
 
     def close(self) -> None:
-        process_executor = self._process_executor
-        self._process_executor = None
-        if process_executor is not None:
-            process_executor.shutdown(wait=True, cancel_futures=True)
         score_executor = self._score_executor
         self._score_executor = None
         if score_executor is not None:
             score_executor.shutdown(wait=True, cancel_futures=True)
+        process_executor = self._process_executor
+        self._process_executor = None
+        if process_executor is not None:
+            process_executor.shutdown(wait=True, cancel_futures=True)
 
     @torch.no_grad()
     def __call__(
@@ -175,6 +205,34 @@ class VBVRRuleReward(BaseReward):
         expert_filter: str | None = None,
         meta: dict[str, Any] | None = None,
     ) -> torch.Tensor:
+        return self.submit(
+            generated_latents,
+            gt_video_latents,
+            condition,
+            prompt_embeds,
+            indices=indices,
+            expert_filter=expert_filter,
+            meta=meta,
+        ).result()
+
+    @torch.no_grad()
+    def submit(
+        self,
+        generated_latents: torch.Tensor,
+        gt_video_latents: torch.Tensor,
+        condition: torch.Tensor,
+        prompt_embeds: torch.Tensor,
+        *,
+        indices: torch.Tensor | None = None,
+        expert_filter: str | None = None,
+        meta: dict[str, Any] | None = None,
+    ) -> _PendingVBVRReward:
+        """Decode on the caller thread and immediately queue each decoded batch.
+
+        CPU video preparation and EvalKit scoring continue in the background,
+        so the training thread can generate the next rollout chunk before
+        resolving the returned handle.
+        """
         del condition, prompt_embeds, indices
 
         batch_size = generated_latents.shape[0]
@@ -182,7 +240,12 @@ class VBVRRuleReward(BaseReward):
 
         # EP double-count guard: the expert-parallel GRPO path sums high+low rewards.
         if expert_filter == "high":
-            return torch.zeros(batch_size, device=device, dtype=torch.float32)
+            return _PendingVBVRReward(
+                batch_size=batch_size,
+                device=device,
+                unsupported_score=0.0,
+                futures=[],
+            )
         if not self._active_score_rank:
             raise RuntimeError("VBVR reward was called on a non-scoring tensor-parallel rank")
         if meta is None or not any(key in meta for key in ("sample_task_name", "task_name", "sample_tar")):
@@ -191,13 +254,6 @@ class VBVRRuleReward(BaseReward):
                 "or sample_tar plus the original GT paths."
             )
 
-        rewards = torch.full(
-            (batch_size,),
-            float(self.cfg.vbvr_reward_unsupported_score),
-            device=device,
-            dtype=torch.float32,
-        )
-        decode_bs = max(1, int(self.cfg.vbvr_reward_decode_batch_size))
         task_names: list[str] = []
         supported_indices: list[int] = []
         for index in range(batch_size):
@@ -206,66 +262,70 @@ class VBVRRuleReward(BaseReward):
             if self._is_supported(task_name):
                 supported_indices.append(index)
 
-        score_jobs: list[tuple[int, dict[str, Any]]] = []
-        for start in range(0, len(supported_indices), decode_bs):
-            batch_indices = supported_indices[start : start + decode_bs]
-            latent_indices = torch.as_tensor(batch_indices, device=device, dtype=torch.long)
-            gt_video_paths = [self._meta_path(meta, "sample_gt_video_path", i) for i in batch_indices]
-            gt_first_frame_paths = [self._meta_path(meta, "sample_gt_first_frame", i) for i in batch_indices]
-            gt_final_frame_paths = [self._meta_path(meta, "sample_gt_final_frame", i) for i in batch_indices]
-            gt_metadata_paths = [self._meta_path(meta, "sample_metadata_path", i) for i in batch_indices]
-            gt_source_dirs = [self._meta_path(meta, "sample_source_dir", i) for i in batch_indices]
-            needs_gt_decode = [
-                video_path is None or first_path is None or final_path is None
-                for video_path, first_path, final_path in zip(
-                    gt_video_paths,
-                    gt_first_frame_paths,
-                    gt_final_frame_paths,
-                    strict=True,
-                )
-            ]
-            gen_latents = generated_latents.index_select(0, latent_indices)
-            if any(needs_gt_decode):
-                decoded = self.trainer.model.decode_latents(
-                    torch.cat(
-                        [
-                            gen_latents,
-                            gt_video_latents.index_select(0, latent_indices),
-                        ],
-                        dim=0,
+        score_futures: list[tuple[int, Future[float]]] = []
+        try:
+            for start in range(0, len(supported_indices), self._decode_batch_size):
+                batch_indices = supported_indices[start : start + self._decode_batch_size]
+                latent_indices = torch.as_tensor(batch_indices, device=device, dtype=torch.long)
+                gt_video_paths = [self._meta_path(meta, "sample_gt_video_path", i) for i in batch_indices]
+                gt_first_frame_paths = [self._meta_path(meta, "sample_gt_first_frame", i) for i in batch_indices]
+                gt_final_frame_paths = [self._meta_path(meta, "sample_gt_final_frame", i) for i in batch_indices]
+                gt_metadata_paths = [self._meta_path(meta, "sample_metadata_path", i) for i in batch_indices]
+                gt_source_dirs = [self._meta_path(meta, "sample_source_dir", i) for i in batch_indices]
+                needs_gt_decode = [
+                    video_path is None or first_path is None or final_path is None
+                    for video_path, first_path, final_path in zip(
+                        gt_video_paths,
+                        gt_first_frame_paths,
+                        gt_final_frame_paths,
+                        strict=True,
                     )
-                )
-            else:
-                decoded = self.trainer.model.decode_latents(gen_latents)
-            videos = self._to_uint8_videos(decoded)
-            count = len(batch_indices)
-            gen_videos = videos[:count]
-            gt_videos = videos[count:] if any(needs_gt_decode) else [None] * count
-
-            for local_index, index in enumerate(batch_indices):
-                score_jobs.append(
-                    (
-                        index,
-                        {
-                            "task_name": task_names[index],
-                            "prompt": str(self._meta_item(meta, "sample_prompt", index, default="") or ""),
-                            "gen_video": gen_videos[local_index],
-                            "gt_video": gt_videos[local_index],
-                            "gt_video_path": gt_video_paths[local_index],
-                            "gt_first_frame_path": gt_first_frame_paths[local_index],
-                            "gt_final_frame_path": gt_final_frame_paths[local_index],
-                            "gt_metadata_path": gt_metadata_paths[local_index],
-                            "gt_source_dir": gt_source_dirs[local_index],
-                            "sample_id": self._sample_id(meta, index),
-                        },
+                ]
+                gen_latents = generated_latents.index_select(0, latent_indices)
+                if any(needs_gt_decode):
+                    decoded = self.trainer.model.decode_latents(
+                        torch.cat(
+                            [
+                                gen_latents,
+                                gt_video_latents.index_select(0, latent_indices),
+                            ],
+                            dim=0,
+                        )
                     )
-                )
+                else:
+                    decoded = self.trainer.model.decode_latents(gen_latents)
+                videos = self._to_uint8_videos(decoded)
+                count = len(batch_indices)
+                gen_videos = videos[:count]
+                gt_videos = videos[count:] if any(needs_gt_decode) else [None] * count
 
-            del decoded
+                for local_index, index in enumerate(batch_indices):
+                    future = self._submit_score_job(
+                        task_name=task_names[index],
+                        prompt=str(self._meta_item(meta, "sample_prompt", index, default="") or ""),
+                        gen_video=gen_videos[local_index],
+                        gt_video=gt_videos[local_index],
+                        gt_video_path=gt_video_paths[local_index],
+                        gt_first_frame_path=gt_first_frame_paths[local_index],
+                        gt_final_frame_path=gt_final_frame_paths[local_index],
+                        gt_metadata_path=gt_metadata_paths[local_index],
+                        gt_source_dir=gt_source_dirs[local_index],
+                        sample_id=self._sample_id(meta, index),
+                    )
+                    score_futures.append((index, future))
 
-        for index, score in self._score_jobs(score_jobs):
-            rewards[index] = score
-        return rewards
+                del decoded
+        except BaseException:
+            for _, future in score_futures:
+                future.cancel()
+            raise
+
+        return _PendingVBVRReward(
+            batch_size=batch_size,
+            device=device,
+            unsupported_score=float(self.cfg.vbvr_reward_unsupported_score),
+            futures=score_futures,
+        )
 
     def _is_supported(self, task_name: str) -> bool:
         if task_name in self._task_evaluator_map:
@@ -280,13 +340,19 @@ class VBVRRuleReward(BaseReward):
                 )
         return False
 
-    def _score_jobs(self, jobs: list[tuple[int, dict[str, Any]]]) -> list[tuple[int, float]]:
-        if not jobs:
-            return []
-        if self._score_executor is None or len(jobs) == 1:
-            return [(index, self._score_video_pair(**kwargs)) for index, kwargs in jobs]
-        futures = [(index, self._score_executor.submit(self._score_video_pair, **kwargs)) for index, kwargs in jobs]
-        return [(index, future.result()) for index, future in futures]
+    def _submit_score_job(self, **kwargs: Any) -> Future[float]:
+        executor = self._score_executor
+        pending_slots = self._pending_slots
+        if executor is None or pending_slots is None:
+            raise RuntimeError("VBVR scorer queue is not initialized on this rank")
+        pending_slots.acquire()
+        try:
+            future = executor.submit(self._score_video_pair, **kwargs)
+        except BaseException:
+            pending_slots.release()
+            raise
+        future.add_done_callback(lambda _future: pending_slots.release())
+        return future
 
     def _score_video_pair(
         self,
