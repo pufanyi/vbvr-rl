@@ -29,6 +29,7 @@ dependencies = [
     "datasets>=4.8.4",
     "opencv-python>=4.13.0.92",
     "openpyxl>=3.1.5",
+    "easyocr>=1.7.2",
 ]
 
 [dependency-groups]

@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 import torch
 
+import src.trainer.rewards.vbvr_rule as vbvr_rule_module
 from src.eval.vbvr_run_evaluation_parallel import evalkit_source_sha256
 from src.inference.outputs import uint8_from_decoded
 from src.trainer.rewards.vbvr_rule import VBVRRuleReward
@@ -171,6 +172,28 @@ def test_reward_requires_evalkit_source_pin(tmp_path: Path):
     cfg.vbvr_reward_evalkit_source_sha256 = None
 
     with pytest.raises(ValueError, match="requires vbvr_reward_evalkit_source_sha256"):
+        VBVRRuleReward(_trainer(), cfg)
+
+
+def test_reward_rejects_incomplete_easyocr_package_before_starting_workers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    evalkit = tmp_path / "evalkit"
+    _write_fake_evalkit(evalkit)
+    (evalkit / "vbvr_bench" / "ocr_evaluator.py").write_text("easyocr.Reader\n")
+    (evalkit / "easyocr_models").mkdir()
+    cfg = _config(evalkit, tmp_path)
+
+    incomplete_package = tmp_path / "site-packages" / "easyocr"
+    incomplete_package.mkdir(parents=True)
+    spec = SimpleNamespace(
+        submodule_search_locations=[str(incomplete_package)],
+        origin=str(incomplete_package / "__init__.py"),
+    )
+    monkeypatch.setattr(vbvr_rule_module.importlib.util, "find_spec", lambda name: spec if name == "easyocr" else None)
+
+    with pytest.raises(FileNotFoundError, match=r"EasyOCR is installed incompletely.*en_char\.txt"):
         VBVRRuleReward(_trainer(), cfg)
 
 

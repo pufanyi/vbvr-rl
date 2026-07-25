@@ -9,6 +9,7 @@ preparer, and scored in isolated CPU processes with CUDA hidden.
 from __future__ import annotations
 
 import atexit
+import importlib.util
 import math
 import multiprocessing
 import tempfile
@@ -81,6 +82,27 @@ def _evalkit_uses_easyocr(evalkit: Path) -> bool:
     return any("easyocr.Reader" in path.read_text(errors="ignore") for path in (evalkit / "vbvr_bench").rglob("*.py"))
 
 
+def _ensure_easyocr_runtime() -> None:
+    """Fail before training when EasyOCR or its packaged character data is incomplete."""
+    spec = importlib.util.find_spec("easyocr")
+    if spec is None:
+        raise ModuleNotFoundError(
+            "main_v2 requires EasyOCR, but the `easyocr` package is not installed; "
+            "run `uv sync --frozen` before launching training"
+        )
+
+    package_paths = [Path(path) for path in spec.submodule_search_locations or ()]
+    if not package_paths and spec.origin:
+        package_paths.append(Path(spec.origin).parent)
+    character_paths = [path / "character" / "en_char.txt" for path in package_paths]
+    if not any(path.is_file() for path in character_paths):
+        expected = ", ".join(str(path) for path in character_paths) or "<easyocr package>/character/en_char.txt"
+        raise FileNotFoundError(
+            "EasyOCR is installed incompletely: required English character table is missing "
+            f"(expected {expected}); run `uv sync --frozen` before launching training"
+        )
+
+
 @register_reward("vbvr_rule")
 class VBVRRuleReward(BaseReward):
     """Reward = final VBVR-Pro main_v2 task-specific rule score."""
@@ -117,10 +139,12 @@ class VBVRRuleReward(BaseReward):
         )
         if self._easyocr_module_path and not Path(self._easyocr_module_path).is_dir():
             raise FileNotFoundError(f"EasyOCR module path does not exist: {self._easyocr_module_path}")
-        if _evalkit_uses_easyocr(self._evalkit) and not (self._evalkit / "easyocr_models").exists():
-            raise FileNotFoundError(
-                f"main_v2 requires {self._evalkit / 'easyocr_models'} to exist (a symlink is allowed)"
-            )
+        if _evalkit_uses_easyocr(self._evalkit):
+            _ensure_easyocr_runtime()
+            if not (self._evalkit / "easyocr_models").exists():
+                raise FileNotFoundError(
+                    f"main_v2 requires {self._evalkit / 'easyocr_models'} to exist (a symlink is allowed)"
+                )
 
         self._error_lock = threading.Lock()
         self._score_workers = max(1, int(cfg.vbvr_reward_cpu_workers))
@@ -131,18 +155,12 @@ class VBVRRuleReward(BaseReward):
         tensor_parallel_enabled = bool(getattr(trainer, "tensor_parallel_enabled", False))
         tensor_parallel_rank = int(getattr(trainer, "tp_rank", 0))
         self._delayed_min_pending_jobs = 0
-        if bool(getattr(cfg, "grpo_delayed_replay", False)) and bool(
-            getattr(cfg, "grpo_shared_prompt_batch", False)
-        ):
+        if bool(getattr(cfg, "grpo_delayed_replay", False)) and bool(getattr(cfg, "grpo_shared_prompt_batch", False)):
             logical_world_size = int(
-                getattr(trainer, "dp_size", 0)
-                if tensor_parallel_enabled
-                else getattr(trainer, "world_size", 0)
+                getattr(trainer, "dp_size", 0) if tensor_parallel_enabled else getattr(trainer, "world_size", 0)
             )
             if logical_world_size > 0:
-                local_rollouts = math.ceil(
-                    int(cfg.batch_size) * int(cfg.grpo_group_size) / logical_world_size
-                )
+                local_rollouts = math.ceil(int(cfg.batch_size) * int(cfg.grpo_group_size) / logical_world_size)
                 # One full future optimizer step can coexist with the pending
                 # replay slot. A smaller semaphore simply moves reward waiting
                 # into the next rollout's submit path and defeats the overlap.
