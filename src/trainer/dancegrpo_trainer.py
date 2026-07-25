@@ -118,6 +118,17 @@ class _SharedPromptRollout:
     prepare_seconds: float
 
 
+@dataclass(slots=True)
+class _SharedPromptStepRollout:
+    """All trajectory/reward state for one future optimizer update."""
+
+    rollout_step: int
+    policy_version: int
+    prompt_batch_size: int
+    selected_t_idxs: list[int]
+    waves: list[_SharedPromptRollout]
+
+
 def _slice_meta(meta: dict[str, Any], index: int) -> dict[str, Any]:
     sliced: dict[str, Any] = {}
     for key, value in meta.items():
@@ -2423,6 +2434,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         self,
         batch: dict,
         *,
+        rollout_step: int,
         prompt_offset: int,
         prompt_batch_size: int,
         total_prompt_batch_size: int,
@@ -2476,8 +2488,8 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
         local_chunks: list[tuple[dict[str, Any], list[int]]] = []
         pending_reward_parts: list[tuple[Any, list[int]]] = []
-        rollout_step_idx = int(self.train_state.step) + 1
-        init_generator = torch.Generator(device=device).manual_seed(cfg.seed + 1_000_003 * self.train_state.step + 17)
+        rollout_step_idx = int(rollout_step) + 1
+        init_generator = torch.Generator(device=device).manual_seed(cfg.seed + 1_000_003 * rollout_step + 17)
         shared_initial_latent = self._sample_group_initial_latents(condition, generator=init_generator)
 
         for offset in range(0, len(group_indices), S):
@@ -2496,7 +2508,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             )
             rollout_seed = (
                 cfg.seed
-                + 1_000_003 * self.train_state.step
+                + 1_000_003 * rollout_step
                 + 9_176 * (global_prompt_idx + 1)
                 + 503 * (prompt_rank + 1)
                 + 131 * offset
@@ -2582,6 +2594,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         selected_t_idxs: list[int],
         total_prompt_batch_size: int,
         sync_on_last_backward: bool,
+        clip_range: float,
     ) -> dict[str, Any]:
         """Resolve one wave and replay it while later waves keep scoring."""
         cfg = self.cfg
@@ -2622,6 +2635,10 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
         local_policy_sum = 0.0
         local_kl_sum = 0.0
+        local_clip_fraction_sum = 0.0
+        local_ratio_sum = 0.0
+        local_approx_kl_sum = 0.0
+        local_ratio_abs_max = 0.0
         gradient_normalizer = max(
             len(selected_t_idxs)
             * G
@@ -2667,9 +2684,10 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 )
                 new_log_prob = self._transition_log_prob(next_latent, prev_mean, noise_scale)
 
-                ratio = torch.exp(new_log_prob - old_log_prob)
+                log_ratio = new_log_prob - old_log_prob
+                ratio = torch.exp(log_ratio)
                 unclipped = -adv_chunk * ratio
-                clipped = -adv_chunk * ratio.clamp(1.0 - cfg.grpo_clip_range, 1.0 + cfg.grpo_clip_range)
+                clipped = -adv_chunk * ratio.clamp(1.0 - clip_range, 1.0 + clip_range)
                 policy_loss = torch.max(unclipped, clipped).mean()
 
                 kl_loss = torch.tensor(0.0, device=device)
@@ -2689,6 +2707,13 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
                 loss.backward()
                 local_policy_sum += policy_loss.item() * cur_s
                 local_kl_sum += kl_loss.item() * cur_s
+                local_clip_fraction_sum += (torch.abs(ratio - 1.0) > clip_range).float().mean().item() * cur_s
+                local_ratio_sum += ratio.float().mean().item() * cur_s
+                local_approx_kl_sum += (ratio - 1.0 - log_ratio).float().mean().item() * cur_s
+                local_ratio_abs_max = max(
+                    local_ratio_abs_max,
+                    torch.abs(ratio - 1.0).float().max().item(),
+                )
 
             del traj["latents"], traj["log_probs"]
             if "cps_noise_levels" in traj:
@@ -2711,6 +2736,10 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         return {
             "local_policy_sum": local_policy_sum,
             "local_kl_sum": local_kl_sum,
+            "local_clip_fraction_sum": local_clip_fraction_sum,
+            "local_ratio_sum": local_ratio_sum,
+            "local_approx_kl_sum": local_approx_kl_sum,
+            "local_ratio_abs_max": local_ratio_abs_max,
             "rewards": rewards,
             "advantages": advantages,
             "active_ranks": active_ranks,
@@ -2718,27 +2747,23 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             "replay_seconds": time.monotonic() - replay_start,
         }
 
-    def _grpo_step_shared_prompt_batch(self, batch: dict) -> dict[str, float]:
-        """Pipeline prompt waves within one optimizer step without policy staleness."""
+    def _prepare_shared_prompt_step_rollout(
+        self,
+        batch: dict,
+        *,
+        rollout_step: int,
+        policy_version: int,
+        selected_t_idxs: list[int],
+    ) -> _SharedPromptStepRollout:
+        """Prepare every prompt wave for one future optimizer update."""
         cfg = self.cfg
         prompt_batch_size = _batch_prompt_size(batch)
         wave_ranges = _shared_prompt_wave_ranges(
             prompt_batch_size,
             cfg.grpo_shared_prompt_microbatch_size,
         )
-        if len(wave_ranges) == 1:
-            return self._grpo_step_shared_prompt_batch_legacy(batch)
-
         G = cfg.grpo_group_size
-        T = cfg.grpo_num_sampling_steps
         device = self.device
-        debug_logs = self._split_debug_enabled()
-
-        def debug_sync() -> None:
-            if debug_logs and device.type == "cuda":
-                torch.cuda.synchronize(device)
-
-        step_start = time.monotonic()
         wave_size = wave_ranges[0][1]
         _prompt_idx, _prompt_rank, prompt_world_size, group_indices = _shared_prompt_assignment(
             self.dp_rank if self.tensor_parallel_enabled else self.rank,
@@ -2746,11 +2771,13 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             wave_size,
             G,
         )
-        selected_t_idxs = self._select_training_timesteps(T)
         if self.rank == 0:
             logger.info(
-                "DanceGRPO shared prompt batch: prompts={} prompt_wave={} waves={} world={} "
+                "DanceGRPO shared prompt rollout: rollout_step={} policy_version={} prompts={} "
+                "prompt_wave={} waves={} world={} "
                 "ranks_per_prompt={} groups_per_rank={} sample_batch_size={} replay_t={}",
+                rollout_step,
+                policy_version,
                 prompt_batch_size,
                 wave_size,
                 len(wave_ranges),
@@ -2763,7 +2790,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
         all_prompt_cps_noise_levels = self._sample_group_cps_noise_levels(
             prompt_batch_size,
-            step=int(self.train_state.step),
+            step=rollout_step,
             stream_id=0,
             device=device,
         )
@@ -2776,6 +2803,7 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
         for prompt_offset, current_wave_size in wave_ranges:
             rollout, saved_rollout_videos = self._prepare_shared_prompt_rollout_wave(
                 batch,
+                rollout_step=rollout_step,
                 prompt_offset=prompt_offset,
                 prompt_batch_size=current_wave_size,
                 total_prompt_batch_size=prompt_batch_size,
@@ -2784,6 +2812,31 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             )
             rollouts.append(rollout)
 
+        return _SharedPromptStepRollout(
+            rollout_step=rollout_step,
+            policy_version=policy_version,
+            prompt_batch_size=prompt_batch_size,
+            selected_t_idxs=selected_t_idxs,
+            waves=rollouts,
+        )
+
+    def _replay_shared_prompt_step_rollout(
+        self,
+        step_rollout: _SharedPromptStepRollout,
+        *,
+        clip_range: float,
+    ) -> dict[str, float]:
+        """Resolve and replay one prepared prompt batch."""
+        cfg = self.cfg
+        G = cfg.grpo_group_size
+        device = self.device
+        debug_logs = self._split_debug_enabled()
+
+        def debug_sync() -> None:
+            if debug_logs and device.type == "cuda":
+                torch.cuda.synchronize(device)
+
+        replay_step_start = time.monotonic()
         # Reward submission performs VAE decode synchronously, so the frozen
         # inference modules are no longer needed once all waves are prepared.
         self._offload_inference_models_for_replay()
@@ -2794,13 +2847,14 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             opt.zero_grad(set_to_none=True)
 
         replay_results: list[dict[str, Any]] = []
-        for wave_idx, rollout in enumerate(rollouts):
+        for wave_idx, rollout in enumerate(step_rollout.waves):
             replay_results.append(
                 self._replay_shared_prompt_rollout_wave(
                     rollout,
-                    selected_t_idxs=selected_t_idxs,
-                    total_prompt_batch_size=prompt_batch_size,
-                    sync_on_last_backward=wave_idx == len(rollouts) - 1,
+                    selected_t_idxs=step_rollout.selected_t_idxs,
+                    total_prompt_batch_size=step_rollout.prompt_batch_size,
+                    sync_on_last_backward=wave_idx == len(step_rollout.waves) - 1,
+                    clip_range=clip_range,
                 )
             )
 
@@ -2808,6 +2862,9 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             [
                 sum(float(result["local_policy_sum"]) for result in replay_results),
                 sum(float(result["local_kl_sum"]) for result in replay_results),
+                sum(float(result["local_clip_fraction_sum"]) for result in replay_results),
+                sum(float(result["local_ratio_sum"]) for result in replay_results),
+                sum(float(result["local_approx_kl_sum"]) for result in replay_results),
             ],
             device=device,
             dtype=torch.float32,
@@ -2817,9 +2874,19 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             op=dist.ReduceOp.SUM,
             group=self._dp_pg if self.tensor_parallel_enabled else None,
         )
+        ratio_abs_max_buf = torch.tensor(
+            max(float(result["local_ratio_abs_max"]) for result in replay_results),
+            device=device,
+            dtype=torch.float32,
+        )
+        dist.all_reduce(
+            ratio_abs_max_buf,
+            op=dist.ReduceOp.MAX,
+            group=self._dp_pg if self.tensor_parallel_enabled else None,
+        )
         phase_buf = torch.tensor(
             [
-                sum(rollout.prepare_seconds for rollout in rollouts),
+                sum(rollout.prepare_seconds for rollout in step_rollout.waves),
                 sum(float(result["reward_drain_seconds"]) for result in replay_results),
                 sum(float(result["replay_seconds"]) for result in replay_results),
             ],
@@ -2833,8 +2900,8 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             "prepare_max={:.2f}s reward_drain_max={:.2f}s replay_max={:.2f}s",
             self.global_rank,
             int(self.train_state.step),
-            len(rollouts),
-            time.monotonic() - step_start,
+            len(step_rollout.waves),
+            time.monotonic() - replay_step_start,
             phase_buf[0].item(),
             phase_buf[1].item(),
             phase_buf[2].item(),
@@ -2842,10 +2909,18 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
 
         rewards = torch.cat([result["rewards"] for result in replay_results], dim=0)
         advantages = torch.cat([result["advantages"] for result in replay_results], dim=0)
-        metric_normalizer = max(len(selected_t_idxs) * G * prompt_batch_size, 1)
+        metric_normalizer = max(
+            len(step_rollout.selected_t_idxs) * G * step_rollout.prompt_batch_size,
+            1,
+        )
         return {
             "policy_loss": (metric_buf[0] / metric_normalizer).item(),
             "kl_loss": (metric_buf[1] / metric_normalizer).item(),
+            "ppo_clip_fraction": (metric_buf[2] / metric_normalizer).item(),
+            "ppo_ratio_mean": (metric_buf[3] / metric_normalizer).item(),
+            "ppo_approx_kl": (metric_buf[4] / metric_normalizer).item(),
+            "ppo_ratio_abs_max": ratio_abs_max_buf.item(),
+            "ppo_clip_range": float(clip_range),
             "reward_mean": rewards.mean().item(),
             "reward_std": rewards.std().item(),
             "advantage_mean": advantages.mean().item(),
@@ -2855,8 +2930,111 @@ class DanceGRPOTrainer(BaseGRPOTrainer):
             "shared_prompt_replay_seconds": phase_buf[2].item(),
         }
 
+    def _grpo_step_shared_prompt_batch(self, batch: dict) -> dict[str, float]:
+        """Pipeline prompt waves within one optimizer step without policy staleness."""
+        cfg = self.cfg
+        prompt_batch_size = _batch_prompt_size(batch)
+        wave_ranges = _shared_prompt_wave_ranges(
+            prompt_batch_size,
+            cfg.grpo_shared_prompt_microbatch_size,
+        )
+        if len(wave_ranges) == 1:
+            return self._grpo_step_shared_prompt_batch_legacy(batch)
+
+        rollout_step = int(self.train_state.step)
+        step_rollout = self._prepare_shared_prompt_step_rollout(
+            batch,
+            rollout_step=rollout_step,
+            policy_version=rollout_step,
+            selected_t_idxs=self._select_training_timesteps_for_step(
+                cfg.grpo_num_sampling_steps,
+                rollout_step,
+            ),
+        )
+        return self._replay_shared_prompt_step_rollout(
+            step_rollout,
+            clip_range=float(cfg.grpo_clip_range),
+        )
+
+    def _delayed_replay_must_flush(self) -> bool:
+        """Return whether the pending slot must be empty after this update."""
+        cfg = self.cfg
+        next_update = int(self.train_state.step) + 1
+        if bool(getattr(self, "_grpo_force_delayed_replay_flush", False)):
+            return True
+        if cfg.max_steps is not None and next_update >= cfg.max_steps:
+            return True
+        return bool(cfg.save_steps > 0 and next_update % cfg.save_steps == 0)
+
+    def _max_rank_seconds(self, seconds: float) -> float:
+        buf = torch.tensor(float(seconds), device=self.device, dtype=torch.float64)
+        dist.all_reduce(buf, op=dist.ReduceOp.MAX)
+        return buf.item()
+
+    def _grpo_step_shared_prompt_batch_delayed(self, batch: dict) -> dict[str, float]:
+        """Prepare the next rollout, then replay a one-slot-older trajectory."""
+        cfg = self.cfg
+        optimizer_step = int(self.train_state.step)
+        pending: _SharedPromptStepRollout | None = getattr(self, "_delayed_shared_prompt_rollout", None)
+        must_flush = self._delayed_replay_must_flush()
+        delayed_clip_range = float(cfg.grpo_delayed_replay_clip_range or cfg.grpo_clip_range)
+        current: _SharedPromptStepRollout | None = None
+        current_prepare_seconds = 0.0
+
+        if pending is None:
+            prepare_start = time.monotonic()
+            current = self._prepare_shared_prompt_step_rollout(
+                batch,
+                rollout_step=optimizer_step,
+                policy_version=optimizer_step,
+                selected_t_idxs=self._select_training_timesteps_for_step(
+                    cfg.grpo_num_sampling_steps,
+                    optimizer_step,
+                ),
+            )
+            current_prepare_seconds = self._max_rank_seconds(time.monotonic() - prepare_start)
+            if not must_flush:
+                self._delayed_shared_prompt_rollout = current
+                return {
+                    "_skip_optimizer_step": True,
+                    "delayed_current_prepare_seconds": current_prepare_seconds,
+                }
+            pending = current
+            current = None
+        elif not must_flush:
+            prepare_start = time.monotonic()
+            rollout_step = optimizer_step + 1
+            current = self._prepare_shared_prompt_step_rollout(
+                batch,
+                rollout_step=rollout_step,
+                policy_version=optimizer_step,
+                selected_t_idxs=self._select_training_timesteps_for_step(
+                    cfg.grpo_num_sampling_steps,
+                    rollout_step,
+                ),
+            )
+            current_prepare_seconds = self._max_rank_seconds(time.monotonic() - prepare_start)
+
+        self._delayed_shared_prompt_rollout = current
+        metrics = self._replay_shared_prompt_step_rollout(
+            pending,
+            clip_range=delayed_clip_range,
+        )
+        metrics.update(
+            {
+                "delayed_replay_staleness": float(max(optimizer_step - pending.policy_version, 0)),
+                "delayed_current_prepare_seconds": current_prepare_seconds,
+                "delayed_replay_flush": float(must_flush),
+                "delayed_rollout_step": float(pending.rollout_step),
+                "delayed_policy_version": float(pending.policy_version),
+            }
+        )
+        return metrics
+
     def _grpo_step(self, batch: dict) -> dict[str, float]:
         """DanceGRPO-style GRPO step on the standard single-group path."""
+        if self.cfg.grpo_delayed_replay:
+            return self._grpo_step_shared_prompt_batch_delayed(batch)
         if self.cfg.grpo_shared_prompt_batch:
             return self._grpo_step_shared_prompt_batch(batch)
 

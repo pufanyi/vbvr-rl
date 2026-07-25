@@ -130,6 +130,24 @@ class VBVRRuleReward(BaseReward):
         self._max_pending_jobs = configured_pending_jobs or max(self._decode_batch_size, 2 * self._score_workers)
         tensor_parallel_enabled = bool(getattr(trainer, "tensor_parallel_enabled", False))
         tensor_parallel_rank = int(getattr(trainer, "tp_rank", 0))
+        self._delayed_min_pending_jobs = 0
+        if bool(getattr(cfg, "grpo_delayed_replay", False)) and bool(
+            getattr(cfg, "grpo_shared_prompt_batch", False)
+        ):
+            logical_world_size = int(
+                getattr(trainer, "dp_size", 0)
+                if tensor_parallel_enabled
+                else getattr(trainer, "world_size", 0)
+            )
+            if logical_world_size > 0:
+                local_rollouts = math.ceil(
+                    int(cfg.batch_size) * int(cfg.grpo_group_size) / logical_world_size
+                )
+                # One full future optimizer step can coexist with the pending
+                # replay slot. A smaller semaphore simply moves reward waiting
+                # into the next rollout's submit path and defeats the overlap.
+                self._delayed_min_pending_jobs = local_rollouts
+                self._max_pending_jobs = max(self._max_pending_jobs, local_rollouts)
         self._active_score_rank = not tensor_parallel_enabled or tensor_parallel_rank == 0
 
         self._process_executor: ProcessPoolExecutor | None = None
@@ -172,7 +190,7 @@ class VBVRRuleReward(BaseReward):
             logger.info(
                 "VBVR reward aligned with final eval: evalkit={} source_sha256={} "
                 "prepared={}x{} max_duration={}s scorer_processes={} threads/process={} "
-                "max_pending_jobs={}",
+                "max_pending_jobs={} delayed_min_pending_jobs={}",
                 self._evalkit,
                 self._evalkit_source_sha256,
                 cfg.vbvr_reward_prepared_width,
@@ -181,6 +199,7 @@ class VBVRRuleReward(BaseReward):
                 self._score_workers,
                 self._score_threads_per_worker,
                 self._max_pending_jobs,
+                self._delayed_min_pending_jobs,
             )
 
     def close(self) -> None:

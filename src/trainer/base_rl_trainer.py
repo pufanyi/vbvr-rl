@@ -31,6 +31,47 @@ from src.trainer.tensor_parallel import parallelize_wan_transformer
 from src.trainer.utils import apply_liger_rms_norm, collate, setup_loguru, shard_transformer
 
 
+def _delayed_replay_optimizer_steps(
+    *,
+    batches_per_epoch: int,
+    num_epochs: int,
+    save_steps: int,
+    max_steps: int | None,
+) -> int:
+    """Count updates after delayed-replay prefill and drain bubbles.
+
+    The pending trajectory slot is deliberately empty at every checkpoint and
+    epoch boundary. The next non-boundary batch therefore pre-fills the slot
+    without updating the optimizer. Simulating that two-state machine keeps the
+    LR schedule and ETA aligned with the number of updates the dataloader can
+    actually produce.
+    """
+    optimizer_step = 0
+    pending = False
+    for _epoch in range(num_epochs):
+        pending = False
+        for batch_idx in range(batches_per_epoch):
+            if max_steps is not None and optimizer_step >= max_steps:
+                return optimizer_step
+
+            next_update = optimizer_step + 1
+            must_flush = (
+                batch_idx == batches_per_epoch - 1
+                or (max_steps is not None and next_update >= max_steps)
+                or (save_steps > 0 and next_update % save_steps == 0)
+            )
+            if not pending and not must_flush:
+                pending = True
+                continue
+
+            optimizer_step += 1
+            pending = not must_flush
+
+        if pending:
+            raise AssertionError("delayed replay step accounting left a pending epoch slot")
+    return optimizer_step
+
+
 class BaseRLTrainer(CheckpointRuntimeMixin):
     """Independent RL training infrastructure: distributed init, model, FSDP2,
     EMA, compile, dataset, optimizer, DCP checkpointing, wandb, and resume.
@@ -417,9 +458,17 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
                     if self.tensor_parallel_enabled or self._expert_parallel_duplicates_data(self.cfg)
                     else self.world_size
                 )
-            total = self.cfg.num_epochs * (dataset_size // (dp * self.cfg.batch_size))
+            batches_per_epoch = dataset_size // (dp * self.cfg.batch_size)
         else:
-            total = self.cfg.num_epochs * len(self.dataloader)
+            batches_per_epoch = len(self.dataloader)
+        if self.cfg.grpo_delayed_replay:
+            return _delayed_replay_optimizer_steps(
+                batches_per_epoch=batches_per_epoch,
+                num_epochs=self.cfg.num_epochs,
+                save_steps=self.cfg.save_steps,
+                max_steps=self.cfg.max_steps,
+            )
+        total = self.cfg.num_epochs * batches_per_epoch
         if self.cfg.max_steps is not None:
             total = self.cfg.max_steps if total <= 0 else min(total, self.cfg.max_steps)
         return total

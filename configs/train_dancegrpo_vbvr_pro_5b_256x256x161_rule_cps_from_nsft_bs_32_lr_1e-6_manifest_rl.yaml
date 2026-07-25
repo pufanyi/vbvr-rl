@@ -65,6 +65,11 @@ lora_alpha: 32
 # prompt 4 ranks x 8 rollouts; on 32 GPUs it gives 2 ranks x 16 rollouts.
 grpo_shared_prompt_batch: true
 grpo_shared_prompt_microbatch_size: 16
+# Experimental cross-step pipeline, default-off because it changes policy/data
+# ordering. When enabled it replays trajectories one policy update late and
+# uses the wider clip below; checkpoint and epoch boundaries drain the slot.
+grpo_delayed_replay: false
+grpo_delayed_replay_clip_range: 1.0e-2
 grpo_group_size: 32
 grpo_sample_batch_size: 8
 grpo_train_sample_batch_size: 4
@@ -89,8 +94,10 @@ vbvr_reward_easyocr_module_path: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/st
 vbvr_reward_device: cpu
 vbvr_reward_fps: 32
 vbvr_reward_decode_batch_size: 8
-# Retain at most two decoded rollout batches per rank so both prompt waves can
-# be in flight. A 161-frame RGB sample is about 30 MiB (about 483 MiB/rank).
+# Retain at most two decoded rollout batches per rank in normal mode. Delayed
+# replay automatically raises this to one complete local rollout step (32 jobs
+# at world size 32, still 16 at world size 64) to avoid submit backpressure.
+# A 161-frame RGB sample is about 30 MiB.
 vbvr_reward_max_pending_jobs: 16
 # Keep the per-rank native-thread budget at 16 while scoring two samples in parallel.
 vbvr_reward_cpu_workers: 2

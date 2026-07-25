@@ -144,6 +144,26 @@ def test_reward_rejects_unpinned_evalkit_source(tmp_path: Path):
         VBVRRuleReward(_trainer(), cfg)
 
 
+def test_delayed_replay_expands_reward_queue_to_one_local_rollout_step(tmp_path: Path):
+    evalkit = tmp_path / "evalkit"
+    _write_fake_evalkit(evalkit)
+    cfg = _config(evalkit, tmp_path)
+    cfg.grpo_delayed_replay = True
+    cfg.grpo_shared_prompt_batch = True
+    cfg.batch_size = 8
+    cfg.grpo_group_size = 32
+    trainer = _trainer()
+    trainer.world_size = 8
+    trainer.dp_size = 8
+
+    reward = VBVRRuleReward(trainer, cfg)
+    try:
+        assert reward._delayed_min_pending_jobs == 32
+        assert reward._max_pending_jobs == 32
+    finally:
+        reward.close()
+
+
 def test_reward_requires_evalkit_source_pin(tmp_path: Path):
     evalkit = tmp_path / "evalkit"
     _write_fake_evalkit(evalkit)

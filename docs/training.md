@@ -173,9 +173,15 @@ per reward-producing rank; `0` selects
 `max(vbvr_reward_decode_batch_size, 2 * vbvr_reward_cpu_workers)`. The optimized
 DiffSynth manifest-RL configs use `16`, two decoded size-8 batches, so both
 prompt waves can remain in flight. At 256x256x161 this bound retains about
-483 MiB of decoded RGB per rank. Reward videos are disposable and
-metadata-heavy; put `vbvr_reward_tmp_dir` under node-local `/tmp`, not the
-shared QuarkFS project mount.
+483 MiB of decoded RGB per rank. When delayed replay is enabled, the runtime
+raises a smaller configured bound to one complete local rollout step,
+`ceil(batch_size * G / logical_data_parallel_world_size)`, because the future
+step must be submitted while the pending step is retained. For the target
+batch-32/G=32 configs this is 32 jobs (about 966 MiB/rank for 161 frames and
+486 MiB/rank for 81 frames) at world size 32, and remains 16 jobs at world
+size 64. Reward videos are disposable and metadata-heavy; put
+`vbvr_reward_tmp_dir` under node-local `/tmp`, not the shared QuarkFS project
+mount.
 
 On 2026-07-25, an eight-H100 production-shape one-step smoke of the 161-frame
 DiffSynth step-35500 config used shared prompts with local `batch_size: 4`,
@@ -275,6 +281,50 @@ last backward. At world size 32, a size-16 wave assigns two ranks and 16 of the
 eight rollouts per rank. This distributes OCR-heavy reward tails more broadly
 than the single-wave world-32 layout, where one rank must score all 32 videos
 for its prompt.
+
+An optional cross-step pipeline can fill the reward-induced GPU gap:
+
+```yaml
+grpo_delayed_replay: true
+grpo_delayed_replay_clip_range: 1.0e-2
+```
+
+The first dataloader batch pre-fills one trajectory slot without an optimizer
+update. In steady state, the trainer generates the next logical step with the
+current policy, then replays the pending trajectory while the new CPU rewards
+finish. After the first update, replay data is therefore exactly one optimizer
+version stale. `grpo_delayed_replay_clip_range` controls only this mode; `null`
+reuses `grpo_clip_range`. The target manifests keep the switch off by default
+and set the delayed clip to `1e-2`, 100x their normal `1e-4` clip. Logs and
+W&B expose the effective clip, clip fraction, ratio mean/max deviation,
+approximate KL, policy-version staleness, preparation time, and drain events.
+
+The pending slot is not serialized. Before every periodic checkpoint, epoch
+checkpoint, or `max_steps` boundary, the trainer drains it under the current
+policy and saves only after the optimizer update. The next batch is another
+prefill bubble. Total optimizer-step and cosine-LR accounting subtracts these
+bubbles, and delayed mode requires a finite dataloader length so epoch
+boundaries are known.
+
+The controlled 2026-07-25 comparison used eight H100s, 256x256x81 raw data,
+full fine-tuning, local batch 8, prompt waves of 4, `G=32`, `T=30`, two
+size-8 rollout/replay chunks, and three optimizer updates. This gives each
+rank the same 32 rollouts/update as the target world-32 batch-32 shape. Both
+runs used clip `1e-2`, identical seed/data/timestep selection, two reward
+workers x eight threads, and a 32-job queue. End-to-end wall time, including
+delayed prefill and final drain, fell from 778.23s (`259.41 s/update`) to
+604.71s (`201.57 s/update`), a 22.30% speedup. Sampled mean GPU utilization
+rose from 69.1% to 93.5%, idle samples below 10% fell from 25.5% to 0%, and
+peak PyTorch memory stayed at 45.2/49.5 GiB allocated/reserved. A 16-job
+delayed queue gained only about 1.8%, which is why delayed mode enforces the
+one-local-step queue minimum.
+
+The first optimizer update matched the baseline reward and gradient norm.
+At stale updates, the observed ratio means remained within about `3.2e-6` of
+one, approximate KL stayed below `5e-9`, and clip fraction was zero, but later
+rewards and gradient norms diverged as expected from the changed policy/data
+ordering. This three-update, single-node result establishes the throughput
+mechanism, not long-run optimization quality or multi-node HSDP behavior.
 
 DanceGRPO currently rejects expert parallel. For split RL, the multinode launcher defaults to half the nodes training and half running rollout/reward actors. A manual `rl_train_node_count: 1` means node 0 trains and the remaining nodes run rollout/reward actors; rollout actors partition `grpo_group_size` across cards.[^dancegrpo-trainer]
 

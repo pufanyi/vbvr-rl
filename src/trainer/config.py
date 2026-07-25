@@ -245,6 +245,14 @@ class RLConfig(TrainConfig):
     # so later reward work overlaps earlier replay without using stale-policy
     # trajectories. None keeps the original single-wave execution.
     grpo_shared_prompt_microbatch_size: int | None = None
+    # Experimental one-update-stale pipeline. The first batch pre-fills a
+    # trajectory slot; steady-state iterations prepare the next rollout and
+    # then replay the previous slot while its successor's CPU reward runs.
+    # Checkpoint/final boundaries flush the slot before saving.
+    grpo_delayed_replay: bool = False
+    # Optional wider PPO clip used only by grpo_delayed_replay. None reuses
+    # grpo_clip_range, allowing scheduling and clip-width ablations separately.
+    grpo_delayed_replay_clip_range: float | None = None
     grpo_sample_batch_size: int = 1  # how many G samples to batch together during rollout
     # How many already-generated G samples to replay together during the train
     # update. This does not increase prompt batch size or rollout work per step.
@@ -353,6 +361,13 @@ class RLConfig(TrainConfig):
             raise ValueError(f"grpo_shared_prompt_microbatch_size must be > 0, got {v}")
         return v
 
+    @field_validator("grpo_clip_range", "grpo_delayed_replay_clip_range")
+    @classmethod
+    def _validate_grpo_clip_ranges(cls, v: float | None):
+        if v is not None and v <= 0:
+            raise ValueError(f"PPO clip ranges must be > 0, got {v}")
+        return v
+
     @model_validator(mode="after")
     def _validate_shared_prompt_microbatch_configuration(self):
         if self.grpo_shared_prompt_microbatch_size is not None and not self.grpo_shared_prompt_batch:
@@ -372,7 +387,9 @@ class RLConfig(TrainConfig):
             raise ValueError(
                 "batch_size must be divisible by grpo_shared_prompt_microbatch_size, got "
                 f"{self.batch_size} % {self.grpo_shared_prompt_microbatch_size}"
-            )
+        )
+        if self.grpo_delayed_replay and not self.grpo_shared_prompt_batch:
+            raise ValueError("grpo_delayed_replay requires grpo_shared_prompt_batch=true")
         return self
 
     @field_validator("grpo_rollout_video_every_steps", "grpo_rollout_video_max_per_rank", "grpo_rollout_video_fps")

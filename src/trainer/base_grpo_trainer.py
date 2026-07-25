@@ -653,6 +653,15 @@ class BaseGRPOTrainer(BaseRLTrainer):
         train_start_time = time.monotonic()
         train_start_step = global_step
         stop_training = False
+        try:
+            epoch_batch_count = len(self.dataloader)
+        except TypeError:
+            epoch_batch_count = None
+        if cfg.grpo_delayed_replay and epoch_batch_count is None:
+            raise ValueError(
+                "grpo_delayed_replay requires a finite dataloader length so the pending trajectory "
+                "slot can be drained before every epoch checkpoint"
+            )
 
         for epoch in range(start_epoch, cfg.num_epochs):
             if self.sampler is not None:
@@ -669,7 +678,25 @@ class BaseGRPOTrainer(BaseRLTrainer):
                 self.train_state.step = global_step
                 if self.device.type == "cuda":
                     torch.cuda.reset_peak_memory_stats(self.device)
-                metrics = self._grpo_step(batch)
+                self._grpo_force_delayed_replay_flush = bool(
+                    cfg.grpo_delayed_replay
+                    and epoch_batch_count is not None
+                    and batch_idx >= epoch_batch_count - 1
+                )
+                try:
+                    metrics = self._grpo_step(batch)
+                finally:
+                    self._grpo_force_delayed_replay_flush = False
+
+                if metrics.pop("_skip_optimizer_step", False):
+                    if self.rank == 0:
+                        logger.info(
+                            "Delayed replay prefill at optimizer_step={} prepare={:.2f}s; "
+                            "no optimizer update yet.",
+                            global_step,
+                            metrics.get("delayed_current_prepare_seconds", 0.0),
+                        )
+                    continue
 
                 self._all_reduce_gradients()
                 grad_norm = self._clip_grad_norm(cfg.max_grad_norm)
@@ -831,6 +858,20 @@ class BaseGRPOTrainer(BaseRLTrainer):
                                 metrics["shared_prompt_reward_drain_seconds"],
                                 metrics["shared_prompt_replay_seconds"],
                             )
+                        if "delayed_replay_staleness" in metrics:
+                            logger.info(
+                                "  delayed replay: stale_updates={:.0f} clip={:.4g} clip_fraction={:.4f} "
+                                "ratio_mean={:.6f} ratio_abs_max={:.6f} approx_kl={:.3e} "
+                                "current_prepare={:.2f}s flush={:.0f}",
+                                metrics["delayed_replay_staleness"],
+                                metrics["ppo_clip_range"],
+                                metrics.get("ppo_clip_fraction", 0.0),
+                                metrics.get("ppo_ratio_mean", 1.0),
+                                metrics.get("ppo_ratio_abs_max", 0.0),
+                                metrics.get("ppo_approx_kl", 0.0),
+                                metrics.get("delayed_current_prepare_seconds", 0.0),
+                                metrics.get("delayed_replay_flush", 0.0),
+                            )
 
                         if self.use_wandb:
                             import wandb
@@ -859,6 +900,18 @@ class BaseGRPOTrainer(BaseRLTrainer):
                                         "timing/shared_prompt_replay_seconds": metrics["shared_prompt_replay_seconds"],
                                     }
                                 )
+                            for metric_key in (
+                                "ppo_clip_range",
+                                "ppo_clip_fraction",
+                                "ppo_ratio_mean",
+                                "ppo_ratio_abs_max",
+                                "ppo_approx_kl",
+                                "delayed_replay_staleness",
+                                "delayed_current_prepare_seconds",
+                                "delayed_replay_flush",
+                            ):
+                                if metric_key in metrics:
+                                    log_metrics[f"grpo/{metric_key}"] = metrics[metric_key]
                             if mfu is not None:
                                 log_metrics["train/mfu"] = mfu
                             wandb.log(log_metrics, step=global_step)

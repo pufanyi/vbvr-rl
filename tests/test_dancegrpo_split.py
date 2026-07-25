@@ -5,6 +5,7 @@ import torch
 
 from src.models.wan_i2v import WanI2VForTraining
 from src.trainer.base_grpo_trainer import BaseGRPOTrainer
+from src.trainer.base_rl_trainer import _delayed_replay_optimizer_steps
 from src.trainer.config import RLConfig
 from src.trainer.dancegrpo_trainer import (
     DanceGRPOTrainer,
@@ -107,6 +108,50 @@ def test_rl_config_validates_shared_prompt_microbatch_size():
         RLConfig(grpo_shared_prompt_batch=True, batch_size=32, grpo_shared_prompt_microbatch_size=12)
 
 
+def test_rl_config_validates_delayed_replay_switch_and_clip():
+    cfg = RLConfig(
+        grpo_shared_prompt_batch=True,
+        grpo_delayed_replay=True,
+        grpo_delayed_replay_clip_range=1.0e-2,
+    )
+
+    assert cfg.grpo_delayed_replay is True
+    assert cfg.grpo_delayed_replay_clip_range == 1.0e-2
+    with pytest.raises(ValueError, match="requires grpo_shared_prompt_batch=true"):
+        RLConfig(grpo_delayed_replay=True)
+    with pytest.raises(ValueError, match="PPO clip ranges must be > 0"):
+        RLConfig(grpo_clip_range=0)
+    with pytest.raises(ValueError, match="PPO clip ranges must be > 0"):
+        RLConfig(grpo_delayed_replay_clip_range=-0.1)
+
+
+@pytest.mark.parametrize(
+    ("batches_per_epoch", "num_epochs", "save_steps", "max_steps", "expected"),
+    [
+        (3, 1, 0, None, 2),
+        (10, 2, 3, None, 14),
+        (1562, 5, 100, None, 7728),
+        (1562, 5, 100, 3, 3),
+    ],
+)
+def test_delayed_replay_optimizer_step_accounting(
+    batches_per_epoch,
+    num_epochs,
+    save_steps,
+    max_steps,
+    expected,
+):
+    assert (
+        _delayed_replay_optimizer_steps(
+            batches_per_epoch=batches_per_epoch,
+            num_epochs=num_epochs,
+            save_steps=save_steps,
+            max_steps=max_steps,
+        )
+        == expected
+    )
+
+
 def test_shared_prompt_waves_prepare_before_replay_and_sync_only_final_wave(monkeypatch):
     events = []
 
@@ -120,6 +165,7 @@ def test_shared_prompt_waves_prepare_before_replay_and_sync_only_final_wave(monk
         grpo_group_size=32,
         grpo_num_sampling_steps=30,
         grpo_sample_batch_size=8,
+        grpo_clip_range=1.0e-4,
     )
     trainer.device = torch.device("cpu")
     trainer.tensor_parallel_enabled = False
@@ -135,12 +181,13 @@ def test_shared_prompt_waves_prepare_before_replay_and_sync_only_final_wave(monk
     trainer._dp_pg = None
     trainer._split_debug_enabled = lambda: False
     trainer._split_debug_log = lambda *args, **kwargs: None
-    trainer._select_training_timesteps = lambda _steps: [0, 1]
+    trainer._select_training_timesteps_for_step = lambda _steps, _step: [0, 1]
     trainer._sample_group_cps_noise_levels = lambda *args, **kwargs: None
 
     def prepare_wave(
         _batch,
         *,
+        rollout_step,
         prompt_offset,
         prompt_batch_size,
         total_prompt_batch_size,
@@ -149,6 +196,7 @@ def test_shared_prompt_waves_prepare_before_replay_and_sync_only_final_wave(monk
     ):
         assert total_prompt_batch_size == 32
         assert all_prompt_cps_noise_levels is None
+        assert rollout_step == 0
         events.append(("prepare", prompt_offset))
         return (
             SimpleNamespace(
@@ -159,14 +207,26 @@ def test_shared_prompt_waves_prepare_before_replay_and_sync_only_final_wave(monk
             saved_rollout_videos,
         )
 
-    def replay_wave(rollout, *, selected_t_idxs, total_prompt_batch_size, sync_on_last_backward):
+    def replay_wave(
+        rollout,
+        *,
+        selected_t_idxs,
+        total_prompt_batch_size,
+        sync_on_last_backward,
+        clip_range,
+    ):
         assert selected_t_idxs == [0, 1]
         assert total_prompt_batch_size == 32
+        assert clip_range == 1.0e-4
         events.append(("replay", rollout.prompt_offset, sync_on_last_backward))
         shape = (rollout.prompt_batch_size, 32)
         return {
             "local_policy_sum": 1.0,
             "local_kl_sum": 0.0,
+            "local_clip_fraction_sum": 0.0,
+            "local_ratio_sum": 1024.0,
+            "local_approx_kl_sum": 0.0,
+            "local_ratio_abs_max": 0.0,
             "rewards": torch.zeros(shape),
             "advantages": torch.zeros(shape),
             "active_ranks": 32,
@@ -192,6 +252,90 @@ def test_shared_prompt_waves_prepare_before_replay_and_sync_only_final_wave(monk
     assert metrics["shared_prompt_prepare_seconds"] == 2.0
     assert metrics["shared_prompt_reward_drain_seconds"] == 4.0
     assert metrics["shared_prompt_replay_seconds"] == 6.0
+    assert metrics["ppo_clip_range"] == 1.0e-4
+    assert metrics["ppo_clip_fraction"] == 0.0
+    assert metrics["ppo_ratio_mean"] == 1.0
+
+
+def test_delayed_replay_prefills_runs_one_update_stale_and_flushes_at_max_steps():
+    events = []
+    trainer = DanceGRPOTrainer.__new__(DanceGRPOTrainer)
+    trainer.cfg = SimpleNamespace(
+        grpo_num_sampling_steps=30,
+        grpo_clip_range=1.0e-4,
+        grpo_delayed_replay_clip_range=1.0e-2,
+        max_steps=3,
+        save_steps=0,
+    )
+    trainer.device = torch.device("cpu")
+    trainer.train_state = SimpleNamespace(step=0)
+    trainer._grpo_force_delayed_replay_flush = False
+    trainer._select_training_timesteps_for_step = lambda _steps, step: [step]
+    trainer._max_rank_seconds = lambda seconds: seconds
+
+    def prepare_step(_batch, *, rollout_step, policy_version, selected_t_idxs):
+        assert selected_t_idxs == [rollout_step]
+        events.append(("prepare", rollout_step, policy_version))
+        return SimpleNamespace(
+            rollout_step=rollout_step,
+            policy_version=policy_version,
+        )
+
+    def replay_step(step_rollout, *, clip_range):
+        events.append(("replay", step_rollout.rollout_step, clip_range))
+        return {
+            "policy_loss": 0.0,
+            "kl_loss": 0.0,
+            "reward_mean": 0.0,
+            "reward_std": 0.0,
+            "advantage_mean": 0.0,
+            "active_rollout_ranks": 1.0,
+            "ppo_clip_range": clip_range,
+        }
+
+    trainer._prepare_shared_prompt_step_rollout = prepare_step
+    trainer._replay_shared_prompt_step_rollout = replay_step
+
+    prefill = trainer._grpo_step_shared_prompt_batch_delayed({"prompt": ["a"]})
+    assert prefill["_skip_optimizer_step"] is True
+
+    first = trainer._grpo_step_shared_prompt_batch_delayed({"prompt": ["b"]})
+    assert first["delayed_replay_staleness"] == 0.0
+    assert first["delayed_replay_flush"] == 0.0
+
+    trainer.train_state.step = 1
+    second = trainer._grpo_step_shared_prompt_batch_delayed({"prompt": ["c"]})
+    assert second["delayed_replay_staleness"] == 1.0
+    assert second["delayed_replay_flush"] == 0.0
+
+    trainer.train_state.step = 2
+    final = trainer._grpo_step_shared_prompt_batch_delayed({"prompt": ["unused"]})
+    assert final["delayed_replay_staleness"] == 1.0
+    assert final["delayed_replay_flush"] == 1.0
+    assert trainer._delayed_shared_prompt_rollout is None
+    assert events == [
+        ("prepare", 0, 0),
+        ("prepare", 1, 0),
+        ("replay", 0, 1.0e-2),
+        ("prepare", 2, 1),
+        ("replay", 1, 1.0e-2),
+        ("replay", 2, 1.0e-2),
+    ]
+
+
+def test_delayed_replay_flushes_before_checkpoint_and_epoch_boundary():
+    trainer = DanceGRPOTrainer.__new__(DanceGRPOTrainer)
+    trainer.cfg = SimpleNamespace(max_steps=100, save_steps=10)
+    trainer.train_state = SimpleNamespace(step=9)
+    trainer._grpo_force_delayed_replay_flush = False
+
+    assert trainer._delayed_replay_must_flush() is True
+
+    trainer.train_state.step = 8
+    assert trainer._delayed_replay_must_flush() is False
+
+    trainer._grpo_force_delayed_replay_flush = True
+    assert trainer._delayed_replay_must_flush() is True
 
 
 def test_rl_config_allows_full_actor_sync_without_lora():
