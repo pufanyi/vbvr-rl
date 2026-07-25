@@ -59,9 +59,12 @@ train_experts: both
 lora_rank: 0
 lora_alpha: 32
 
-# Shared-prompt all-rank GRPO: with 64 GPUs and batch_size=32, each prompt gets
-# 2 ranks; G=32 gives 16 rollouts per rank.
+# Shared-prompt all-rank GRPO keeps 32 prompts per optimizer step. Two
+# 16-prompt waves are prepared before replay: later CPU rewards overlap earlier
+# replay without crossing an optimizer update. On 64 GPUs each wave gives a
+# prompt 4 ranks x 8 rollouts; on 32 GPUs it gives 2 ranks x 16 rollouts.
 grpo_shared_prompt_batch: true
+grpo_shared_prompt_microbatch_size: 16
 grpo_group_size: 32
 grpo_sample_batch_size: 8
 grpo_train_sample_batch_size: 4
@@ -86,8 +89,9 @@ vbvr_reward_easyocr_module_path: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/st
 vbvr_reward_device: cpu
 vbvr_reward_fps: 32
 vbvr_reward_decode_batch_size: 8
-# Bound the producer-consumer queue to one decoded rollout batch per rank.
-vbvr_reward_max_pending_jobs: 8
+# Retain at most two decoded rollout batches per rank so both prompt waves can
+# be in flight. A 161-frame RGB sample is about 30 MiB (about 483 MiB/rank).
+vbvr_reward_max_pending_jobs: 16
 # Keep the per-rank native-thread budget at 16 while scoring two samples in parallel.
 vbvr_reward_cpu_workers: 2
 vbvr_reward_cpu_threads_per_worker: 8
@@ -102,7 +106,9 @@ vbvr_reward_max_duration_seconds: 5.03125
 vbvr_reward_prepare_crf: 12
 vbvr_reward_fail_on_error: true
 vbvr_reward_task_specific_only: true
-vbvr_reward_tmp_dir: storage/tmp/vbvr_pro_5b_rule_reward_cps0p7_from_diffsynth_step35500_manifest_rl_evalkit_6fedd9d9_reward1024_fps32
+# Reward videos are disposable and extremely metadata-heavy; keep them on the
+# node-local filesystem instead of the shared QuarkFS project mount.
+vbvr_reward_tmp_dir: /tmp/wan-trainer/vbvr_pro_5b_rule_reward_cps0p7_from_diffsynth_step35500_manifest_rl_evalkit_6fedd9d9_reward1024_fps32
 vbvr_reward_keep_tmp: false
 vbvr_reward_unsupported_score: 0.0
 

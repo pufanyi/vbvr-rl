@@ -129,11 +129,26 @@ def test_compile_modules_preserves_module_identity():
 
 def test_shared_prompt_batch_is_bounded_by_dp_size():
     trainer = _trainer_state()
-    with pytest.raises(ValueError, match="batch_size must be <= DP size"):
+    with pytest.raises(ValueError, match="prompt-wave size must be <= DP size"):
         BaseRLTrainer._init_tensor_parallel(
             trainer,
             _tp_cfg(grpo_shared_prompt_batch=True, batch_size=8),
         )
+
+
+def test_shared_prompt_microbatch_is_bounded_by_dp_size():
+    trainer = _trainer_state()
+
+    BaseRLTrainer._init_tensor_parallel(
+        trainer,
+        _tp_cfg(
+            grpo_shared_prompt_batch=True,
+            batch_size=8,
+            grpo_shared_prompt_microbatch_size=4,
+        )
+    )
+
+    assert trainer.dp_size == 4
 
 
 def test_tensor_parallel_size_must_be_positive():

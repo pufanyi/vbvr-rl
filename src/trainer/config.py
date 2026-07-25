@@ -240,6 +240,11 @@ class RLConfig(TrainConfig):
     # then ranks shard each prompt's group samples. In this mode `batch_size`
     # is the global prompt batch size, not per-rank prompt batch size.
     grpo_shared_prompt_batch: bool = False
+    # Optional prompt-wave size inside one shared-prompt optimizer step. A
+    # value smaller than batch_size prepares all waves before replaying them,
+    # so later reward work overlaps earlier replay without using stale-policy
+    # trajectories. None keeps the original single-wave execution.
+    grpo_shared_prompt_microbatch_size: int | None = None
     grpo_sample_batch_size: int = 1  # how many G samples to batch together during rollout
     # How many already-generated G samples to replay together during the train
     # update. This does not increase prompt batch size or rollout work per step.
@@ -340,6 +345,35 @@ class RLConfig(TrainConfig):
         if v <= 0:
             raise ValueError(f"grpo_train_sample_batch_size must be > 0, got {v}")
         return v
+
+    @field_validator("grpo_shared_prompt_microbatch_size")
+    @classmethod
+    def _validate_shared_prompt_microbatch_size(cls, v: int | None):
+        if v is not None and v <= 0:
+            raise ValueError(f"grpo_shared_prompt_microbatch_size must be > 0, got {v}")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_shared_prompt_microbatch_configuration(self):
+        if self.grpo_shared_prompt_microbatch_size is not None and not self.grpo_shared_prompt_batch:
+            raise ValueError("grpo_shared_prompt_microbatch_size requires grpo_shared_prompt_batch=true")
+        if (
+            self.grpo_shared_prompt_microbatch_size is not None
+            and self.grpo_shared_prompt_microbatch_size > self.batch_size
+        ):
+            raise ValueError(
+                "grpo_shared_prompt_microbatch_size must be <= batch_size, got "
+                f"{self.grpo_shared_prompt_microbatch_size} > {self.batch_size}"
+            )
+        if (
+            self.grpo_shared_prompt_microbatch_size is not None
+            and self.batch_size % self.grpo_shared_prompt_microbatch_size != 0
+        ):
+            raise ValueError(
+                "batch_size must be divisible by grpo_shared_prompt_microbatch_size, got "
+                f"{self.batch_size} % {self.grpo_shared_prompt_microbatch_size}"
+            )
+        return self
 
     @field_validator("grpo_rollout_video_every_steps", "grpo_rollout_video_max_per_rank", "grpo_rollout_video_fps")
     @classmethod

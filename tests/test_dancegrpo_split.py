@@ -10,6 +10,7 @@ from src.trainer.dancegrpo_trainer import (
     DanceGRPOTrainer,
     _interleave_actor_ranks_by_node,
     _shared_prompt_assignment,
+    _shared_prompt_wave_ranges,
     _split_group_indices,
 )
 from src.trainer.rewards.neg_loss import NegLossReward
@@ -55,6 +56,142 @@ def test_shared_prompt_assignment_shards_prompts_and_groups_across_world():
     for prompt_idx in range(8):
         groups = sorted(group for item in assignments if item[0] == prompt_idx for group in item[3])
         assert groups == list(range(24))
+
+
+def test_shared_prompt_wave_ranges_preserve_global_prompt_batch():
+    assert _shared_prompt_wave_ranges(32, None) == [(0, 32)]
+    assert _shared_prompt_wave_ranges(32, 16) == [(0, 16), (16, 16)]
+
+
+@pytest.mark.parametrize("prompt_batch_size,microbatch_size", [(32, 0), (32, 33), (32, 12)])
+def test_shared_prompt_wave_ranges_reject_invalid_sizes(prompt_batch_size, microbatch_size):
+    with pytest.raises(ValueError, match="grpo_shared_prompt_microbatch_size"):
+        _shared_prompt_wave_ranges(prompt_batch_size, microbatch_size)
+
+
+@pytest.mark.parametrize(
+    ("world_size", "expected_ranks_per_prompt", "expected_groups_per_rank"),
+    [(32, 2, 16), (64, 4, 8)],
+)
+def test_shared_prompt_waves_cover_every_prompt_group(
+    world_size,
+    expected_ranks_per_prompt,
+    expected_groups_per_rank,
+):
+    seen: dict[int, list[int]] = {prompt_idx: [] for prompt_idx in range(32)}
+    for prompt_offset, wave_size in _shared_prompt_wave_ranges(32, 16):
+        assignments = [
+            _shared_prompt_assignment(rank, world_size, wave_size, group_size=32) for rank in range(world_size)
+        ]
+        assert all(item[2] == expected_ranks_per_prompt for item in assignments)
+        assert all(len(item[3]) == expected_groups_per_rank for item in assignments)
+        for prompt_idx, _prompt_rank, _prompt_world_size, groups in assignments:
+            seen[prompt_offset + prompt_idx].extend(groups)
+
+    assert all(sorted(groups) == list(range(32)) for groups in seen.values())
+
+
+def test_rl_config_validates_shared_prompt_microbatch_size():
+    cfg = RLConfig(
+        grpo_shared_prompt_batch=True,
+        batch_size=32,
+        grpo_shared_prompt_microbatch_size=16,
+    )
+
+    assert cfg.grpo_shared_prompt_microbatch_size == 16
+    with pytest.raises(ValueError, match="requires grpo_shared_prompt_batch=true"):
+        RLConfig(batch_size=32, grpo_shared_prompt_microbatch_size=16)
+    with pytest.raises(ValueError, match="must be <= batch_size"):
+        RLConfig(grpo_shared_prompt_batch=True, batch_size=32, grpo_shared_prompt_microbatch_size=64)
+    with pytest.raises(ValueError, match="batch_size must be divisible"):
+        RLConfig(grpo_shared_prompt_batch=True, batch_size=32, grpo_shared_prompt_microbatch_size=12)
+
+
+def test_shared_prompt_waves_prepare_before_replay_and_sync_only_final_wave(monkeypatch):
+    events = []
+
+    class RecordingOptimizer:
+        def zero_grad(self, *, set_to_none):
+            events.append(("zero_grad", set_to_none))
+
+    trainer = DanceGRPOTrainer.__new__(DanceGRPOTrainer)
+    trainer.cfg = SimpleNamespace(
+        grpo_shared_prompt_microbatch_size=16,
+        grpo_group_size=32,
+        grpo_num_sampling_steps=30,
+        grpo_sample_batch_size=8,
+    )
+    trainer.device = torch.device("cpu")
+    trainer.tensor_parallel_enabled = False
+    trainer.rank = 0
+    trainer.global_rank = 0
+    trainer.local_rank = 0
+    trainer.world_size = 32
+    trainer.dp_rank = 0
+    trainer.dp_size = 32
+    trainer.train_state = SimpleNamespace(step=0)
+    trainer.model = SimpleNamespace(transformer=torch.nn.Identity(), transformer_2=None)
+    trainer.optimizers = [RecordingOptimizer()]
+    trainer._dp_pg = None
+    trainer._split_debug_enabled = lambda: False
+    trainer._split_debug_log = lambda *args, **kwargs: None
+    trainer._select_training_timesteps = lambda _steps: [0, 1]
+    trainer._sample_group_cps_noise_levels = lambda *args, **kwargs: None
+
+    def prepare_wave(
+        _batch,
+        *,
+        prompt_offset,
+        prompt_batch_size,
+        total_prompt_batch_size,
+        all_prompt_cps_noise_levels,
+        saved_rollout_videos,
+    ):
+        assert total_prompt_batch_size == 32
+        assert all_prompt_cps_noise_levels is None
+        events.append(("prepare", prompt_offset))
+        return (
+            SimpleNamespace(
+                prompt_offset=prompt_offset,
+                prompt_batch_size=prompt_batch_size,
+                prepare_seconds=1.0,
+            ),
+            saved_rollout_videos,
+        )
+
+    def replay_wave(rollout, *, selected_t_idxs, total_prompt_batch_size, sync_on_last_backward):
+        assert selected_t_idxs == [0, 1]
+        assert total_prompt_batch_size == 32
+        events.append(("replay", rollout.prompt_offset, sync_on_last_backward))
+        shape = (rollout.prompt_batch_size, 32)
+        return {
+            "local_policy_sum": 1.0,
+            "local_kl_sum": 0.0,
+            "rewards": torch.zeros(shape),
+            "advantages": torch.zeros(shape),
+            "active_ranks": 32,
+            "reward_drain_seconds": 2.0,
+            "replay_seconds": 3.0,
+        }
+
+    trainer._prepare_shared_prompt_rollout_wave = prepare_wave
+    trainer._replay_shared_prompt_rollout_wave = replay_wave
+    trainer._offload_inference_models_for_replay = lambda: events.append(("offload",))
+    monkeypatch.setattr(torch.distributed, "all_reduce", lambda *args, **kwargs: None)
+
+    metrics = trainer._grpo_step_shared_prompt_batch({"prompt": [f"prompt-{idx}" for idx in range(32)]})
+
+    assert events == [
+        ("prepare", 0),
+        ("prepare", 16),
+        ("offload",),
+        ("zero_grad", True),
+        ("replay", 0, False),
+        ("replay", 16, True),
+    ]
+    assert metrics["shared_prompt_prepare_seconds"] == 2.0
+    assert metrics["shared_prompt_reward_drain_seconds"] == 4.0
+    assert metrics["shared_prompt_replay_seconds"] == 6.0
 
 
 def test_rl_config_allows_full_actor_sync_without_lora():

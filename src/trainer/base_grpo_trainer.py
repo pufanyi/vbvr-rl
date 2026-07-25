@@ -823,6 +823,14 @@ class BaseGRPOTrainer(BaseRLTrainer):
                             eta_str,
                             speed_str,
                         )
+                        if "shared_prompt_prepare_seconds" in metrics:
+                            logger.info(
+                                "  shared-prompt phases (max rank): prepare={:.2f}s reward_drain={:.2f}s "
+                                "replay={:.2f}s",
+                                metrics["shared_prompt_prepare_seconds"],
+                                metrics["shared_prompt_reward_drain_seconds"],
+                                metrics["shared_prompt_replay_seconds"],
+                            )
 
                         if self.use_wandb:
                             import wandb
@@ -839,6 +847,18 @@ class BaseGRPOTrainer(BaseRLTrainer):
                                 "train/peak_memory_reserved_gib": metrics.get("peak_memory_reserved_gib", 0.0),
                                 "train/epoch": fractional_epoch,
                             }
+                            if "shared_prompt_prepare_seconds" in metrics:
+                                log_metrics.update(
+                                    {
+                                        "timing/shared_prompt_prepare_seconds": metrics[
+                                            "shared_prompt_prepare_seconds"
+                                        ],
+                                        "timing/shared_prompt_reward_drain_seconds": metrics[
+                                            "shared_prompt_reward_drain_seconds"
+                                        ],
+                                        "timing/shared_prompt_replay_seconds": metrics["shared_prompt_replay_seconds"],
+                                    }
+                                )
                             if mfu is not None:
                                 log_metrics["train/mfu"] = mfu
                             wandb.log(log_metrics, step=global_step)

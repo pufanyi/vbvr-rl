@@ -170,10 +170,12 @@ order, only after all local rollout chunks have been produced. On TP runs only
 TP rank 0 produces rewards and the deferred resolve retains the existing TP
 broadcast order. `vbvr_reward_max_pending_jobs` bounds decoded samples retained
 per reward-producing rank; `0` selects
-`max(vbvr_reward_decode_batch_size, 2 * vbvr_reward_cpu_workers)`. The two 5B
-manifest-RL configs set it to `8`, one decoded rollout batch, so backpressure
-limits host memory while still overlapping the first batch's CPU work with the
-second GPU rollout.
+`max(vbvr_reward_decode_batch_size, 2 * vbvr_reward_cpu_workers)`. The optimized
+DiffSynth manifest-RL configs use `16`, two decoded size-8 batches, so both
+prompt waves can remain in flight. At 256x256x161 this bound retains about
+483 MiB of decoded RGB per rank. Reward videos are disposable and
+metadata-heavy; put `vbvr_reward_tmp_dir` under node-local `/tmp`, not the
+shared QuarkFS project mount.
 
 On 2026-07-25, an eight-H100 production-shape one-step smoke of the 161-frame
 DiffSynth step-35500 config used shared prompts with local `batch_size: 4`,
@@ -253,6 +255,26 @@ The coefficient is sampled once per prompt and optimizer step. Shared-prompt
 ranks and split rollout actors derive it from the same deterministic seed, and
 the rollout payload stores it so policy replay uses the exact original value.
 `grpo_sde_noise_scale` remains the fixed-mode value when the range is omitted.
+
+Shared-prompt runs can divide the global prompt batch into reward/replay waves:
+
+```yaml
+batch_size: 32
+grpo_shared_prompt_batch: true
+grpo_shared_prompt_microbatch_size: 16
+```
+
+`batch_size` remains the number of prompts in one optimizer step. The wave size
+must divide it, fit within the data-parallel world, and evenly divide that
+world. All waves are generated before any replay backward, while the policy is
+unchanged; replay of the first wave can therefore overlap CPU scoring for the
+second wave without introducing stale-policy trajectories. Gradients from all
+waves accumulate into one optimizer update, with synchronization enabled on the
+last backward. At world size 32, a size-16 wave assigns two ranks and 16 of the
+32 rollouts to each prompt per rank; at world size 64, it assigns four ranks and
+eight rollouts per rank. This distributes OCR-heavy reward tails more broadly
+than the single-wave world-32 layout, where one rank must score all 32 videos
+for its prompt.
 
 DanceGRPO currently rejects expert parallel. For split RL, the multinode launcher defaults to half the nodes training and half running rollout/reward actors. A manual `rl_train_node_count: 1` means node 0 trains and the remaining nodes run rollout/reward actors; rollout actors partition `grpo_group_size` across cards.[^dancegrpo-trainer]
 

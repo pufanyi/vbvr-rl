@@ -384,10 +384,13 @@ class BaseRLTrainer(CheckpointRuntimeMixin):
         self.dp_size = self.world_size // self.tensor_parallel_size
         self.dp_rank = self.rank // self.tensor_parallel_size
         self.tp_rank = self.rank % self.tensor_parallel_size
-        if cfg.grpo_shared_prompt_batch and cfg.batch_size > self.dp_size:
+        shared_prompt_wave_size = cfg.grpo_shared_prompt_microbatch_size or cfg.batch_size
+        if cfg.grpo_shared_prompt_batch and shared_prompt_wave_size > self.dp_size:
             raise ValueError(
-                "grpo_shared_prompt_batch assigns work over data-parallel replicas, so batch_size must be "
-                f"<= DP size; got batch_size={cfg.batch_size}, DP={self.dp_size}, TP={self.tensor_parallel_size}"
+                "grpo_shared_prompt_batch assigns each prompt wave over data-parallel replicas, so the "
+                "effective prompt-wave size must be <= DP size; got "
+                f"wave_size={shared_prompt_wave_size}, batch_size={cfg.batch_size}, "
+                f"DP={self.dp_size}, TP={self.tensor_parallel_size}"
             )
 
     def _get_expert_parallel_sampler_seed(self, cfg: RLConfig) -> int:
