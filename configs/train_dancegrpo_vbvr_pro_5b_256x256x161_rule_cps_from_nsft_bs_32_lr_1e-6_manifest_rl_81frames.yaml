@@ -65,10 +65,10 @@ lora_alpha: 32
 # prompt 4 ranks x 8 rollouts; on 32 GPUs it gives 2 ranks x 16 rollouts.
 grpo_shared_prompt_batch: true
 grpo_shared_prompt_microbatch_size: 16
-# Experimental cross-step pipeline, default-off because it changes policy/data
-# ordering. When enabled it replays trajectories one policy update late and
-# uses the wider clip below; checkpoint and epoch boundaries drain the slot.
-grpo_delayed_replay: false
+# Cross-step pipeline: replay trajectories one policy update late so CPU reward
+# work overlaps replay. This config enables it with the wider clip below;
+# checkpoint and epoch boundaries drain the slot.
+grpo_delayed_replay: true
 grpo_delayed_replay_clip_range: 1.0e-2
 grpo_group_size: 32
 grpo_sample_batch_size: 8
@@ -111,7 +111,10 @@ vbvr_reward_prepared_width: 1024
 vbvr_reward_prepared_height: 1024
 vbvr_reward_max_duration_seconds: 5.0625
 vbvr_reward_prepare_crf: 12
-vbvr_reward_fail_on_error: true
+# Temporary EvalKit 6fedd9d9 continuity fallback: G-16 can fail when its
+# margin-offset grid hides an adjacent red endpoint. Map scorer errors to the
+# configured zero score until the evaluator regression is fixed.
+vbvr_reward_fail_on_error: false
 vbvr_reward_task_specific_only: true
 # Reward videos are disposable and extremely metadata-heavy; keep them on the
 # node-local filesystem instead of the shared QuarkFS project mount.

@@ -159,6 +159,50 @@ rather than subsampling an existing 161-frame video. All generated and
 against the 161-frame CPS run because the sampler, sampling-step count, CFG,
 frame count, and FPS differ.
 
+Generating at the checkpoint's 512x512 training resolution while keeping the
+same 81-frame UniPC settings scored 0.548651 Overall, 0.665233 In-Domain, and
+0.432068 Out-of-Domain. This controlled `+0.142108` Overall gain over direct
+256x256 generation shows that native generation resolution, rather than LoRA
+conversion scale, was a major source of the earlier low score.
+
+The controlled intermediate-resolution counterpart is:
+
+```fish
+fish scripts/eval/vbvr_pro/vbvr_pro_5b_diffsynth_step35500_unipc_50steps_384x384_81f_16fps_main_v2.fish
+```
+
+It changes only native generation to 384x384 and scored 0.514761 Overall,
+0.608461 In-Domain, and 0.421061 Out-of-Domain. This is `+0.108218` over
+256x256 and `-0.033890` below 512x512 Overall: 384 retains 76.15% of the
+controlled 256-to-512 gain while using 56.25% as many latent spatial positions
+as 512. Against 512, 32 paired task means improved, 6 tied, and 62 regressed;
+a 100,000-resample paired-task bootstrap gave a 95% Overall-delta interval of
+`[-0.058508, -0.009946]`. The loss is therefore measurable rather than exact
+quality parity, with most of the domain-level gap in In-Domain (`-0.056772`)
+and a smaller Out-of-Domain delta (`-0.011007`). All 500 generated and 500
+prepared videos passed exact size/81-frame/16-FPS/5.0625-second checks, all
+scores were finite and error-free, and all three provenance manifests passed
+artifact-fingerprint recomputation.
+
+The GT-duration-matched counterpart is:
+
+```fish
+fish scripts/eval/vbvr_pro/vbvr_pro_5b_diffsynth_step35500_unipc_50steps_512x512_gt_duration_16fps_main_v2.fish
+```
+
+It probes every GT video, derives the requested frame count at 16 FPS, applies
+Wan's `4k+1` temporal contract exactly as Diffusers does, generates that many
+frames directly at 512x512, and resizes every frame to the GT canvas without
+cropping. All 500 current GT videos are 1024x1024 at 16 FPS. Their raw lengths
+are 10--282 frames; aligned generation lengths are 9--281 frames. The completed
+run scored 0.547386 Overall, 0.657960 In-Domain, and 0.436812 Out-of-Domain.
+Against the otherwise identical fixed-81-frame native-512 run, the Overall
+delta was `-0.001265`; a 100,000-resample paired-task bootstrap gave a 95%
+interval of `[-0.024533, +0.022437]`. Thus GT-duration matching is not a stable
+aggregate improvement for this checkpoint. See
+[`reports/vbvr_diffsynth_step35500_gt_duration_eval_2026-07-26.md`](reports/vbvr_diffsynth_step35500_gt_duration_eval_2026-07-26.md)
+for the paired analysis and audit.
+
 Checkpoint-specific wrappers may add report generation after the shared
 pipeline. For example, the SFT epoch-1 wrapper runs the full evaluation and
 then exports all 100 per-task averages plus the domain/category summary to an

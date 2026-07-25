@@ -12,12 +12,12 @@ model_path: storage/models/diffsynth_converted_5b/wan2.2-TI2V-5B_260715_vbvr_pro
 # online before rollout.
 dataset_json: data/vbvr_pro/vbvr_pro_rl_indomain_256x256x161_evalkit_6fedd9d9.json
 dataset_size: 50000
-num_frames: 161
-height: 256
-width: 256
+num_frames: 81
+height: 384
+width: 384
 fps: 16
 
-output_dir: storage/checkpoints/dancegrpo_vbvr_pro_5b_256x256x161_rule_cps0p7_from_diffsynth_step35500_bs32_lr_1e-6_manifest_rl_evalkit_6fedd9d9_reward1024_fps32
+output_dir: storage/checkpoints/dancegrpo_vbvr_pro_5b_384x384x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_1e-6_manifest_rl_evalkit_6fedd9d9_reward1024_fps16_no_relay
 resume_from: null
 reset_dataloader: true
 auto_resume: true
@@ -65,10 +65,10 @@ lora_alpha: 32
 # prompt 4 ranks x 8 rollouts; on 32 GPUs it gives 2 ranks x 16 rollouts.
 grpo_shared_prompt_batch: true
 grpo_shared_prompt_microbatch_size: 16
-# Cross-step pipeline: replay trajectories one policy update late so CPU reward
-# work overlaps replay. This config enables it with the wider clip below;
-# checkpoint and epoch boundaries drain the slot.
-grpo_delayed_replay: true
+# Experimental cross-step pipeline, default-off because it changes policy/data
+# ordering. When enabled it replays trajectories one policy update late and
+# uses the wider clip below; checkpoint and epoch boundaries drain the slot.
+grpo_delayed_replay: false
 grpo_delayed_replay_clip_range: 1.0e-2
 grpo_group_size: 32
 grpo_sample_batch_size: 8
@@ -92,24 +92,24 @@ vbvr_reward_evalkit_dir: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/ev
 vbvr_reward_evalkit_source_sha256: eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c
 vbvr_reward_easyocr_module_path: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/evalkits/easyocr-shared
 vbvr_reward_device: cpu
-vbvr_reward_fps: 32
+vbvr_reward_fps: 16
 vbvr_reward_decode_batch_size: 8
 # Retain at most two decoded rollout batches per rank in normal mode. Delayed
 # replay automatically raises this to one complete local rollout step (32 jobs
 # at world size 32, still 16 at world size 64) to avoid submit backpressure.
-# A 161-frame RGB sample is about 30 MiB.
+# A 384x384x81 RGB sample is about 34 MiB.
 vbvr_reward_max_pending_jobs: 16
 # Keep the per-rank native-thread budget at 16 while scoring two samples in parallel.
 vbvr_reward_cpu_workers: 2
 vbvr_reward_cpu_threads_per_worker: 8
 vbvr_reward_use_process_pool: true
-# Keep all 161 frames, resize the videos supplied to the RL reward scorer to
-# 1024x1024, and keep an exact 32 FPS output. At 32 FPS, 161 encoded frames
-# have a container duration of 5.03125 seconds; this limit prevents the shared
-# preparation helper from automatically raising the output rate to 33 FPS.
+# Keep all 81 frames, resize the videos supplied to the RL reward scorer to
+# 1024x1024, and keep an exact 16 FPS output. At 16 FPS, 81 encoded frames
+# have a container duration of 5.0625 seconds; this limit prevents the shared
+# preparation helper from automatically raising the output rate to 17 FPS.
 vbvr_reward_prepared_width: 1024
 vbvr_reward_prepared_height: 1024
-vbvr_reward_max_duration_seconds: 5.03125
+vbvr_reward_max_duration_seconds: 5.0625
 vbvr_reward_prepare_crf: 12
 # Temporary EvalKit 6fedd9d9 continuity fallback: G-16 can fail when its
 # margin-offset grid hides an adjacent red endpoint. Map scorer errors to the
@@ -118,9 +118,9 @@ vbvr_reward_fail_on_error: false
 vbvr_reward_task_specific_only: true
 # Reward videos are disposable and extremely metadata-heavy; keep them on the
 # node-local filesystem instead of the shared QuarkFS project mount.
-vbvr_reward_tmp_dir: /tmp/wan-trainer/vbvr_pro_5b_rule_reward_cps0p7_from_diffsynth_step35500_manifest_rl_evalkit_6fedd9d9_reward1024_fps32
+vbvr_reward_tmp_dir: /tmp/wan-trainer/vbvr_pro_5b_384x384x81_rule_reward_cps0p7_from_diffsynth_step35500_manifest_rl_evalkit_6fedd9d9_reward1024_fps16_no_relay
 vbvr_reward_keep_tmp: false
 vbvr_reward_unsupported_score: 0.0
 
 wandb_project: wan-dancegrpo-vbvr-pro-5b
-wandb_run_name: dancegrpo_vbvr_pro_5b_256x256x161_rule_cps0p7_from_diffsynth_step35500_bs32_lr_1e-6_manifest_rl_evalkit_6fedd9d9_reward1024_fps32
+wandb_run_name: dancegrpo_vbvr_pro_5b_384x384x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_1e-6_manifest_rl_evalkit_6fedd9d9_reward1024_fps16_no_relay

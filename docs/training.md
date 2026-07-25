@@ -194,6 +194,47 @@ time. Reward (`0.3141 +/- 0.2649`), grad norm (`0.0002`), and peak memory
 81-frame config also completed a real step in `137.13 s`, with reward
 `0.3771 +/- 0.3251`, grad norm `0.0002`, and `40.6/45.0 GiB` peak memory.
 
+The native-resolution counterparts are
+`configs/train_dancegrpo_vbvr_pro_5b_384x384x81_rule_cps_from_nsft_bs_32_lr_1e-6_manifest_rl.yaml`
+and
+`configs/train_dancegrpo_vbvr_pro_5b_512x512x81_rule_cps_from_nsft_bs_32_lr_1e-6_manifest_rl.yaml`.
+Their training settings are identical apart from `height`/`width`; checkpoint,
+reward-temporary, and W&B names are isolated by resolution so they cannot
+resume one another or the 256x256 run. The data descriptor keeps its historical
+`256x256x161` filename because it describes raw inputs; `I2VDataset` applies
+the training YAML's requested transform online.
+
+The 161-frame
+`configs/train_dancegrpo_vbvr_pro_5b_256x256x161_rule_cps_from_nsft_bs_32_lr_1e-6_manifest_rl_from_wan_trainer.yaml`
+variant keeps the current reward-aligned exact-32-FPS and delayed-replay
+settings, but initializes from the converted Wan-Trainer full-FT SFT epoch-1
+checkpoint instead of DiffSynth step 35500. Its checkpoint, reward-temporary,
+and W&B namespaces are isolated, and it starts fresh optimizer and dataloader
+state.
+
+The controlled 500-sample SFT-checkpoint evaluation scored 0.514761 Overall at
+384x384, versus 0.406543 at 256x256 and 0.548651 at 512x512. Thus 384 retains
+76.15% of the 256-to-512 gain while its latent spatial grid has only 56.25% as
+many positions as 512. It remains materially below 512 on In-Domain score
+(0.608461 versus 0.665233), so 384 is the compute/quality choice rather than a
+claim of quality parity. At 384x384, one decoded 81-frame RGB reward sample is
+about 34 MiB, versus about 61 MiB at 512x512.
+
+On 2026-07-26 the 384 config completed a real eight-H100 full-FT optimizer-step
+smoke using a temporary local batch and prompt-wave size of 4, `G=32`, `T=30`,
+two size-8 rollout/replay chunks, latest EvalKit reward, delayed-replay boundary
+flush, nonzero learning rate, gradient clipping, and AdamW. It took 220.09
+seconds with reward `0.5524 +/- 0.4138`, grad norm `0.0001`, and peak memory
+`48.7/53.3 GiB` allocated/reserved. This closes the single-node FSDP
+compute/memory path; the production multi-node HSDP topology still needs its
+first launch monitored. The 512 config has not completed a full-FT
+optimizer-step memory smoke.
+
+For controlled 384x384 ablations, the `_lr_5e-6` config changes only the
+learning rate and run namespaces, while the `_no_relay` config disables
+cross-step delayed replay and isolates its run namespaces. The latter preserves
+the existing filename spelling for compatibility.
+
 After changing video encoding, preparation, metadata, or scorer code, run
 `scripts/dev/validate_vbvr_reward_alignment.py` on both a normal geometric
 task and an EasyOCR task. The validator independently builds the training and
@@ -294,10 +335,11 @@ update. In steady state, the trainer generates the next logical step with the
 current policy, then replays the pending trajectory while the new CPU rewards
 finish. After the first update, replay data is therefore exactly one optimizer
 version stale. `grpo_delayed_replay_clip_range` controls only this mode; `null`
-reuses `grpo_clip_range`. The target manifests keep the switch off by default
-and set the delayed clip to `1e-2`, 100x their normal `1e-4` clip. Logs and
-W&B expose the effective clip, clip fraction, ratio mean/max deviation,
-approximate KL, policy-version staleness, preparation time, and drain events.
+reuses `grpo_clip_range`. The current DiffSynth manifest configurations enable
+the switch and set the delayed clip to `1e-2`, 100x their normal `1e-4` clip.
+Logs and W&B expose the effective clip, clip fraction, ratio mean/max
+deviation, approximate KL, policy-version staleness, preparation time, and
+drain events.
 
 The pending slot is not serialized. Before every periodic checkpoint, epoch
 checkpoint, or `max_steps` boundary, the trainer drains it under the current
