@@ -19,7 +19,7 @@ fps: 16
 
 output_dir: storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_1e-6_manifest_rl_evalkit_6fedd9d9_reward1024_fps16_8_nodes
 resume_from: null
-reset_dataloader: true
+reset_dataloader: false
 auto_resume: true
 
 # All-rank GRPO path for grpo_multinode.fish: every GPU trains and rolls out.

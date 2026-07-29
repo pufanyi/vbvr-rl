@@ -113,6 +113,26 @@ The VBVR precompute code has separate VAE and text paths:
 - `src.precompute.vbvr_prompt_embeds` writes one safetensors file per sample with `prompt_embeds`.[^vbvr-t5]
 - packaging/shuffle helpers under `scripts/data/` and `src.precompute.build_webdataset` are used to assemble final tar shards.[^scripts-readme]
 
+## Published VBVR-Pro RL Snapshot
+
+The manifest-selected In-Domain RL view is published as the public Hugging Face
+Dataset [`pufanyi/vbvr-pro-rl-indomain-50k`](https://huggingface.co/datasets/pufanyi/vbvr-pro-rl-indomain-50k).
+It contains 50,000 samples from 50 tasks in 59 lossless WebDataset shards
+(62,060,892,160 archive bytes). The source descriptor SHA-256 is
+`1d397525869794cd3b608223f35bbb550b217e113be00bd1e913124c27507ac4`;
+the selected split manifest SHA-256 is
+`8eb86bf31b24dc5a21deb03a8294c15d299731db0f6f1ea0ddfcd3fd36619f32`.
+
+Each sample exposes `json`, `first.png`, `image_prompt.txt`,
+`metadata.json.bin`, `final.png`, `gt.mp4`, `video_prompt.txt`, and
+`extras.zip.bin`. The ZIP retains the original image sequence and any
+unrecognized source files, so the archive is a lossless packaging of the
+selected source directories. Use
+[`scripts/data/vbvr_pro_pack_hf.py`](../scripts/data/vbvr_pro_pack_hf.py) to
+rebuild it; the generated `SHA256SUMS`, `samples.jsonl`,
+`source_manifest.json`, `dataset_config.json`, and `audit.json` provide the
+integrity and publication audit trail.
+
 ## Dataset Design Tradeoffs
 
 The current design makes GPU training fast by moving expensive VAE/T5 work offline. The cost is a stricter data contract:

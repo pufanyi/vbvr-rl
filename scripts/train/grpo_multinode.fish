@@ -78,6 +78,14 @@ set -q WAN_TRAINER_DECORD_NUM_THREADS; or set -gx WAN_TRAINER_DECORD_NUM_THREADS
 # shared across nodes, while /tmp is private to each scheduler pod.
 set -q TRITON_CACHE_DIR; or set -gx TRITON_CACHE_DIR /tmp/wan-trainer-triton-cache
 
+# Validate the scorer once on every node before torchrun loads or shards the
+# model. The training process and spawned reward workers repeat this check.
+.venv/bin/python -m src.cli.validate_grpo_runtime $train_args
+or begin
+    echo "ERROR: GRPO runtime preflight failed on node $RANK before torchrun." >&2
+    exit 1
+end
+
 # torch.compile is lazy: merely wrapping the modules does not prove that
 # Inductor/Triton can build its CUDA driver helper. Run the exact driver setup
 # once per node before spending minutes loading and sharding the model.

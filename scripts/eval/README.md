@@ -15,6 +15,23 @@ The VBVR-Pro DanceGRPO wrappers are further separated by training run:
   every checkpoint has UniPC ODE, deterministic FlowMatch Euler ODE, CPS 0.3,
   and CPS 0.7 entrypoints.
 - `vbvr_pro/dancegrpo_indomain_strict/`: the strict In-Domain checkpoint series.
+- `vbvr_pro/dancegrpo_manifest_rl_512x512x81/`: the 512x512x81 manifest-RL
+  checkpoint series evaluated with the matching 30-step CPS 0.7 rollout policy;
+  its sweep launcher evaluates checkpoints 100--400 on four disjoint two-GPU
+  groups, then evaluates checkpoint 500 on all eight GPUs.
 
 Run every launcher from the repository root. Most fish launchers source
 `scripts/lib/env.fish`, which activates `.venv` and sets `PYTHONPATH`.
+
+VBVR-Pro training rewards and offline scoring deliberately use the same pinned
+scorer runtime. Check it before a launch with:
+
+```bash
+.venv/bin/python -m src.eval.vbvr_runtime
+```
+
+The common VBVR-Pro launcher records that runtime in score provenance, and both
+the parent scorer and every spawned worker validate it before loading EvalKit.
+Do not move only offline evaluation into a separate environment: that creates a
+real train/eval gap. If scorer isolation becomes necessary, route both the
+training reward and offline scoring through the same isolated runtime.

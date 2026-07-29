@@ -9,9 +9,11 @@ dependencies = [
     "diffusers[torch]>=0.37.1",
     "easydict>=1.13",
     "ftfy>=6.3.1",
-    "imageio>=2.37.3",
-    "imageio-ffmpeg>=0.6.0",
-    "numpy>=2.4.4",
+    # VBVR main_v2 scorer runtime. Keep these exact pins synchronized with
+    # src/eval/vbvr_runtime.py and the known-good pre-resume W&B snapshot.
+    "imageio==2.37.3",
+    "imageio-ffmpeg==0.6.0",
+    "numpy==2.4.4",
     "peft>=0.18.1",
     "pydantic>=2.0",
     "regex>=2026.3.32",
@@ -27,14 +29,32 @@ dependencies = [
     "safetensors>=0.7.0",
     "webdataset>=1.0.2",
     "datasets>=4.8.4",
-    "opencv-python>=4.13.0.92",
+    # EasyOCR also depends on opencv-python-headless. Keep both distributions
+    # on the same release so their shared cv2 package cannot be overwritten by
+    # an incompatible major version.
+    "opencv-python==4.13.0.92",
+    "opencv-python-headless==4.13.0.92",
+    "pillow==12.2.0",
+    "scikit-image==0.26.0",
+    "scipy==1.17.1",
+    "tifffile==2026.3.3",
     "openpyxl>=3.1.5",
-    "easyocr>=1.7.2",
+    "easyocr==1.7.2",
+    "norfair==2.3.0",
 ]
 
 [dependency-groups]
 dev = [
+    "pytest>=9.1.1",
     "ruff>=0.11",
+]
+
+[tool.uv]
+# Norfair 2.3 still declares numpy<2 even though the pinned VBVR evaluator is
+# exercised with the project's NumPy 2 stack. Keep the runtime constraint
+# explicit so the evaluator dependencies can be resolved reproducibly.
+override-dependencies = [
+    "numpy==2.4.4",
 ]
 
 [tool.ruff]

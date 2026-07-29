@@ -29,11 +29,27 @@ fish scripts/eval/vbvr/vbvr_generate_score.fish
 fish scripts/convert/dcp_to_diffusers.fish
 ```
 
+`scripts/data/vbvr_pro_pack_hf.py` converts a manifest-selected raw VBVR-Pro
+view into deterministic, lossless WebDataset shards suitable for a Hugging
+Face Dataset repository. It also writes a sanitized source manifest, per-file
+and per-shard checksums, a privacy/credential audit, and a dataset card:
+
+```bash
+.venv/bin/python scripts/data/vbvr_pro_pack_hf.py \
+  --dataset-json data/vbvr_pro/vbvr_pro_rl_indomain_256x256x161_evalkit_6fedd9d9.json \
+  --output-dir storage/hf/vbvr-pro-rl-indomain-50k \
+  --repo-id pufanyi/vbvr-pro-rl-indomain-50k \
+  --license-file /path/to/VBVR-Pro/LICENSE \
+  --expected-samples 50000
+```
+
 Most fish launchers source `scripts/lib/env.fish`, which changes to the repo
 root, activates `.venv`, exports `PYTHONPATH`, and makes matching Python
 development headers available to Triton through `CPATH` when possible. The
-multi-node GRPO launcher also preflights the Triton CUDA driver before loading
-the model.
+multi-node GRPO launcher also reads the selected reward from the config and,
+for `vbvr_rule`, validates the pinned scorer dependencies and OpenCV
+`HoughLinesP` behavior on every node before loading the model. It then
+preflights the Triton CUDA driver.
 
 When a cluster image has Python 3.12 runtime files but no `Python.h`, provision
 the ignored shared toolchain once before submitting the multi-node job:

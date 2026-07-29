@@ -34,6 +34,7 @@ from src.eval.vbvr_run_evaluation_parallel import (
 from src.eval.vbvr_run_evaluation_parallel import (
     evalkit_supported_task_names as _evalkit_supported_task_names,
 )
+from src.eval.vbvr_runtime import validate_vbvr_scorer_runtime
 from src.trainer.rewards.base import BaseReward
 from src.trainer.rewards.registry import register_reward
 
@@ -111,6 +112,7 @@ class VBVRRuleReward(BaseReward):
 
     def __init__(self, trainer, cfg) -> None:
         super().__init__(trainer, cfg)
+        self._runtime_report = validate_vbvr_scorer_runtime()
         self._evalkit = _ensure_evalkit_path(cfg.vbvr_reward_evalkit_dir)
         if str(cfg.vbvr_reward_device).lower() != "cpu":
             raise ValueError("Aligned VBVR-Pro reward requires vbvr_reward_device='cpu'")
@@ -207,10 +209,12 @@ class VBVRRuleReward(BaseReward):
         if trainer.rank == 0:
             logger.info(
                 "VBVR reward aligned with final eval: evalkit={} source_sha256={} "
+                "runtime_sha256={} "
                 "prepared={}x{} max_duration={}s scorer_processes={} threads/process={} "
                 "max_pending_jobs={} delayed_min_pending_jobs={}",
                 self._evalkit,
                 self._evalkit_source_sha256,
+                self._runtime_report["sha256"],
                 cfg.vbvr_reward_prepared_width,
                 cfg.vbvr_reward_prepared_height,
                 cfg.vbvr_reward_max_duration_seconds,

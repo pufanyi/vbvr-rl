@@ -5,10 +5,12 @@ Usage:
 """
 
 import argparse
+import os
 from pathlib import Path
 
 import yaml
 
+from src.eval.vbvr_runtime import validate_vbvr_scorer_runtime
 from src.trainer import DanceGRPOTrainer, RLConfig
 
 
@@ -37,6 +39,13 @@ def main():
             cfg_dict[name] = v
 
     cfg = RLConfig(**cfg_dict)
+    if cfg.grpo_reward_fn == "vbvr_rule":
+        runtime_report = validate_vbvr_scorer_runtime(verify_imports=False)
+        if int(os.environ.get("LOCAL_RANK", "0")) == 0:
+            print(
+                "[preflight] VBVR scorer runtime passed before trainer initialization: "
+                f"sha256={runtime_report['sha256']}"
+            )
     trainer = DanceGRPOTrainer(cfg)
     trainer.train()
 

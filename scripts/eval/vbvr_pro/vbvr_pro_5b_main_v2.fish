@@ -373,6 +373,7 @@ print(evalkit_source_sha256(sys.argv[1]))
         --file preparation_provenance=$PREPARATION_PROVENANCE \
         --file scorer_entrypoint=$EVALKIT_DIR/run_evaluation.py \
         --file scorer_requirements=$EVALKIT_DIR/requirements.txt \
+        --file scorer_runtime=src/eval/vbvr_runtime.py \
         --file easyocr_craft=$EASYOCR_ROOT/model/craft_mlt_25k.pth \
         --file easyocr_english=$EASYOCR_ROOT/model/english_g2.pth \
         --file scorer_wrapper=src/eval/vbvr_run_evaluation_parallel.py \
@@ -471,19 +472,13 @@ if not test -L $evalkit_easyocr_models; or test (realpath $evalkit_easyocr_model
     mv -Tf $temporary_link $evalkit_easyocr_models; or exit 1
 end
 
-$PYTHON -c 'import easyocr, norfair, scipy, skimage' 2>/dev/null
-or _fail "main_v2 dependencies are missing; install norfair and easyocr into .venv before scoring"
-set -g scorer_dependency_versions ($PYTHON -c '
-import importlib.metadata
-import json
-
-packages = ("easyocr", "norfair", "numpy", "opencv-python", "scipy", "scikit-image", "torch")
-print(json.dumps(
-    {name: importlib.metadata.version(name) for name in packages},
-    sort_keys=True,
-    separators=(",", ":"),
-))
-'); or _fail "could not record main_v2 scorer dependency versions"
+set -g scorer_dependency_versions (env \
+    OMP_NUM_THREADS=$SCORE_THREADS_PER_WORKER \
+    MKL_NUM_THREADS=$SCORE_THREADS_PER_WORKER \
+    OPENBLAS_NUM_THREADS=$SCORE_THREADS_PER_WORKER \
+    NUMEXPR_NUM_THREADS=$SCORE_THREADS_PER_WORKER \
+    $PYTHON -m src.eval.vbvr_runtime --json
+); or _fail "main_v2 scorer runtime contract failed; run uv sync --frozen and restart"
 test -n "$scorer_dependency_versions"
 or _fail "main_v2 scorer dependency version record is empty"
 

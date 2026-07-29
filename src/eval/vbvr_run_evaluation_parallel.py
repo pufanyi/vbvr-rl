@@ -46,6 +46,8 @@ from types import ModuleType
 
 from tqdm import tqdm
 
+from src.eval.vbvr_runtime import validate_vbvr_scorer_runtime
+
 _HERE = Path(__file__).resolve()
 _DEFAULT_EVALKIT = _HERE.parents[2] / "third_party" / "VBVR-EvalKit"
 _REQUIRED_EVALKIT_API = (
@@ -209,6 +211,10 @@ def _init_worker(
     if easyocr_module_path:
         os.environ["EASYOCR_MODULE_PATH"] = str(Path(easyocr_module_path).expanduser().resolve())
     _configure_worker_threads(threads_per_worker)
+    # Validate inside the spawned interpreter as well as in the parent. A
+    # package repair cannot replace cv2 already imported by a long-lived
+    # worker, which is exactly how a resumed reward run became contaminated.
+    validate_vbvr_scorer_runtime()
     directory = Path(evalkit_dir).resolve()
     os.chdir(directory)
     _WORKER_REK = _load_evalkit(directory)
@@ -322,6 +328,11 @@ def main() -> int:
     gt_base = args.gt_base.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
     try:
+        runtime_report = validate_vbvr_scorer_runtime()
+    except Exception as exc:
+        print(f"[error] VBVR scorer runtime preflight failed: {exc}", file=sys.stderr)
+        return 1
+    try:
         source_sha256 = evalkit_source_sha256(evalkit_dir)
         if args.expected_evalkit_source_sha256 and source_sha256 != args.expected_evalkit_source_sha256.lower():
             raise RuntimeError(
@@ -339,7 +350,8 @@ def main() -> int:
 
     print(
         f"\n{'=' * 60}\nEvaluating: {model_name}\nPath: {model_path}\n"
-        f"EvalKit source SHA-256: {source_sha256}\n{'=' * 60}"
+        f"EvalKit source SHA-256: {source_sha256}\n"
+        f"Scorer runtime SHA-256: {runtime_report['sha256']}\n{'=' * 60}"
     )
 
     videos = rek.collect_videos(model_path)
