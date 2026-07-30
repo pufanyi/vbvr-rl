@@ -90,6 +90,7 @@ def _parse_duration(stream: dict, payload: dict, frame_count: int, fps: Fraction
 
 def probe_video(path: Path, *, ffprobe: str = "ffprobe") -> VideoInfo:
     """Read dimensions, exact decoded-frame count, frame rate, and duration."""
+    ffprobe = _require_executable(ffprobe)
     command = [
         ffprobe,
         "-v",
@@ -311,8 +312,8 @@ def prepare_video(
         raise ValueError(f"max_duration must be positive, got {max_duration}")
     if not 0 <= crf <= 51:
         raise ValueError(f"crf must be in [0, 51], got {crf}")
-    _require_executable(ffmpeg)
-    _require_executable(ffprobe)
+    ffmpeg = _require_executable(ffmpeg)
+    ffprobe = _require_executable(ffprobe)
     return _prepare_one(
         source,
         output,
@@ -338,9 +339,22 @@ def _discover_mp4s(root: Path, *, exclude: Path | None = None) -> list[Path]:
     return sorted(paths)
 
 
-def _require_executable(command: str) -> None:
-    if shutil.which(command) is None:
-        raise FileNotFoundError(f"Required executable not found: {command}")
+def _require_executable(command: str) -> str:
+    resolved = shutil.which(command)
+    if resolved is not None:
+        return resolved
+
+    if command in {"ffmpeg", "ffprobe"}:
+        try:
+            import ffmpeg_binaries
+
+            bundled = ffmpeg_binaries.FFMPEG_PATH if command == "ffmpeg" else ffmpeg_binaries.FFPROBE_PATH
+            if bundled is not None and bundled.is_file():
+                return str(bundled)
+        except ImportError:
+            pass
+
+    raise FileNotFoundError(f"Required executable not found: {command}")
 
 
 def prepare_videos(
@@ -374,8 +388,8 @@ def prepare_videos(
         raise ValueError(f"workers must be positive, got {workers}")
     if expected_videos is not None and expected_videos < 0:
         raise ValueError(f"expected_videos must be non-negative, got {expected_videos}")
-    _require_executable(ffmpeg)
-    _require_executable(ffprobe)
+    ffmpeg = _require_executable(ffmpeg)
+    ffprobe = _require_executable(ffprobe)
 
     exclude = output_root if output_root.is_relative_to(input_root) else None
     source_paths = _discover_mp4s(input_root, exclude=exclude)

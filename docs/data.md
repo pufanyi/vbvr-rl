@@ -43,6 +43,21 @@ Paths are resolved against `root`, or against the Parquet parent if `root` is ab
 
 The common `collate` stacks tensor fields and keeps `videos` as a list of batched tensors, preserving chain order for COS.[^trainer-utils]
 
+## Local Raw Smoke Fixture
+
+Use the deterministic fixture generator when production media paths are not
+mounted but the complete raw data path still needs validation:
+
+```bash
+.venv/bin/python scripts/dev/create_i2v_smoke_dataset.py \
+  --output-dir storage/smoke/i2v_512x512x81 \
+  --samples 4 --frames 81 --height 512 --width 512 --fps 16
+```
+
+It writes H.264 MP4s, first-frame PNGs, `samples.parquet`, and `dataset.json`
+under the ignored `storage/` tree. The resulting descriptor is consumed by
+`configs/train_dancegrpo_vbvr_pro_5b_512x512x81_official_base_smoke_1gpu.yaml`.[^smoke-data]
+
 ## Latent WebDataset
 
 Latent training uses `VBVRLatentDataset`, an `IterableDataset` over `shard-*.tar` files.[^latent-dataset] Each tar sample contains:
@@ -133,6 +148,23 @@ rebuild it; the generated `SHA256SUMS`, `samples.jsonl`,
 `source_manifest.json`, `dataset_config.json`, and `audit.json` provide the
 integrity and publication audit trail.
 
+The published shards are raw backup assets rather than the latent tensors
+accepted by `latent_webdataset_dir`. Restore the fields required by raw
+training and `vbvr_rule` into an ignored standard VBVR-Pro tree before using
+the local single-node config:
+
+```bash
+.venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
+  --dataset-root storage/datasets/vbvr-pro-rl-indomain-50k \
+  --output-dir storage/datasets/vbvr-pro-rl-indomain-50k/materialized \
+  --expected-samples 50000 --workers 8
+```
+
+The command verifies every newly written field against `samples.jsonl` and
+writes `materialized/dataset.json`. It is resumable and restores only the five
+training/reward-critical fields, requiring about 56.2 GiB in addition to the
+downloaded tar snapshot.
+
 ## Dataset Design Tradeoffs
 
 The current design makes GPU training fast by moving expensive VAE/T5 work offline. The cost is a stricter data contract:
@@ -144,6 +176,7 @@ The current design makes GPU training fast by moving expensive VAE/T5 work offli
 
 [^i2v-dataset]: [`src/data/i2v_dataset.py`](../src/data/i2v_dataset.py)
 [^trainer-utils]: [`src/trainer/utils.py`](../src/trainer/utils.py)
+[^smoke-data]: [`scripts/dev/create_i2v_smoke_dataset.py`](../scripts/dev/create_i2v_smoke_dataset.py)
 [^latent-dataset]: [`src/data/vbvr_latent_dataset.py`](../src/data/vbvr_latent_dataset.py)
 [^maze-reward]: [`src/trainer/rewards/maze.py`](../src/trainer/rewards/maze.py)
 [^base-trainer]: [`src/trainer/base_trainer.py`](../src/trainer/base_trainer.py)

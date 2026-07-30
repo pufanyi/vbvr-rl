@@ -489,6 +489,52 @@ Use the correction launcher for `CorrectionConfig`:
 fish scripts/train/i2v_correction.fish --nproc 8 -- --config configs/train_correction_vbvr.yaml
 ```
 
+### Eight-GPU Manifest-RL Validation
+
+After materializing the public 50k raw snapshot documented in
+[data.md](data.md), run the bounded production-equivalent validation with:
+
+```bash
+WANDB_MODE=disabled WAN_TRAINER_DECORD_NUM_THREADS=1 \
+  fish scripts/train/grpo.fish --nproc 8 -- \
+  --config configs/train_dancegrpo_vbvr_pro_5b_384x384x81_rule_cps_from_nsft_bs_4_lr_1e-6_manifest_rl_local_1node_10step.yaml
+```
+
+This is a real ten-optimizer-step full-FT run: it retains 384x384x81,
+`G=32`, `T=30`, Flow-CPS, online raw T5/VAE encoding, delayed replay, and the
+pinned `vbvr_rule` scorer. The global prompt batch is scaled from 32 on 64
+GPUs to 4 on 8 GPUs, preserving 16 rollouts per rank per optimizer step.
+
+### Single-GPU Official-Base Smoke
+
+When the production VBVR manifest, merged DiffSynth checkpoint, or EvalKit is
+not mounted, use the official 5B smoke config after generating the fixture
+documented in [data.md](data.md#local-raw-smoke-fixture):
+
+```bash
+.venv/bin/torchrun --standalone --nproc_per_node=1 \
+  -m scripts.dev.validate_grpo_parameter_update \
+  --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_official_base_smoke_1gpu.yaml
+```
+
+The validator snapshots all trainable tensors and fails unless the one-step
+run changes at least one parameter. The config retains 512x512x81 raw
+T5/VAE encoding, shared-prompt Flow-CPS, and DanceGRPO replay, but scales to
+LoRA rank 16, `G=2`, `T=2`, and `neg_loss`. It therefore validates plumbing
+and optimization, not the production full-FT/HSDP topology or `vbvr_rule`
+objective.
+
+The merged DiffSynth step-35500 pipeline can be substituted without changing
+the bounded smoke semantics:
+
+```bash
+.venv/bin/torchrun --standalone --nproc_per_node=1 \
+  -m src.cli.train_grpo \
+  --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_official_base_smoke_1gpu.yaml \
+  --model_path storage/models/diffsynth_converted_5b/wan2.2-TI2V-5B_260715_vbvr_pro_step-35500 \
+  --output_dir storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_step35500_smoke_1gpu
+```
+
 ## Key Failure Modes
 
 - `latent_webdataset_dir` without `dataset_size` makes total steps ambiguous and can break scheduling assumptions.
@@ -496,6 +542,8 @@ fish scripts/train/i2v_correction.fish --nproc 8 -- --config configs/train_corre
 - Expert-parallel GRPO needs a sampling schedule that crosses the high/low boundary exactly once.
 - FSDP trainers require all ranks to call the same wrapped module sequence; any per-rank routing divergence can hang.
 - MazeReward is VAE-bound and can become the throughput bottleneck in GRPO.
+- A stochastic `neg_loss` smoke with one rollout per reward call can restore the same forked RNG state for each group member and produce zero advantages. Batch at least two group members in the reward call and use the parameter-update validator above.
+- VBVR scorer workers change their working directory to the pinned EvalKit checkout so its relative annotations remain valid. GT video/image/metadata paths must therefore be absolute at the process boundary; `VBVRRuleReward` resolves existing dataset paths before submission. Bypassing that normalization can make valid generations score exactly zero without a scorer exception because EvalKit treats the now-missing GT files as absent.
 
 [^wan-compute-loss]: [`src/models/wan_i2v.py`](../src/models/wan_i2v.py)
 [^flow-matching]: Lipman et al., "Flow Matching for Generative Modeling", arXiv:2210.02747, https://arxiv.org/abs/2210.02747

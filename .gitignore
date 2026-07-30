@@ -222,3 +222,6 @@ logs/
 tmp/
 
 data/diffsynth_mix/
+
+# Scheduler/product support bundles are large local diagnostics, not source.
+product.lepton-*.tar.gz

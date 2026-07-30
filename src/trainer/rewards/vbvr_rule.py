@@ -600,5 +600,12 @@ class VBVRRuleReward(BaseReward):
         value = self._meta_item(meta, key, index, default=None)
         if value is None:
             return None
-        path = str(value)
-        return path if path and Path(path).exists() else None
+        path = Path(str(value)).expanduser()
+        if not str(value) or not path.exists():
+            return None
+        # Scorer processes chdir into the pinned EvalKit checkout so its
+        # relative annotations resolve exactly as in final evaluation.  A
+        # dataset path that is valid relative to the trainer's cwd would
+        # otherwise become missing in the worker and many evaluators quietly
+        # return a legitimate-looking zero instead of an error.
+        return str(path.resolve())

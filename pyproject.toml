@@ -5,9 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "decord>=0.6.0",
+    "decord2==3.4.0",
     "diffusers[torch]>=0.37.1",
     "easydict>=1.13",
+    "ffmpeg-binaries-compat==1.1.0",
     "ftfy>=6.3.1",
     # VBVR main_v2 scorer runtime. Keep these exact pins synchronized with
     # src/eval/vbvr_runtime.py and the known-good pre-resume W&B snapshot.
@@ -17,9 +18,9 @@ dependencies = [
     "peft>=0.18.1",
     "pydantic>=2.0",
     "regex>=2026.3.32",
-    "torch>=2.11.0",
+    "torch==2.11.0",
     "torchdata>=0.11.0",
-    "torchvision>=0.26.0",
+    "torchvision==0.26.0",
     "transformers>=5.5.4",
     "wandb>=0.25.1",
     "rich>=14.0",
@@ -77,3 +78,12 @@ select = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["wan_trainer"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+torchvision = { index = "pytorch-cu126" }
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true

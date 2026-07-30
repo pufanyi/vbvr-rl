@@ -315,7 +315,10 @@ def test_reward_streams_first_decoded_batch_before_decoding_next(tmp_path: Path)
         reward.close()
 
 
-def test_reward_submit_runs_full_spawned_scorer_pipeline(tmp_path: Path):
+def test_reward_submit_resolves_relative_gt_paths_before_spawned_scorer_chdir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     evalkit = tmp_path / "evalkit"
     _write_fake_evalkit(evalkit)
     source_dir = tmp_path / "gt-sample"
@@ -336,15 +339,16 @@ def test_reward_submit_runs_full_spawned_scorer_pipeline(tmp_path: Path):
     trainer = _trainer()
     trainer.model = DecodeModel()
     reward = VBVRRuleReward(trainer, _config(evalkit, tmp_path))
+    monkeypatch.chdir(tmp_path)
     meta = {
         "sample_task_name": ["fake-task"],
         "sample_prompt": ["video prompt"],
         "sample_id": ["0"],
-        "sample_gt_video_path": [str(gt_video)],
-        "sample_gt_first_frame": [str(gt_first)],
-        "sample_gt_final_frame": [str(gt_final)],
-        "sample_metadata_path": [str(metadata)],
-        "sample_source_dir": [str(source_dir)],
+        "sample_gt_video_path": [str(gt_video.relative_to(tmp_path))],
+        "sample_gt_first_frame": [str(gt_first.relative_to(tmp_path))],
+        "sample_gt_final_frame": [str(gt_final.relative_to(tmp_path))],
+        "sample_metadata_path": [str(metadata.relative_to(tmp_path))],
+        "sample_source_dir": [str(source_dir.relative_to(tmp_path))],
     }
     latents = torch.zeros(1, 1)
     try:

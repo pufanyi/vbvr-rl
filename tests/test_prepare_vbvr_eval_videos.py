@@ -13,8 +13,21 @@ from src.cli.prepare_vbvr_eval_videos import (
     probe_video,
 )
 
-FFMPEG = shutil.which("ffmpeg")
-FFPROBE = shutil.which("ffprobe")
+try:
+    import ffmpeg_binaries
+except ImportError:
+    ffmpeg_binaries = None
+
+
+def _bundled_executable(name: str) -> str | None:
+    if ffmpeg_binaries is None:
+        return None
+    path = getattr(ffmpeg_binaries, name)
+    return str(path) if path is not None else None
+
+
+FFMPEG = shutil.which("ffmpeg") or _bundled_executable("FFMPEG_PATH")
+FFPROBE = shutil.which("ffprobe") or _bundled_executable("FFPROBE_PATH")
 
 
 def _make_video(path: Path, *, frames: int = 161, fps: int = 16, size: str = "80x40") -> None:
