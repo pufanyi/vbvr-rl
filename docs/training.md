@@ -238,6 +238,13 @@ the existing filename spelling for compatibility.
 
 The Fujian 512x512x81 production config enables Liger 0.8.1,
 Diffusers' `_flash_3_hub` attention backend, and in-place Inductor compilation.
+Its `vbvr_rule` reward is pinned to non-public EvalKit `main_v2` revision
+`e140038f2aee76ca518f464755fa8bc19b783ba5`, with scorer-contract SHA-256
+`4cc7d028d4106a28190a63bc179562d5ac9add9263cb71926dd6385c5714bcf8`.
+Checkpoint, W&B, and reward-temp namespaces include `evalkit_e140038f`; never
+auto-resume a run produced under the earlier `6fedd9d9` reward objective into
+this config. The established offline evaluation series remains pinned to
+`6fedd9d9` until it is migrated and re-scored explicitly.
 The official FA3 stable-ABI CUDA 12.6 artifact is pinned to Hub revision
 `43f0bd269777115d94ff826e0d113ce9c1c9087b`. It is a 798,352,256-byte download
 stored under `~/.cache/wan-trainer/kernels`; GRPO runtime initialization loads

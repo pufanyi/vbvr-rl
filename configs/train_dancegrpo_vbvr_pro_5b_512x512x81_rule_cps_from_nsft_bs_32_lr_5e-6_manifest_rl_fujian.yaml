@@ -20,7 +20,7 @@ fps: 16
 shuffle_raw_indices: true
 shuffle_raw_indices_seed: 42
 
-output_dir: storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian
+output_dir: storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian_new_evalkit_e140038f
 resume_from: null
 # Preserve optimizer/step/epoch/dataloader state when auto-resuming this run.
 reset_dataloader: null
@@ -96,8 +96,11 @@ grpo_cfg_scale: 1.0
 dancegrpo_share_group_init_noise: true
 dancegrpo_timestep_selection_ratio: 0.6
 
-vbvr_reward_evalkit_dir: storage/evalkits/vbvr-evalkit-interleave-main_v2-6fedd9d9
-vbvr_reward_evalkit_source_sha256: eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c
+# Exact GitHub main_v2 revision e140038f2aee76ca518f464755fa8bc19b783ba5.
+# The contract fingerprint covers the entrypoint, evaluator Python, bundled
+# annotations, and requirements rather than trusting the checkout name alone.
+vbvr_reward_evalkit_dir: storage/evalkits/vbvr-evalkit-interleave-main_v2-e140038f
+vbvr_reward_evalkit_source_sha256: 4cc7d028d4106a28190a63bc179562d5ac9add9263cb71926dd6385c5714bcf8
 vbvr_reward_easyocr_module_path: storage/evalkits/easyocr-shared
 vbvr_reward_device: cpu
 vbvr_reward_fps: 16
@@ -110,13 +113,14 @@ vbvr_reward_prepared_width: 1024
 vbvr_reward_prepared_height: 1024
 vbvr_reward_max_duration_seconds: 5.0625
 vbvr_reward_prepare_crf: 12
-# EvalKit 6fedd9d9 has a known G-16 metadata-path exception. Preserve the
-# production continuity fallback until that exact evaluator regression is fixed.
+# EvalKit e140038f still references G-16's meta_px after the grid-detection
+# fallback without initializing it. Preserve continuity until that exact
+# evaluator regression is fixed and covered by a GT self-score regression.
 vbvr_reward_fail_on_error: false
 vbvr_reward_task_specific_only: true
-vbvr_reward_tmp_dir: /tmp/wan-trainer/vbvr_pro_5b_512x512x81_rule_reward_cps0p7_from_diffsynth_step35500_lr5e-6_manifest_rl_fujian
+vbvr_reward_tmp_dir: /tmp/wan-trainer/vbvr_pro_5b_512x512x81_rule_reward_cps0p7_from_diffsynth_step35500_lr5e-6_manifest_rl_fujian_evalkit_e140038f
 vbvr_reward_keep_tmp: false
 vbvr_reward_unsupported_score: 0.0
 
 wandb_project: wan-dancegrpo-vbvr-pro-5b
-wandb_run_name: dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian
+wandb_run_name: dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian_evalkit_e140038f
