@@ -77,6 +77,17 @@ set -q WAN_TRAINER_DECORD_NUM_THREADS; or set -gx WAN_TRAINER_DECORD_NUM_THREADS
 # Keep compiler artifacts node-local. The repository and user home may be
 # shared across nodes, while /tmp is private to each scheduler pod.
 set -q TRITON_CACHE_DIR; or set -gx TRITON_CACHE_DIR /tmp/wan-trainer-triton-cache
+# Keep downloaded Hub attention bundles in the persistent user home so they
+# survive scheduler job turnover. Training loads the pinned snapshot offline;
+# prefetch it once on a networked login node before submitting the job.
+if set -q WAN_TRAINER_KERNELS_CACHE; and test -n "$WAN_TRAINER_KERNELS_CACHE"
+    set -gx KERNELS_CACHE $WAN_TRAINER_KERNELS_CACHE
+else
+    # Do not preserve an ambient KERNELS_CACHE: scheduler images may inject an
+    # ephemeral /tmp path that disappears between jobs.
+    set -gx KERNELS_CACHE ~/.cache/wan-trainer/kernels
+end
+echo "[preflight] Persistent attention kernel cache: $KERNELS_CACHE"
 
 # Validate the scorer once on every node before torchrun loads or shards the
 # model. The training process and spawned reward workers repeat this check.

@@ -227,13 +227,71 @@ flush, nonzero learning rate, gradient clipping, and AdamW. It took 220.09
 seconds with reward `0.5524 +/- 0.4138`, grad norm `0.0001`, and peak memory
 `48.7/53.3 GiB` allocated/reserved. This closes the single-node FSDP
 compute/memory path; the production multi-node HSDP topology still needs its
-first launch monitored. The 512 config has not completed a full-FT
-optimizer-step memory smoke.
+first launch monitored.
 
 For controlled 384x384 ablations, the `_lr_5e-6` config changes only the
 learning rate and run namespaces, while the `_no_relay` config disables
 cross-step delayed replay and isolates its run namespaces. The latter preserves
 the existing filename spelling for compatibility.
+
+### Fujian 5B Kernel, Attention, and Compile Validation
+
+The Fujian 512x512x81 production config enables Liger 0.8.1,
+Diffusers' `_flash_3_hub` attention backend, and in-place Inductor compilation.
+The official FA3 stable-ABI CUDA 12.6 artifact is pinned to Hub revision
+`43f0bd269777115d94ff826e0d113ce9c1c9087b`. It is a 798,352,256-byte download
+stored under `~/.cache/wan-trainer/kernels`; GRPO runtime initialization loads
+that exact snapshot with the `kernels` offline locked loader. This avoids both
+the publisher-trust metadata request and version resolution on compute nodes
+without network access. Keep Triton-generated compiler artifacts node-local;
+they are architecture/job-specific and are rebuilt under `/tmp` when needed.
+The launchers deliberately replace an ambient `KERNELS_CACHE` because cluster
+images may inject an ephemeral `/tmp` path; use
+`WAN_TRAINER_KERNELS_CACHE` for an intentional persistent override. Prefetch
+once from a networked login node with
+`.venv/bin/python -m src.cli.prefetch_attention_kernel --backend _flash_3_hub`.
+Root-launched scheduler jobs resolve `~` to `/root`; bake the cache into
+`/root/.cache/wan-trainer/kernels` before saving that image, or set
+`WAN_TRAINER_KERNELS_CACHE` to the shared absolute user-cache path on every
+node.
+
+Wan TI2V-5B contains 120 replaceable `torch.nn.RMSNorm` instances, all Q/K
+normalizers. At the production BF16 shape `(8, 5376, 3072)`, Liger's default
+Triton RMSNorm reduced median forward-plus-backward time from 0.852 ms to
+0.787 ms (about 8%). Liger's optional cuTile backend was within 0.5% of the
+default and its CuTe DSL backend was slower on this H800, so neither optional
+dependency is part of the lock. Do not replace Wan's approximate-GELU FFN,
+custom 3D RoPE, or Diffusers' explicit FP32 LayerNorm with superficially
+similar Liger kernels; those substitutions change model semantics. Diffusers
+QKV fusion is also unsuitable for this full-FT/FSDP/DCP path because it creates
+independent trainable projection parameters while retaining the originals.
+
+For the exact batch-8 Diffusers layouts (24 heads, head dimension 128, self
+sequence 5376 and cross sequence 512), median forward-plus-backward attention
+times on one H800 were 30.680/3.953 ms for native Flash SDPA,
+18.450/3.279 ms for native cuDNN, and 15.537/2.355 ms for FA3 (self/cross).
+Random BF16 forward/backward stress at sequence lengths 5,376, 10,496, and
+21,504 stayed finite for both native Flash and cuDNN. A real 512x512x81
+cuDNN+compile optimizer-step control also stayed finite and exited cleanly in
+324.55 seconds at 44.8/49.9 GiB allocated/reserved. This H800 evidence does not
+invalidate the previously observed model/data-dependent cuDNN low-noise
+backward NaNs on H100/PyTorch 2.11. Production therefore keeps
+`disable_cudnn_sdp: true` and selects FA3 explicitly instead of relying on
+automatic SDPA fallback.
+
+The runnable single-node validation config is
+`configs/train_dancegrpo_vbvr_pro_5b_512x512x81_rule_cps_from_nsft_bs_2_lr_5e-6_manifest_rl_local_1node_3step_fa3_compile.yaml`.
+Batch 2 over eight H800s preserves the production world-128 layout of four
+ranks per prompt and eight `G=32` rollouts per rank. It completed three real
+full-FT optimizer steps with 512x512x81 raw data, T5/VAE, `T=30`, 17 replay
+timesteps, Flow-CPS, VBVR rule scoring, delayed replay, Liger, FA3, and
+Inductor. Step rewards were 0.7101, 0.3520, and 0.6046; gradient norms were
+0.0001, 0.0002, and 0.0002; steps two and three used nonzero learning rates;
+peak memory was 48.9/53.6 GiB allocated/reserved. Step times fell from 351.98
+seconds during cold compilation to 243.65 and 194.13 seconds. The job exited
+zero without NaN, OOM, NCCL, or scorer failures. This validates the exact
+per-rank production compute shape and compiler path, but not the first
+16-node HSDP communication launch.
 
 After changing video encoding, preparation, metadata, or scorer code, run
 `scripts/dev/validate_vbvr_reward_alignment.py` on both a normal geometric

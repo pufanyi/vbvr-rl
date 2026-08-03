@@ -1,33 +1,26 @@
 trainer: dancegrpo
-# Local complete Diffusers pipeline with the DiffSynth step-35500 LoRA merged
-# into the matching Wan2.2 TI2V-5B base.
 model_path: storage/models/diffsynth_converted_5b/wan2.2-TI2V-5B_260715_vbvr_pro_step-35500
 
-# Materialize the already-downloaded public raw snapshot once with:
-# .venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
-#   --dataset-root storage/datasets/vbvr-pro-rl-indomain-50k \
-#   --output-dir storage/datasets/vbvr-pro-rl-indomain-50k/materialized \
-#   --expected-samples 50000 --workers 8
 dataset_json: storage/datasets/vbvr-pro-rl-indomain-50k/materialized/dataset.json
 dataset_size: 50000
 num_frames: 81
 height: 512
 width: 512
 fps: 16
-
-# The restored manifest is task-grouped. Apply a deterministic full-index
-# shuffle before batching so tasks never enter training sequentially.
 shuffle_raw_indices: true
 shuffle_raw_indices_seed: 42
 
-output_dir: storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian
+# Single-node validation of the Fujian world128 config. Batch 2 over world8
+# keeps four ranks per prompt and eight G=32 rollouts per rank, matching the
+# production per-rank rollout/replay shape.
+output_dir: /tmp/wan-trainer/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_fa3_compile_local_1node_3step
 resume_from: null
-# Preserve optimizer/step/epoch/dataloader state when auto-resuming this run.
 reset_dataloader: null
-auto_resume: true
+auto_resume: false
+save_final_checkpoint: false
+save_epoch_checkpoints: false
+max_steps: 3
 
-# Fujian production uses all-rank GRPO on 16 nodes x 8 H800s. All 128 ranks
-# both roll out and train; the scheduler supplies the multi-node topology.
 rl_train_node_count: 0
 rl_train_rank_count: 0
 rl_actor_weight_sync: none
@@ -36,7 +29,7 @@ rl_async_rollout: false
 rl_async_rollout_prefetch_steps: 0
 rl_split_debug_logs: false
 
-batch_size: 32
+batch_size: 2
 gradient_accumulation_steps: 1
 num_epochs: 5
 learning_rate: 5.0e-6
@@ -50,9 +43,7 @@ ema_decay: 0.0
 transformer_load_dtype: float32
 gradient_checkpointing: true
 use_liger_kernel: true
-# The GRPO launcher loads the pinned Hopper FA3 snapshot from the persistent
-# offline kernel cache. Keep cuDNN disabled: its Wan low-noise backward has
-# produced non-finite gradients.
+# Pinned FA3 is loaded offline from KERNELS_CACHE by trainer initialization.
 attention_backend: _flash_3_hub
 disable_cudnn_sdp: true
 torch_compile: true
@@ -63,8 +54,6 @@ num_workers: 2
 prefetch_factor: 2
 persistent_workers: true
 
-# Standard HSDP shards within each eight-H800 node and replicates across the
-# sixteen Fujian nodes.
 fsdp: true
 expert_parallel: false
 hsdp: true
@@ -72,13 +61,8 @@ train_experts: both
 lora_rank: 0
 lora_alpha: 32
 
-# batch_size remains 32 global prompts. One wave of 32 prompts divides world128;
-# each prompt uses four ranks with eight of its G=32 rollouts on each rank. This
-# turns two batch-4 replay chunks per rank into one batch-8 chunk, halving the
-# number of replay backward/HSDP synchronization calls without changing the
-# global prompt or rollout semantics.
 grpo_shared_prompt_batch: true
-grpo_shared_prompt_microbatch_size: 32
+grpo_shared_prompt_microbatch_size: 2
 grpo_delayed_replay: true
 grpo_delayed_replay_clip_range: 1.0e-2
 grpo_group_size: 32
@@ -110,13 +94,11 @@ vbvr_reward_prepared_width: 1024
 vbvr_reward_prepared_height: 1024
 vbvr_reward_max_duration_seconds: 5.0625
 vbvr_reward_prepare_crf: 12
-# EvalKit 6fedd9d9 has a known G-16 metadata-path exception. Preserve the
-# production continuity fallback until that exact evaluator regression is fixed.
 vbvr_reward_fail_on_error: false
 vbvr_reward_task_specific_only: true
-vbvr_reward_tmp_dir: /tmp/wan-trainer/vbvr_pro_5b_512x512x81_rule_reward_cps0p7_from_diffsynth_step35500_lr5e-6_manifest_rl_fujian
+vbvr_reward_tmp_dir: /tmp/wan-trainer/vbvr_pro_5b_512x512x81_fa3_compile_local_1node_3step
 vbvr_reward_keep_tmp: false
 vbvr_reward_unsupported_score: 0.0
 
-wandb_project: wan-dancegrpo-vbvr-pro-5b
-wandb_run_name: dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian
+wandb_project: null
+wandb_run_name: null

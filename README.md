@@ -85,7 +85,26 @@ Runtime-only images often omit `Python.h`; provision the ignored shared
 toolchain once with
 `fish scripts/dev/bootstrap_triton_python_headers.fish`, or preferably install
 the matching `python3.12-dev` package in the image. Triton cache defaults to
-node-local `/tmp/wan-trainer-triton-cache`.
+node-local `/tmp/wan-trainer-triton-cache`. Hub attention binaries are
+different: the GRPO launchers keep them across scheduler jobs under
+`~/.cache/wan-trainer/kernels`. The Fujian FA3 path is pinned to revision
+`43f0bd269777115d94ff826e0d113ce9c1c9087b` and loads that snapshot through
+the offline locked-kernel API, so compute nodes do not need Hub or proxy
+access after the one-time prefetch. Run the download once on a networked login
+node before submitting training:
+
+```bash
+.venv/bin/python -m src.cli.prefetch_attention_kernel --backend _flash_3_hub
+```
+
+The launchers intentionally replace any ambient `KERNELS_CACHE`, because
+scheduler images may inject an ephemeral `/tmp` value. Set
+`WAN_TRAINER_KERNELS_CACHE` only when an explicit persistent override is
+required; the effective absolute path is printed before runtime preflight.
+Remember that `~` follows the runtime user: root-launched jobs default to
+`/root/.cache/wan-trainer/kernels`. Either bake the prefetched cache into that
+path before saving the image, or point `WAN_TRAINER_KERNELS_CACHE` at a shared
+absolute cache such as `/mnt/umm/users/pufanyi/.cache/wan-trainer/kernels`.
 
 ### Cluster-Specific Data Rules
 

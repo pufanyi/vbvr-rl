@@ -20,7 +20,13 @@ from src.trainer.checkpoint_runtime import CheckpointRuntimeMixin
 from src.trainer.config import TrainConfig
 from src.trainer.ema import EMA
 from src.trainer.optimizer import build_optimizer
-from src.trainer.utils import apply_liger_rms_norm, collate, setup_loguru, shard_transformer
+from src.trainer.utils import (
+    apply_liger_rms_norm,
+    collate,
+    prepare_diffusers_attention_backend,
+    setup_loguru,
+    shard_transformer,
+)
 
 
 class BaseTrainer(CheckpointRuntimeMixin):
@@ -243,6 +249,7 @@ class BaseTrainer(CheckpointRuntimeMixin):
     def _configure_model_attention_backend(self, cfg: TrainConfig) -> None:
         if cfg.attention_backend is None:
             return
+        prepare_diffusers_attention_backend(cfg.attention_backend)
         count = 0
         for module in (self.model.transformer, self.model.transformer_2):
             if module is None:

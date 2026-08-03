@@ -1,9 +1,15 @@
+import kernels
 import torch
+from diffusers.models import attention_dispatch
 
 from src.trainer.checkpoint import _extract_pipeline_weights
 from src.trainer.rewards.maze import _as_batched_tensor
 from src.trainer.rewards.maze_line import _goal_region_score, _soft_color_mask
-from src.trainer.utils import collate
+from src.trainer.utils import (
+    collate,
+    prefetch_diffusers_attention_backend,
+    prepare_diffusers_attention_backend,
+)
 
 
 class _PlainModule(torch.nn.Module):
@@ -105,3 +111,76 @@ def test_goal_region_score_uses_goal_cell_window():
     )
 
     assert torch.allclose(score, torch.tensor([0.75]))
+
+
+def test_prepare_diffusers_attention_backend_initializes_lazy_backend(monkeypatch):
+    entered = []
+    kernel_calls = []
+
+    class _BackendContext:
+        def __enter__(self):
+            kernels.get_kernel("kernels-community/flash-attn3", version=1)
+            entered.append("enter")
+
+        def __exit__(self, exc_type, exc, traceback):
+            entered.append("exit")
+
+    def _load_kernel(repo_id, *args, **kwargs):
+        kernel_calls.append((repo_id, args, kwargs))
+
+    monkeypatch.setattr(kernels, "load_kernel", _load_kernel)
+    monkeypatch.setattr(attention_dispatch, "attention_backend", lambda backend: _BackendContext())
+
+    assert prepare_diffusers_attention_backend("_flash_3_hub")
+    assert entered == ["enter", "exit"]
+    assert kernel_calls == [
+        (
+            "kernels-community/flash-attn3",
+            (),
+            {
+                "lockfile": None,
+                "revision": "43f0bd269777115d94ff826e0d113ce9c1c9087b",
+                "backend": None,
+            },
+        )
+    ]
+    assert not prepare_diffusers_attention_backend(None)
+
+
+def test_prepare_diffusers_attention_backend_rejects_unexpected_hub_repository(monkeypatch):
+    class _BackendContext:
+        def __enter__(self):
+            kernels.get_kernel("unexpected/kernel", version=1)
+
+        def __exit__(self, exc_type, exc, traceback):
+            pass
+
+    monkeypatch.setattr(attention_dispatch, "attention_backend", lambda backend: _BackendContext())
+
+    try:
+        prepare_diffusers_attention_backend("_flash_3_hub")
+    except RuntimeError as error:
+        assert "unexpected Hub kernel repository" in str(error)
+    else:
+        raise AssertionError("unexpected Hub kernel repository was trusted")
+
+
+def test_prefetch_diffusers_attention_backend_downloads_pinned_revision(monkeypatch):
+    calls = []
+
+    def _install_kernel(repo_id, **kwargs):
+        calls.append((repo_id, kwargs))
+        return "/persistent/kernel/variant"
+
+    monkeypatch.setattr(kernels, "install_kernel", _install_kernel)
+
+    assert prefetch_diffusers_attention_backend("_flash_3_hub") == "/persistent/kernel/variant"
+    assert calls == [
+        (
+            "kernels-community/flash-attn3",
+            {
+                "revision": "43f0bd269777115d94ff826e0d113ce9c1c9087b",
+                "validate_dependencies": True,
+            },
+        )
+    ]
