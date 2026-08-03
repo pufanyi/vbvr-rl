@@ -43,6 +43,36 @@ The flattened, manifest-matched GT view can be read directly from:
 /mnt/aigc/xujunxiang/VR_Data/VBVR-Bench_Pro-video
 ```
 
+The access-controlled Hugging Face snapshot `pufanyi/vbvr-pro-eval-500`
+revision `181e201076063eb8abbbd9d803f83258472d60a2` is a self-contained
+alternative under `storage/datasets/vbvr-pro-eval-500`. It contains the same
+500 supported samples, a sanitized path-free split manifest, and a complete
+`SHA256SUMS` file. The sanitized manifest SHA-256 is
+`afab352e08c590c9f4b480ef314b37f6896eef6430f42ea6c0ce0494f2aa8c4e`;
+its `dataset_config.json` also records the authoritative source-manifest hash
+`326f7bda3743e9c66dc0c29445661a5dda4ad0cee4cb8838c3fcfd0c4a149deb`.
+Download the pinned revision and verify it before use:
+
+```fish
+hf download pufanyi/vbvr-pro-eval-500 \
+    --repo-type dataset \
+    --revision 181e201076063eb8abbbd9d803f83258472d60a2 \
+    --local-dir storage/datasets/vbvr-pro-eval-500
+cd storage/datasets/vbvr-pro-eval-500
+sha256sum -c SHA256SUMS --quiet
+```
+
+On this workstation, the 2026-08-02 mirror metadata probe was faster, but
+`huggingface_hub.snapshot_download` against `hf-mirror.com` did not receive the
+Hub metadata headers it requires, and anonymous direct mirror downloads later
+hit HTTP 429. Authenticated direct downloads from `huggingface.co` completed
+the pinned snapshot reliably. Prefer the official authenticated endpoint for
+the full snapshot; use the mirror only as a connectivity probe or fallback.
+
+Move Hugging Face's generated local-dir `.cache` outside `GT_BASE` before a
+run so mutable download metadata is not included in the evaluation-source
+provenance fingerprint. The checkpoint sweep below enforces this clean tree.
+
 Generation must use each sample's `video/prompt.txt`; the flattened view's
 `prompt.txt` already contains that prompt. Do not edit any of these shared
 paths. Personal scorer clones and all generated artifacts belong under the
@@ -95,6 +125,108 @@ Latest-scorer outputs default to
 `storage/eval_out/vbvr_pro_main_v2_evalkit_eb977da6/`. Historical results and
 the published Space remain tied to revision `42a1593d`; their scores must not
 be relabeled or mixed with `6fedd9d9` scores.
+
+The Fujian 384x384x81 manifest-RL series has a dedicated all-checkpoint sweep:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_384x384x81_fujian/vbvr_pro_5b_dancegrpo_manifest_rl_fujian_cps0p7_sweep_main_v2.fish
+```
+
+It discovers every complete `checkpoint-N/high/.metadata` under the run,
+generates with 30-step Flow-CPS 0.7 / CFG 1.0 / seed 0, retains all 81 frames
+at exact 16 FPS after 1024x1024 scorer preparation, and fills each wave across
+all eight local GPUs. A checkpoint is complete only after 500 generated and
+prepared videos, 500 error-free scores across 100 tasks, three recomputed
+provenance manifests, the task workbook, and `final_scores.txt` all pass.
+The sweep also writes `checkpoint_scores.tsv` under its output base with the
+Overall, domain, and five category scores.
+
+Evaluate the DiffSynth step-35500 initialization on that exact snapshot with
+its requested 50-step UniPC ODE recipe using:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_384x384x81_fujian/vbvr_pro_5b_dancegrpo_manifest_rl_fujian_initial_unipc_main_v2.fish
+```
+
+This baseline keeps native 384x384x81 generation, CFG 5.0, seed 0, exact 16
+FPS, and the same 1024x1024 all-frame scorer preparation. Its audited
+2026-08-03 rerun on HF revision `181e2010...` scored `0.514934` Overall,
+`0.608369` In-Domain, and `0.421500` Out-of-Domain. All 500 generated and 500
+prepared videos, 500 error-free scores over 100 tasks, workbook, and three
+recomputed provenance stages passed. Keep it separate from the CPS checkpoint
+curve: it is a complete UniPC-50/CFG-5 serving-recipe baseline, not a
+sampler-matched checkpoint-0 ablation.
+
+The 2026-08-03 sweep completed checkpoints 100 through 1400 against the pinned
+HF snapshot and scorer contract. All 14 runs passed the strict audit. Aggregate
+scores were:
+
+| Step | Overall | In-Domain | Out-of-Domain |
+| ---: | ---: | ---: | ---: |
+| 100 | 0.505991 | 0.617560 | 0.394423 |
+| 200 | 0.532319 | 0.646827 | 0.417810 |
+| 300 | 0.532665 | 0.649466 | 0.415864 |
+| 400 | 0.537259 | 0.657328 | 0.417190 |
+| 500 | 0.539255 | 0.667002 | 0.411509 |
+| 600 | 0.541091 | 0.659629 | 0.422553 |
+| 700 | 0.547363 | 0.669679 | 0.425047 |
+| 800 | 0.548401 | 0.674610 | 0.422192 |
+| 900 | 0.548897 | 0.676404 | 0.421390 |
+| 1000 | 0.553764 | 0.680293 | 0.427235 |
+| 1100 | 0.556831 | 0.682909 | 0.430754 |
+| **1200** | **0.557430** | **0.687768** | 0.427093 |
+| 1300 | 0.556404 | 0.684874 | 0.427933 |
+| 1400 | 0.557272 | 0.682538 | **0.432006** |
+
+Checkpoint 1200 is the best Overall/ID point estimate, while checkpoint 1400
+is best OOD. Overall improves by `+0.051439` from step 100 to 1200 and then
+plateaus. A paired 100-task bootstrap with 100,000 resamples puts the
+step-1200-minus-step-1400 Overall difference (`+0.000158`) at a 95% interval
+of `[-0.010245, +0.011591]`, so do not claim that the top two are meaningfully
+separated. Use step 1200 as the default Overall/ID selection and step 1400 only
+when the OOD point estimate is the primary target.
+
+Against the UniPC initialization recipe, checkpoint 100 CPS is `-0.008943`
+Overall with a paired 100-task 95% bootstrap interval of
+`[-0.037543, +0.019823]`. Checkpoint 1200 CPS is `+0.042496` Overall,
+`+0.079399` In-Domain, and `+0.005592` Out-of-Domain; its Overall interval is
+`[+0.010640, +0.074736]` with 63 task means improved, 2 tied, and 35
+regressed. These comparisons include the decoding-policy change and therefore
+do not isolate the effect of RL weights.
+
+Run the same model series with direct native 512x512x81 generation using the
+fixed-resolution entry points:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_384x384x81_fujian/vbvr_pro_5b_dancegrpo_manifest_rl_fujian_initial_unipc_512x512_main_v2.fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_384x384x81_fujian/vbvr_pro_5b_dancegrpo_manifest_rl_fujian_cps0p7_512x512_sweep_main_v2.fish
+```
+
+The audited 2026-08-03 native-512 rerun completed the initialization and all
+14 checkpoints with 7,500 generated videos, 7,500 prepared videos, 7,500
+error-free scores, and 45 independently recomputed provenance manifests.
+Checkpoint 1100 is the best Overall point estimate at `0.592322`; checkpoint
+1300 is best In-Domain at `0.725404`, and checkpoint 600 is best Out-of-Domain
+at `0.466747`. The UniPC initialization scores `0.548310` Overall, `0.664182`
+In-Domain, and `0.432439` Out-of-Domain. Checkpoint 1100 improves over that
+serving-recipe baseline by `+0.044012` Overall, with a paired 100-task,
+100,000-resample 95% interval of `[+0.019310, +0.069940]` and 64/5/31
+improved/tied/regressed task means. Checkpoints 1100 and 1300 remain
+statistically indistinguishable: their Overall difference is `+0.000403`,
+with interval `[-0.006153, +0.006701]`.
+
+Native 512 improves Overall over native 384 for the initialization and every
+RL checkpoint. Across the 14 same-checkpoint comparisons, the gain ranges
+from `+0.031715` to `+0.050747` and averages `+0.037926`. For checkpoint 1100,
+the 512-minus-384 delta is `+0.035491`, with paired-task 95% interval
+`[+0.016061, +0.055661]`. The complete curve, resolution table, bootstrap
+comparisons, and audit are under
+`storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_evalkit_eb977da6/`.
+
+This native-512 comparison intentionally keeps each model's requested serving
+recipe: UniPC-50/CFG-5 for the initialization and CPS-30/CFG-1 for the RL
+checkpoints. It supports an end-to-end model-selection conclusion, not a
+sampler-matched causal claim about weights alone.
 
 Keep the 1024x1024 scorer resize for future runs. On checkpoint-1200, the
 overall score was 0.447580 for 1024x1024x161, 0.445539 for unmodified
