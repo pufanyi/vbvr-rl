@@ -22,10 +22,11 @@ shuffle_raw_indices_seed: 42
 
 output_dir: storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian_new
 resume_from: null
-reset_dataloader: true
+# Preserve optimizer/step/epoch/dataloader state when auto-resuming this run.
+reset_dataloader: null
 auto_resume: true
 
-# Fujian production uses all-rank GRPO on 8 nodes x 8 H800s. All 64 ranks
+# Fujian production uses all-rank GRPO on 16 nodes x 8 H800s. All 128 ranks
 # both roll out and train; the scheduler supplies the multi-node topology.
 rl_train_node_count: 0
 rl_train_rank_count: 0
@@ -55,7 +56,7 @@ prefetch_factor: 2
 persistent_workers: true
 
 # Standard HSDP shards within each eight-H800 node and replicates across the
-# eight Fujian nodes.
+# sixteen Fujian nodes.
 fsdp: true
 expert_parallel: false
 hsdp: true
@@ -63,17 +64,20 @@ train_experts: both
 lora_rank: 0
 lora_alpha: 32
 
-# batch_size remains 32 global prompts. Two waves of 16 prompts divide world64;
-# each prompt uses four ranks with eight of its G=32 rollouts on each rank.
+# batch_size remains 32 global prompts. One wave of 32 prompts divides world128;
+# each prompt uses four ranks with eight of its G=32 rollouts on each rank. This
+# turns two batch-4 replay chunks per rank into one batch-8 chunk, halving the
+# number of replay backward/HSDP synchronization calls without changing the
+# global prompt or rollout semantics.
 grpo_shared_prompt_batch: true
-grpo_shared_prompt_microbatch_size: 16
+grpo_shared_prompt_microbatch_size: 32
 grpo_delayed_replay: true
 grpo_delayed_replay_clip_range: 1.0e-2
 grpo_group_size: 32
-grpo_sample_batch_size: 32
-grpo_train_sample_batch_size: 4
+grpo_sample_batch_size: 8
+grpo_train_sample_batch_size: 8
 grpo_fsdp_sync_each_backward: true
-grpo_offload_inference_models: true
+grpo_offload_inference_models: false
 grpo_num_sampling_steps: 30
 grpo_clip_range: 1.0e-4
 grpo_kl_coeff: 0

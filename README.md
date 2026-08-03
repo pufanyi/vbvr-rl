@@ -39,8 +39,8 @@ portable between clusters.
 | Typical node | 8 x 80-GiB H100 | 8 x 80-GiB H800 |
 | Repository path seen in jobs | `/mnt/umm/users/pufanyi/workspace/Wan-Trainer` | `/mnt/umm/users/pufanyi/projects/Wan-Trainer` |
 | VBVR-Pro data | Read-only private manifest and raw trees under `/mnt/aigc/...` and `/mnt/umm/users/xujunxiang/...` | Public `pufanyi/vbvr-pro-rl-indomain-50k` snapshot restored under `storage/datasets/vbvr-pro-rl-indomain-50k/materialized` |
-| Production config | `configs/train_dancegrpo_vbvr_pro_5b_384x384x81_rule_cps_from_nsft_bs_32_lr_1e-6_manifest_rl.yaml` | `configs/train_dancegrpo_vbvr_pro_5b_384x384x81_rule_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_fujian.yaml` |
-| Multi-node topology | Scheduler-driven HSDP; node count varies by job | Current production job is 8 nodes x 8 GPUs, world size 64 |
+| Production config | `configs/train_dancegrpo_vbvr_pro_5b_384x384x81_rule_cps_from_nsft_bs_32_lr_1e-6_manifest_rl.yaml` | `configs/train_dancegrpo_vbvr_pro_5b_512x512x81_rule_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_fujian.yaml` |
+| Multi-node topology | Scheduler-driven HSDP; node count varies by job | Current production job is 16 nodes x 8 GPUs, world size 128 |
 | Local validation | Eight-H100 production-shape runs recorded in `docs/training.md` | `configs/train_dancegrpo_vbvr_pro_5b_384x384x81_rule_cps_from_nsft_bs_4_lr_1e-6_manifest_rl_local_1node_10step.yaml` |
 | Shared/local storage | `/mnt/umm` is shared; use node-local `/tmp` for disposable work | `/mnt/umm` is QuarkFS; `/tmp` is node-local container storage |
 
@@ -169,12 +169,12 @@ Flow-CPS with nonzero reward at every step (`0.4437` to `0.6467`, mean
 `0.5589`), gradient norms `0.0001` to `0.0002`, and a 25.7/28.4-GiB
 allocated/reserved peak.
 
-The same fix is also active in the Fujian world-64 job. As of 2026-07-30, its
+The same fix was also active in the earlier Fujian world-64 384x384 job. As of 2026-07-30, its
 first 19 optimizer steps all had nonzero reward (`0.5102` to `0.6924`) with a
 53.3/58.2-GiB allocated/reserved peak. This is strong early-run evidence, not a
-claim that the still-running job has completed. A new multi-node topology
-should still be monitored through its first optimizer step before committing
-to a long run.
+claim about the current world-128 512x512 job. A new multi-node topology should
+still be monitored through its first optimizer step before committing to a long
+run.
 
 Resume semantics also matter across clusters. `auto_resume: true` combined with
 `reset_dataloader: true` loads the latest checkpoint as weight-only
