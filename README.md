@@ -159,9 +159,12 @@ exactly zero without raising an exception.
 For VBVR reward work, keep generated/prepared temporary videos and Triton
 artifacts under `/tmp`, not QuarkFS. `vbvr_reward_cpu_workers` is per
 reward-producing rank, so multiply it by eight to estimate the node-wide
-process/thread budget. The 5B manifest configs use two workers x eight native
-threads per rank. Point `WANDB_DIR` at a writable run-local directory when the
-shared repository's `wandb/` ownership is unsuitable.
+process/thread budget. Most 5B manifest configs use two workers x eight native
+threads per rank. The Fujian 512x512x81 world128 config instead uses four x
+four, doubling concurrent samples while preserving the same 128-thread nominal
+node budget; validate `reward_drain` before propagating that tuning. Point
+`WANDB_DIR` at a writable run-local directory when the shared repository's
+`wandb/` ownership is unsuitable.
 
 ### Reward-Zero Triage and Validated Boundaries
 

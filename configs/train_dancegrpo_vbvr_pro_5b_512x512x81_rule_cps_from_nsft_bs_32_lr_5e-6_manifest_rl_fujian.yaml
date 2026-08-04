@@ -106,8 +106,11 @@ vbvr_reward_device: cpu
 vbvr_reward_fps: 16
 vbvr_reward_decode_batch_size: 8
 vbvr_reward_max_pending_jobs: 16
-vbvr_reward_cpu_workers: 2
-vbvr_reward_cpu_threads_per_worker: 8
+# Each rank owns eight rollout rewards. Four scorer processes drain them in
+# two waves while keeping the node-wide native-thread budget at 8 ranks x
+# 4 workers x 4 threads = 128.
+vbvr_reward_cpu_workers: 4
+vbvr_reward_cpu_threads_per_worker: 4
 vbvr_reward_use_process_pool: true
 vbvr_reward_prepared_width: 1024
 vbvr_reward_prepared_height: 1024

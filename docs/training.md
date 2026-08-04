@@ -156,11 +156,14 @@ prompt, GT directory, and metadata file and invokes the exact
 Scoring happens in spawned CPU workers with CUDA hidden. This is required for
 EasyOCR tasks and also prevents evaluator imports from inheriting training-GPU
 state. `vbvr_reward_cpu_workers` counts processes per reward-producing rank;
-keep the node-wide native-thread budget bounded when increasing it. The 5B
+keep the node-wide native-thread budget bounded when increasing it. Most 5B
 manifest-RL configs use two processes with eight threads each per rank after
 that layout outperformed one process with 16 threads on a 50-task benchmark;
-other standard configs may retain one x 16 per rank (or per TP pair). EvalKit
-errors, non-finite scores, and scores outside `[0, 1]` stop training by default.
+the Fujian 512x512x81 world128 config uses four x four to double concurrent
+samples under the same nominal node budget and must be validated through
+matched `reward_drain` measurements before wider adoption. Other standard
+configs may retain one x 16 per rank (or per TP pair). EvalKit errors,
+non-finite scores, and scores outside `[0, 1]` stop training by default.
 
 `vbvr_rule` is a bounded producer-consumer pipeline. The training thread
 decodes each `vbvr_reward_decode_batch_size` chunk and immediately queues its
