@@ -32,7 +32,7 @@ set -lx TEMPORAL_ALIGNMENT 4
 set -lx INFER_FPS 16
 
 set -q OUTPUT_ROOT[1]
-or set -lx OUTPUT_ROOT storage/eval_out/vbvr_pro_main_v2_evalkit_eb977da6/diffsynth_step35500-unipc-50steps-cfg5-512x512-gt-duration-fps16
+or set -lx OUTPUT_ROOT storage/eval_out/vbvr_pro_main_v2_evalkit_4cc7d028/diffsynth_step35500-unipc-50steps-cfg5-512x512-gt-duration-fps16
 set -q GENERATED_DIR[1]
 or set -lx GENERATED_DIR $OUTPUT_ROOT/generated_512x512_gt_duration_fps16
 set -q PREPARED_DIR[1]

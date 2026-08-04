@@ -16,9 +16,9 @@ or set CHECKPOINT_ROOT storage/checkpoints/dancegrpo_vbvr_pro_5b_256x256x161_rul
 set -q SPLIT_MANIFEST[1]
 or set SPLIT_MANIFEST /mnt/aigc/xujunxiang/Code/VBVR-Pro/scripts/split_manifest.json
 set -q EVALKIT_REV[1]
-or set EVALKIT_REV 6fedd9d9edb8daafa56aca8e53885aa8ad6f6037
+or set EVALKIT_REV e140038f2aee76ca518f464755fa8bc19b783ba5
 set -q EVALKIT_SOURCE_SHA256[1]
-or set EVALKIT_SOURCE_SHA256 eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c
+or set EVALKIT_SOURCE_SHA256 4cc7d028d4106a28190a63bc179562d5ac9add9263cb71926dd6385c5714bcf8
 test -f $SPLIT_MANIFEST; or _fail "split manifest does not exist: $SPLIT_MANIFEST"
 set -g _strict_manifest_sha256 (sha256sum $SPLIT_MANIFEST | awk '{print $1}')
 set -g _strict_manifest_sha256_prefix (string sub -s 1 -l 8 -- $_strict_manifest_sha256)
@@ -26,7 +26,7 @@ set -g _strict_evalkit_sha256_prefix (string sub -s 1 -l 8 -- $EVALKIT_SOURCE_SH
 set -q OUTPUT_BASE[1]
 or set OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_indomain_strict_manifest_$_strict_manifest_sha256_prefix"_evalkit_"$_strict_evalkit_sha256_prefix
 set -q STRICT_EVAL_LOG_DIR[1]
-or set STRICT_EVAL_LOG_DIR storage/eval_logs/vbvr_pro_main_v2_indomain_strict
+or set STRICT_EVAL_LOG_DIR storage/eval_logs/vbvr_pro_main_v2_indomain_strict_evalkit_4cc7d028
 set -q STRICT_REEVALUATE_COMPLETE[1]
 or set STRICT_REEVALUATE_COMPLETE 0
 

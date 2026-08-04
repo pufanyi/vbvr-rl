@@ -71,11 +71,11 @@ if not set -q WAN_TRAINER_VBVR_EVAL_DATA_VERIFIED[1]
 end
 
 set -q EVALKIT_REV[1]
-or set -lx EVALKIT_REV 6fedd9d9edb8daafa56aca8e53885aa8ad6f6037
+or set -lx EVALKIT_REV e140038f2aee76ca518f464755fa8bc19b783ba5
 set -q EVALKIT_SOURCE_SHA256[1]
-or set -lx EVALKIT_SOURCE_SHA256 eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c
+or set -lx EVALKIT_SOURCE_SHA256 4cc7d028d4106a28190a63bc179562d5ac9add9263cb71926dd6385c5714bcf8
 set -q EVALKIT_DIR[1]
-or set -lx EVALKIT_DIR storage/evalkits/vbvr-evalkit-interleave-main_v2-6fedd9d9
+or set -lx EVALKIT_DIR storage/evalkits/vbvr-evalkit-interleave-main_v2-e140038f
 set -q EASYOCR_ROOT[1]
 or set -lx EASYOCR_ROOT storage/evalkits/easyocr-shared
 set -q EASYOCR_SOURCE_MODELS[1]
@@ -88,7 +88,7 @@ or set -lx WIDTH 384
 set -l native_shape "$HEIGHT"x"$WIDTH"x81
 
 set -q OUTPUT_BASE[1]
-or set -l OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_$native_shape"_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_evalkit_eb977da6"
+or set -l OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_$native_shape"_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028"
 set -q OUTPUT_ROOT[1]
 or set -lx OUTPUT_ROOT $OUTPUT_BASE/dancegrpo_vbvr_pro_5b_checkpoint-$CHECKPOINT_STEP-cps-noise-0.7
 set -q GENERATED_DIR[1]

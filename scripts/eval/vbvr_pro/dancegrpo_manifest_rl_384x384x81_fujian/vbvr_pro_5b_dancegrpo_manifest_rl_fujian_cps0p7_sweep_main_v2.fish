@@ -24,9 +24,9 @@ or set -gx GT_BASE (realpath storage/datasets/vbvr-pro-eval-500)
 set -q SPLIT_MANIFEST[1]
 or set -gx SPLIT_MANIFEST $GT_BASE/split_manifest.json
 set -q EVALKIT_REV[1]
-or set -gx EVALKIT_REV 6fedd9d9edb8daafa56aca8e53885aa8ad6f6037
+or set -gx EVALKIT_REV e140038f2aee76ca518f464755fa8bc19b783ba5
 set -q EVALKIT_SOURCE_SHA256[1]
-or set -gx EVALKIT_SOURCE_SHA256 eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c
+or set -gx EVALKIT_SOURCE_SHA256 4cc7d028d4106a28190a63bc179562d5ac9add9263cb71926dd6385c5714bcf8
 set -q EASYOCR_ROOT[1]
 or set -gx EASYOCR_ROOT storage/evalkits/easyocr-shared
 set -q EASYOCR_SOURCE_MODELS[1]
@@ -37,9 +37,9 @@ set -q WIDTH[1]
 or set -gx WIDTH 384
 set -g _fujian_native_shape "$HEIGHT"x"$WIDTH"x81
 set -q EVAL_LOG_DIR[1]
-or set -g EVAL_LOG_DIR storage/eval_logs/vbvr_pro_main_v2_$_fujian_native_shape"_manifest_rl_fujian_cps0p7"
+or set -g EVAL_LOG_DIR storage/eval_logs/vbvr_pro_main_v2_$_fujian_native_shape"_manifest_rl_fujian_cps0p7_evalkit_4cc7d028"
 set -q OUTPUT_BASE[1]
-or set -gx OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_$_fujian_native_shape"_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_evalkit_eb977da6"
+or set -gx OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_$_fujian_native_shape"_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028"
 set -q CONVERTED_BASE[1]
 or set -g CONVERTED_BASE storage/models/dcp_converted_5b
 

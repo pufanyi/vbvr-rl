@@ -24,7 +24,7 @@ set -lx GUIDANCE_SCALE 1.0
 set -lx SEED 0
 
 set -q OUTPUT_ROOT[1]
-or set -lx OUTPUT_ROOT storage/eval_out/vbvr_pro_main_v2_evalkit_eb977da6/diffsynth_step35500-cps0p7-30steps-cfg1-reward1024-fps32
+or set -lx OUTPUT_ROOT storage/eval_out/vbvr_pro_main_v2_evalkit_4cc7d028/diffsynth_step35500-cps0p7-30steps-cfg1-reward1024-fps32
 set -q PREPARED_DIR[1]
 or set -lx PREPARED_DIR $OUTPUT_ROOT/eval_1024x1024_161f_fps32_5p03125s
 set -q SCORE_DIR[1]

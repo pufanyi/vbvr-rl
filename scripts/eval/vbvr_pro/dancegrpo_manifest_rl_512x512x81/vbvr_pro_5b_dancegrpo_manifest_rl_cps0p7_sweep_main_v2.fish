@@ -19,12 +19,12 @@ or _fail "launcher does not exist: $_manifest_rl_sweep_launcher"
 set -q CHECKPOINT_ROOT[1]
 or set -gx CHECKPOINT_ROOT storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_1e-6_manifest_rl_evalkit_6fedd9d9_reward1024_fps16_8_nodes
 set -q EVAL_LOG_DIR[1]
-or set -g EVAL_LOG_DIR storage/eval_logs/vbvr_pro_main_v2_512x512x81_manifest_rl_cps0p7
+or set -g EVAL_LOG_DIR storage/eval_logs/vbvr_pro_main_v2_512x512x81_manifest_rl_cps0p7_evalkit_4cc7d028
 set -g _manifest_rl_sweep_log_dir $EVAL_LOG_DIR
 mkdir -p $_manifest_rl_sweep_log_dir
 or _fail "could not create log directory: $_manifest_rl_sweep_log_dir"
 set -q OUTPUT_BASE[1]
-or set -gx OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_manifest_326f7bda_evalkit_eb977da6
+or set -gx OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_manifest_326f7bda_evalkit_4cc7d028
 set -g _manifest_rl_sweep_output_base $OUTPUT_BASE
 
 set -l first_wave_steps 100 200 300 400

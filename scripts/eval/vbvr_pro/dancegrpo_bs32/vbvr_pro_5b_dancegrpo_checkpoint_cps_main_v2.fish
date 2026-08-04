@@ -20,6 +20,6 @@ set -lx GENERATION_MODE cps
 set -lx NUM_INFERENCE_STEPS 30
 set -lx GUIDANCE_SCALE 1.0
 set -q OUTPUT_ROOT[1]
-or set -lx OUTPUT_ROOT storage/eval_out/vbvr_pro_main_v2_evalkit_eb977da6/dancegrpo_vbvr_pro_5b_checkpoint-$CHECKPOINT_STEP-cps-noise-$CPS_NOISE_LEVEL
+or set -lx OUTPUT_ROOT storage/eval_out/vbvr_pro_main_v2_evalkit_4cc7d028/dancegrpo_vbvr_pro_5b_checkpoint-$CHECKPOINT_STEP-cps-noise-$CPS_NOISE_LEVEL
 
 exec fish (dirname (status filename))/vbvr_pro_5b_dancegrpo_checkpoint_main_v2.fish $argv

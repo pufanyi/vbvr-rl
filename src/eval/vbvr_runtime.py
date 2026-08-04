@@ -17,7 +17,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-VBVR_SCORER_RUNTIME_CONTRACT = "vbvr-main-v2-6fedd9d9-runtime-v1"
+VBVR_SCORER_RUNTIME_CONTRACT = "vbvr-main-v2-e140038f-runtime-v1"
 EXPECTED_VBVR_SCORER_DISTRIBUTIONS: dict[str, str] = {
     "easyocr": "1.7.2",
     "imageio": "2.37.3",
@@ -43,7 +43,7 @@ def _hough_lines_p_layout(cv2_module: Any, numpy_module: Any) -> tuple[str, tupl
     """Exercise the array layout relied on by O-18/O-19.
 
     OpenCV 4.13 returns ``(N, 1, 4)`` here. OpenCV 5.0 changed the Python
-    binding to ``(N, 4)``, while EvalKit 6fedd9d9 still indexes ``line[0][2]``.
+    binding to ``(N, 4)``, while EvalKit e140038f still indexes ``line[0][2]``.
     """
     mask = numpy_module.zeros((64, 64), dtype=numpy_module.uint8)
     cv2_module.line(mask, (8, 8), (56, 56), 255, 2)
