@@ -207,5 +207,6 @@
 - Use targeted tests for the touched surface. Useful CPU tests include `tests/test_cos_path.py`, `tests/test_dancegrpo_split.py`, `tests/test_i2v_trainer.py`, `tests/test_vbvr_latent_dataset.py`, and `tests/test_trainer_utils.py`.
 - This repo's `.venv` may not have dev tools installed until needed. Install with `uv pip install --python .venv/bin/python <package>` when a missing local test tool blocks verification.
 - `pyproject.toml` uses Python >=3.12, `uv.lock`, and Ruff line length 120. Keep reusable Python logic under `src/`; scripts should stay thin launchers or operator utilities.
+- `src/trainer/rewards/vbvr_vlm_eval_prompts.py` is source-byte pinned by `EVAL_PROMPTS_SOURCE_SHA256` and its test. Keep its Ruff `E501` and formatter exclusions in `pyproject.toml`; do not format or hand-edit it. Regenerate it intentionally and update the pinned hash plus documentation together when the rubric source changes.
 - When adding a reward, create a `BaseReward` subclass, decorate it with `@register_reward("name")`, import the module in `src/trainer/rewards/__init__.py`, and set `grpo_reward_fn` in the YAML.
 - When changing data schema, latent precompute, condition construction, checkpoint remapping, or distributed routing, add or update focused tests. These areas silently break expensive runs if only checked manually.

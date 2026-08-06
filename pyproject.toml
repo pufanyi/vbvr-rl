@@ -84,6 +84,12 @@ select = [
 [tool.ruff.lint.isort]
 known-first-party = ["wan_trainer"]
 
+[tool.ruff.lint.per-file-ignores]
+"src/trainer/rewards/vbvr_vlm_eval_prompts.py" = ["E501"]
+
+[tool.ruff.format]
+exclude = ["src/trainer/rewards/vbvr_vlm_eval_prompts.py"]
+
 [tool.uv.sources]
 torch = { index = "pytorch-cu126" }
 torchvision = { index = "pytorch-cu126" }

@@ -18,23 +18,12 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.eval.evaluation_provenance import verify_recorded_manifest  # noqa: E402
 
-DEFAULT_ROOT = Path(
-    "storage/eval_out/"
-    "vbvr_pro_main_v2_indomain_strict_manifest_326f7bda"
-)
-DEFAULT_OUTPUT = Path(
-    "storage/reports/cps_ode_evalkit_report/"
-    "checkpoint600_metrics.json"
-)
-RESULT_RELATIVE_PATH = Path(
-    "scores_evalkit_eb977da6/"
-    "eval_1024x1024_161f_5s_vbvr_results.json"
-)
+DEFAULT_ROOT = Path("storage/eval_out/vbvr_pro_main_v2_indomain_strict_manifest_326f7bda")
+DEFAULT_OUTPUT = Path("storage/reports/cps_ode_evalkit_report/checkpoint600_metrics.json")
+RESULT_RELATIVE_PATH = Path("scores_evalkit_eb977da6/eval_1024x1024_161f_5s_vbvr_results.json")
 PROVENANCE_NAME = "score-provenance-evalkit-eb977da6.json"
 EXPECTED_EVALKIT_REVISION = "6fedd9d9edb8daafa56aca8e53885aa8ad6f6037"
-EXPECTED_EVALKIT_SOURCE_SHA256 = (
-    "eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c"
-)
+EXPECTED_EVALKIT_SOURCE_SHA256 = "eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c"
 
 RUNS = {
     "unipc_ode": {
@@ -90,15 +79,9 @@ def _load_scored_run(root: Path, spec: dict[str, object]) -> dict[str, object]:
     provenance = json.loads(provenance_path.read_text())
     values = provenance["values"]
     if values.get("evalkit_revision_actual") != EXPECTED_EVALKIT_REVISION:
-        raise RuntimeError(
-            f"{spec['label']}: unexpected EvalKit revision "
-            f"{values.get('evalkit_revision_actual')}"
-        )
+        raise RuntimeError(f"{spec['label']}: unexpected EvalKit revision {values.get('evalkit_revision_actual')}")
     if values.get("evalkit_source_sha256") != EXPECTED_EVALKIT_SOURCE_SHA256:
-        raise RuntimeError(
-            f"{spec['label']}: unexpected EvalKit contract hash "
-            f"{values.get('evalkit_source_sha256')}"
-        )
+        raise RuntimeError(f"{spec['label']}: unexpected EvalKit contract hash {values.get('evalkit_source_sha256')}")
     recorded_result = provenance["output_files"]["result"]["path"]
     if recorded_result != str(result_path.resolve()):
         raise RuntimeError(f"{spec['label']}: provenance is bound to another result file")
@@ -180,9 +163,7 @@ def main() -> int:
         comparisons[baseline_name] = {
             "overall_delta": cps["scores"]["overall"] - baseline["scores"]["overall"],
             "in_domain_delta": cps["scores"]["in_domain"] - baseline["scores"]["in_domain"],
-            "out_of_domain_delta": (
-                cps["scores"]["out_of_domain"] - baseline["scores"]["out_of_domain"]
-            ),
+            "out_of_domain_delta": (cps["scores"]["out_of_domain"] - baseline["scores"]["out_of_domain"]),
             "task_bootstrap": _bootstrap_task_delta(
                 cps["task_scores"],
                 baseline["task_scores"],
@@ -194,9 +175,7 @@ def main() -> int:
     for run in runs.values():
         scores = run["scores"]
         historical = run["historical_scores"]
-        run["scorer_migration_delta"] = {
-            key: scores[key] - historical[key] for key in scores
-        }
+        run["scorer_migration_delta"] = {key: scores[key] - historical[key] for key in scores}
 
     payload = {
         "schema_version": 1,

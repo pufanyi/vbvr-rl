@@ -535,9 +535,7 @@ def main() -> None:
                     "baseline_score": baseline_score["score"],
                     "candidate_score": candidate_score["score"],
                     "delta": candidate_score["score"] - baseline_score["score"],
-                    "baseline_dimensions": json.dumps(
-                        baseline_score["dimensions"], ensure_ascii=False, sort_keys=True
-                    ),
+                    "baseline_dimensions": json.dumps(baseline_score["dimensions"], ensure_ascii=False, sort_keys=True),
                     "candidate_dimensions": json.dumps(
                         candidate_score["dimensions"], ensure_ascii=False, sort_keys=True
                     ),

@@ -145,7 +145,7 @@ def test_shared_prompt_microbatch_is_bounded_by_dp_size():
             grpo_shared_prompt_batch=True,
             batch_size=8,
             grpo_shared_prompt_microbatch_size=4,
-        )
+        ),
     )
 
     assert trainer.dp_size == 4

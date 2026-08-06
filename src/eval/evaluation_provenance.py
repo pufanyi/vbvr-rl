@@ -168,8 +168,7 @@ def verify_recorded_manifest(
         return False, f"unsupported provenance schema in {source}: {manifest.get('schema_version')!r}"
     if expected_stage is not None and manifest.get("stage") != expected_stage:
         return False, (
-            f"provenance stage mismatch in {source}: "
-            f"expected={expected_stage!r}, actual={manifest.get('stage')!r}"
+            f"provenance stage mismatch in {source}: expected={expected_stage!r}, actual={manifest.get('stage')!r}"
         )
     values = manifest.get("values")
     if not isinstance(values, dict):

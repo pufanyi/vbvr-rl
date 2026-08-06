@@ -679,9 +679,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
                 if self.device.type == "cuda":
                     torch.cuda.reset_peak_memory_stats(self.device)
                 self._grpo_force_delayed_replay_flush = bool(
-                    cfg.grpo_delayed_replay
-                    and epoch_batch_count is not None
-                    and batch_idx >= epoch_batch_count - 1
+                    cfg.grpo_delayed_replay and epoch_batch_count is not None and batch_idx >= epoch_batch_count - 1
                 )
                 try:
                     metrics = self._grpo_step(batch)
@@ -691,8 +689,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
                 if metrics.pop("_skip_optimizer_step", False):
                     if self.rank == 0:
                         logger.info(
-                            "Delayed replay prefill at optimizer_step={} prepare={:.2f}s; "
-                            "no optimizer update yet.",
+                            "Delayed replay prefill at optimizer_step={} prepare={:.2f}s; no optimizer update yet.",
                             global_step,
                             metrics.get("delayed_current_prepare_seconds", 0.0),
                         )

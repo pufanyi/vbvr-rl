@@ -52,8 +52,7 @@ def _load_pipeline(args: Any, device: torch.device, rank: int):
     flow_shift = install_flowmatch_euler_scheduler(pipe)
     if rank == 0:
         print(
-            "Using FlowMatchEulerDiscreteScheduler "
-            f"(deterministic first-order Euler, flow shift={flow_shift:g}).",
+            f"Using FlowMatchEulerDiscreteScheduler (deterministic first-order Euler, flow shift={flow_shift:g}).",
             flush=True,
         )
     return pipe

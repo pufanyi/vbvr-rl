@@ -127,8 +127,7 @@ def validate_vbvr_scorer_runtime(
         else:
             if hough_layout != "N,1,4":
                 errors.append(
-                    "cv2.HoughLinesP returned an EvalKit-incompatible layout: "
-                    f"expected (N, 1, 4), found {hough_shape}"
+                    f"cv2.HoughLinesP returned an EvalKit-incompatible layout: expected (N, 1, 4), found {hough_shape}"
                 )
 
     imported_modules: dict[str, str] = {}

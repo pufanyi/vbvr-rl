@@ -113,9 +113,7 @@ def test_generate_reports(tmp_path: Path) -> None:
     task_score = next(cps_trend_book["Task Scores"].iter_rows(min_row=2, max_row=2, values_only=True))
     assert task_score[:3] == ("In-Domain", "Abstraction", "G-1_task")
     assert task_score[3:] == approx((0.5, 0.6))
-    baseline_delta = next(
-        cps_trend_book["Delta vs Baseline"].iter_rows(min_row=2, max_row=2, values_only=True)
-    )
+    baseline_delta = next(cps_trend_book["Delta vs Baseline"].iter_rows(min_row=2, max_row=2, values_only=True))
     assert baseline_delta[3:] == approx((0.1,))
     task_summary = next(cps_trend_book["Task Summary"].iter_rows(min_row=2, max_row=2, values_only=True))
     assert task_summary[3:9] == approx((0.5, 0.6, 300, 0.1, 0.6, 0.1))

@@ -56,8 +56,11 @@ def _classify_run(name: str) -> tuple[str, int | None, str, float | None]:
     match = DANCE_RUN_RE.fullmatch(name)
     if match:
         noise = match.group("noise")
-        return "DanceGRPO", int(match.group("step")), "CPS" if noise is not None else "ODE", (
-            float(noise) if noise is not None else None
+        return (
+            "DanceGRPO",
+            int(match.group("step")),
+            "CPS" if noise is not None else "ODE",
+            (float(noise) if noise is not None else None),
         )
     if name.startswith("sft_"):
         return "SFT", None, "ODE", None
@@ -174,8 +177,7 @@ def discover_runs(
     scorer_hashes = {run.evalkit_source_sha256 for run in runs}
     if len(scorer_hashes) > 1:
         raise ValueError(
-            "Refusing to mix VBVR-Pro results from multiple scorer fingerprints: "
-            + ", ".join(sorted(scorer_hashes))
+            "Refusing to mix VBVR-Pro results from multiple scorer fingerprints: " + ", ".join(sorted(scorer_hashes))
         )
     return runs, skipped
 
