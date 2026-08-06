@@ -222,6 +222,21 @@ fish scripts/train/grpo.fish --nproc 8 --config configs/train_grpo_maze.yaml
 fish scripts/train/grpo.fish --nproc 8 --config configs/train_dancegrpo_maze.yaml
 fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8
 
+# Co-host a Qwen3.6 VLM judge per node, then run the standard scheduler
+# contract (MASTER_ADDR/WORLD_SIZE/RANK) for a three-step smoke.
+fish scripts/train/grpo_vlm_eval_multinode.fish --nproc 8 --config \
+  configs/train_dancegrpo_vbvr_pro_5b_384x384x81_vlm_qwen36_smoke_1node_3step.yaml
+
+# WORLD_SIZE=4/8/16: four local TP2 judge replicas per node.
+fish scripts/train/grpo_vlm_eval_cluster.fish \
+  --yaml=configs/train_dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml \
+  --max_steps 1 --save_steps 0 --no-save_final_checkpoint --no-auto_resume
+
+# Lower-pressure native-384 variant.
+fish scripts/train/grpo_vlm_eval_cluster.fish \
+  --yaml=configs/train_dancegrpo_vbvr_pro_5b_384x384x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml \
+  --max_steps 1 --save_steps 0 --no-save_final_checkpoint --no-auto_resume
+
 # Single-node A14B full fine-tuning: TP2 x FSDP4, global prompt batch 16.
 fish scripts/train/grpo.fish --nproc 8 --config \
   configs/train_dancegrpo_vbvr_pro_a14b_256x256x161_rule_cps_from_sft_diffsynth_mix_260603_bs_16_lr_1e-5_full_tp2_fsdp4.yaml
@@ -230,6 +245,10 @@ fish scripts/train/grpo.fish --nproc 8 --config \
 # Run the same command on every scheduler node with WORLD_SIZE=4 and RANK=0..3.
 fish scripts/train/dancegrpo_vbvr_pro_a14b_full_tp2_4node.fish
 ```
+
+The VLM co-hosting design, isolated vLLM environment, Qwen model download,
+reward contract, and true multi-node vLLM alternatives are documented in
+[`docs/vlm_judge_reward.md`](docs/vlm_judge_reward.md).
 
 Single-GPU official Wan2.2-TI2V-5B end-to-end smoke:
 

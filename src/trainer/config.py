@@ -1,5 +1,6 @@
 """Training configuration."""
 
+import math
 from typing import Literal
 
 from pydantic import BaseModel, field_validator, model_validator
@@ -387,7 +388,7 @@ class RLConfig(TrainConfig):
             raise ValueError(
                 "batch_size must be divisible by grpo_shared_prompt_microbatch_size, got "
                 f"{self.batch_size} % {self.grpo_shared_prompt_microbatch_size}"
-        )
+            )
         if self.grpo_delayed_replay and not self.grpo_shared_prompt_batch:
             raise ValueError("grpo_delayed_replay requires grpo_shared_prompt_batch=true")
         return self
@@ -438,6 +439,112 @@ class RLConfig(TrainConfig):
     maze_tracker_reward_w_onpath: float = 0.25
     maze_tracker_reward_w_goal: float = 0.25
     maze_tracker_reward_w_progress: float = 0.15
+
+    # ------------------------------------------------------------------
+    # Standalone VLM judge reward (grpo_reward_fn: "vbvr_vlm")
+    # ------------------------------------------------------------------
+    # The launcher may override endpoint/model/key through WAN_TRAINER_VLM_*.
+    vlm_reward_base_url: str = "http://127.0.0.1:18080/v1"
+    vlm_reward_model: str = "qwen3.6-27b"
+    vlm_reward_api_key: str = "EMPTY"
+    # task_specific selects the pinned 100-task EvalKit-derived prompt map.
+    # custom preserves the generic start/final/generated-frame contract below.
+    vlm_reward_prompt_mode: Literal["task_specific", "custom"] = "task_specific"
+    # Custom-mode prompt overrides. A text file takes precedence over the
+    # inline value; when both are absent, the generic in-repo prompt is used.
+    vlm_reward_system_prompt: str | None = None
+    vlm_reward_system_prompt_path: str | None = None
+    vlm_reward_num_frames: int = 6
+    vlm_reward_include_gt_first_frame: bool = True
+    vlm_reward_decode_batch_size: int = 1
+    vlm_reward_concurrency: int = 2
+    # Maximum decoded samples waiting for service responses per scoring rank.
+    # Zero selects max(decode_batch_size, 2*concurrency).
+    vlm_reward_max_pending_jobs: int = 0
+    vlm_reward_request_timeout_seconds: float = 180.0
+    vlm_reward_max_retries: int = 2
+    vlm_reward_retry_backoff_seconds: float = 1.0
+    vlm_reward_max_new_tokens: int = 1024
+    # This is a downscale-only safety bound, not a target resize. A generated
+    # frame at or below the bound is JPEG-encoded at its native resolution.
+    vlm_reward_image_max_edge: int = 512
+    vlm_reward_jpeg_quality: int = 85
+    vlm_reward_score_max: float = 100.0
+    # Fixed JSON-schema output is available only in custom mode; task-specific
+    # prompts have distinct exact line-oriented schemas.
+    vlm_reward_use_structured_output: bool = False
+    vlm_reward_validate_service: bool = True
+    vlm_reward_fail_on_error: bool = True
+    vlm_reward_error_score: float = 0.0
+    vlm_reward_log_first_n: int = 2
+
+    @field_validator(
+        "vlm_reward_num_frames",
+        "vlm_reward_decode_batch_size",
+        "vlm_reward_concurrency",
+        "vlm_reward_max_new_tokens",
+        "vlm_reward_image_max_edge",
+    )
+    @classmethod
+    def _validate_positive_vlm_reward_integer_fields(cls, v: int):
+        if v <= 0:
+            raise ValueError(f"VLM reward positive integer fields must be > 0, got {v}")
+        return v
+
+    @field_validator("vlm_reward_max_pending_jobs", "vlm_reward_max_retries", "vlm_reward_log_first_n")
+    @classmethod
+    def _validate_nonnegative_vlm_reward_integer_fields(cls, v: int):
+        if v < 0:
+            raise ValueError(f"VLM reward nonnegative integer fields must be >= 0, got {v}")
+        return v
+
+    @field_validator("vlm_reward_request_timeout_seconds", "vlm_reward_score_max")
+    @classmethod
+    def _validate_positive_vlm_reward_float_fields(cls, v: float):
+        if not math.isfinite(v) or v <= 0:
+            raise ValueError(f"VLM reward positive float fields must be > 0, got {v}")
+        return v
+
+    @field_validator("vlm_reward_retry_backoff_seconds")
+    @classmethod
+    def _validate_nonnegative_vlm_reward_backoff(cls, v: float):
+        if not math.isfinite(v) or v < 0:
+            raise ValueError(f"vlm_reward_retry_backoff_seconds must be >= 0, got {v}")
+        return v
+
+    @field_validator("vlm_reward_jpeg_quality")
+    @classmethod
+    def _validate_vlm_reward_jpeg_quality(cls, v: int):
+        if not 1 <= v <= 100:
+            raise ValueError(f"vlm_reward_jpeg_quality must be in [1, 100], got {v}")
+        return v
+
+    @field_validator("vlm_reward_error_score")
+    @classmethod
+    def _validate_vlm_reward_error_score(cls, v: float):
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(f"vlm_reward_error_score must be in [0, 1], got {v}")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_vlm_reward_service_configuration(self):
+        if self.grpo_reward_fn != "vbvr_vlm":
+            return self
+        if not self.vlm_reward_base_url.strip():
+            raise ValueError("grpo_reward_fn='vbvr_vlm' requires vlm_reward_base_url")
+        if not self.vlm_reward_model.strip():
+            raise ValueError("grpo_reward_fn='vbvr_vlm' requires vlm_reward_model")
+        if self.vlm_reward_prompt_mode == "task_specific":
+            if not self.vlm_reward_include_gt_first_frame:
+                raise ValueError("task-specific VLM prompts require vlm_reward_include_gt_first_frame=true")
+            if not math.isclose(self.vlm_reward_score_max, 100.0, rel_tol=0.0, abs_tol=1e-9):
+                raise ValueError("task-specific VLM prompts require vlm_reward_score_max=100")
+            if self.vlm_reward_use_structured_output:
+                raise ValueError(
+                    "task-specific VLM prompts use per-task line schemas and require "
+                    "vlm_reward_use_structured_output=false"
+                )
+        return self
 
     # ------------------------------------------------------------------
     # VBVR rule reward (grpo_reward_fn: "vbvr_rule")

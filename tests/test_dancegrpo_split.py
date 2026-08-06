@@ -477,6 +477,28 @@ def test_flowcps_transition_matches_coefficients_preserving_formula():
     assert torch.allclose(mean, expected_mean)
 
 
+def test_predicted_clean_latent_pins_expand_timestep_first_frame():
+    sample = torch.tensor(
+        [[[[[0.4, -0.2]], [[0.1, 0.3]]], [[[0.8, -0.6]], [[-0.4, 0.2]]]]],
+        dtype=torch.bfloat16,
+    )
+    model_output = torch.full_like(sample, 0.5)
+    cond_first_frame = torch.tensor([[[[[1.25, -1.5]]], [[[0.75, -0.25]]]]], dtype=torch.bfloat16)
+
+    pred_x0 = WanI2VForTraining._predicted_clean_latent(
+        sample,
+        model_output,
+        sigma=0.6,
+        cond_first_frame=cond_first_frame,
+    )
+    unpinned = sample.float() - 0.6 * model_output.float()
+
+    assert pred_x0.dtype is torch.float32
+    assert torch.equal(pred_x0[:, :, 0:1], cond_first_frame.float())
+    assert torch.allclose(pred_x0[:, :, 1:], unpinned[:, :, 1:])
+    assert not torch.equal(pred_x0[:, :, 0:1], unpinned[:, :, 0:1])
+
+
 def test_flowcps_transition_supports_per_sample_noise_levels():
     sample = torch.tensor([0.4, 0.4], dtype=torch.float32).reshape(2, 1, 1, 1, 1)
     model_output = torch.tensor([0.5, 0.5], dtype=torch.float32).reshape(2, 1, 1, 1, 1)

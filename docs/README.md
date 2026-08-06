@@ -10,7 +10,8 @@ This directory documents the current Wan-Trainer codebase from source, not from 
 4. [Evaluation](evaluation.md) explains inference, VBVR generation, VLM scoring, and rule scoring.
 5. [VBVR-Pro main_v2 Evaluation](vbvr_pro_eval.md) documents the current 5B eight-GPU generation, video preparation, and rule-scoring workflow.
 6. [Checkpoints](checkpoints.md) explains the unified high/low DCP layout, EMA, LoRA sidecars, and resume semantics.
-7. [Improvements](improvements/README.md) lists algorithm, data, training-systems, and engineering improvements.
+7. [Qwen3.6 vLLM Judge Reward](vlm_judge_reward.md) explains standalone serving, VLM reward requests, GPU co-hosting, and multi-node topologies.
+8. [Improvements](improvements/README.md) lists algorithm, data, training-systems, and engineering improvements.
 
 ## Current System Summary
 

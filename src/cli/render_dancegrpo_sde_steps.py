@@ -137,7 +137,12 @@ def _generate_dancegrpo_sde_z0_predictions(
                 model_output.to(torch.float32) - uncond_output.to(torch.float32)
             )
 
-        z0 = latent.to(torch.float32) - sigma * model_output.to(torch.float32)
+        z0 = model._predicted_clean_latent(
+            latent,
+            model_output,
+            sigma,
+            cond_first_frame=cond_first_frame,
+        )
         z0_predictions.append(z0.detach().cpu())
         sigma_values.append(sigma)
         timesteps.append(timestep_val)

@@ -60,10 +60,13 @@ def save_step_contact_sheet(
     *,
     frame_count: int = 5,
     thumb_width: int = 160,
+    step_labels: list[str] | None = None,
 ) -> None:
     """One row per step; a few evenly-spaced frames per row."""
     if not videos:
         return
+    if step_labels is not None and len(step_labels) != len(videos):
+        raise ValueError(f"Expected {len(videos)} step labels, got {len(step_labels)}")
 
     total_frames = videos[0].shape[0]
     frame_indices = (
@@ -85,7 +88,8 @@ def save_step_contact_sheet(
     draw = ImageDraw.Draw(sheet)
     for row, video in enumerate(videos):
         y = pad + row * (thumb_height + label_h + pad)
-        draw.text((pad, y), f"s{row:02d}", fill=(0, 0, 0))
+        label = step_labels[row] if step_labels is not None else f"step {row + 1:02d}"
+        draw.text((pad, y), label, fill=(0, 0, 0))
         for col, frame_idx in enumerate(frame_indices):
             frame = Image.fromarray(video[frame_idx]).resize((thumb_width, thumb_height), Image.Resampling.BILINEAR)
             x = pad + col * (thumb_width + pad)
@@ -104,10 +108,13 @@ def save_step_grid_video(
     fps: int,
     cols: int,
     thumb_width: int,
+    step_labels: list[str] | None = None,
 ) -> None:
     """Tile every step's preview into one grid video (one cell per step)."""
     if not videos:
         return
+    if step_labels is not None and len(step_labels) != len(videos):
+        raise ValueError(f"Expected {len(videos)} step labels, got {len(step_labels)}")
 
     from diffusers.utils import export_to_video
 
@@ -129,13 +136,23 @@ def save_step_grid_video(
             row, col = divmod(step_idx, cols)
             x = pad + col * (thumb_width + pad)
             y = pad + row * (thumb_height + label_h + pad)
-            draw.text((x + 2, y), f"step {step_idx:02d}", fill=(0, 0, 0))
+            label = step_labels[step_idx] if step_labels is not None else f"step {step_idx + 1:02d}"
+            draw.text((x + 2, y), label, fill=(0, 0, 0))
             frame = Image.fromarray(video[frame_idx]).resize((thumb_width, thumb_height), Image.Resampling.BILINEAR)
             canvas.paste(frame, (x, y + label_h))
         frames.append(canvas)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     export_to_video(frames, str(path), fps=fps)
+
+
+def _step_preview_labels(result: StepwiseResult) -> list[str]:
+    """Human-facing one-based labels for the rendered clean trajectory."""
+    count = len(result.pred_x0)
+    labels = [f"{idx + 1:02d}/{count:02d} x0 s={result.sigmas[idx]:.3f}" for idx in range(count)]
+    if labels:
+        labels[-1] = f"{count:02d}/{count:02d} final s=0"
+    return labels
 
 
 # ----------------------------------------------------------------------
@@ -167,20 +184,41 @@ def write_outputs(
 
     # ---- per-step z0 previews (member 0) ----
     grid_path = contact_path = None
+    step_previews: list[dict[str, Any]] = []
     if cfg.save_steps and result.pred_x0:
         step_videos: list[np.ndarray] = []
+        step_labels = _step_preview_labels(result)
         for step_idx, z0 in enumerate(result.pred_x0):
             step_path = out_dir / f"step_{step_idx:02d}.mp4"
-            video = decode_latents_to_uint8(model, z0.to(device))
+            is_final = step_idx == len(result.pred_x0) - 1
+            preview_latent = result.final_latent if is_final else z0
+            video = decode_latents_to_uint8(model, preview_latent.to(device))
             export_uint8_video(video, step_path, cfg.fps)
             step_videos.append(video)
             written["steps"].append(str(step_path))
+            step_previews.append(
+                {
+                    "display_step": step_idx + 1,
+                    "file_index": step_idx,
+                    "kind": "final_latent" if is_final else "predicted_clean_x0",
+                    "source_sigma": result.sigmas[step_idx],
+                    "output_sigma": 0.0,
+                    "file": str(step_path),
+                }
+            )
             if device.type == "cuda":
                 torch.cuda.empty_cache()
         grid_path = out_dir / "steps_grid.mp4"
         contact_path = out_dir / "step_contact_sheet.jpg"
-        save_step_grid_video(step_videos, grid_path, fps=cfg.fps, cols=cfg.grid_cols, thumb_width=cfg.grid_thumb_width)
-        save_step_contact_sheet(step_videos, contact_path)
+        save_step_grid_video(
+            step_videos,
+            grid_path,
+            fps=cfg.fps,
+            cols=cfg.grid_cols,
+            thumb_width=cfg.grid_thumb_width,
+            step_labels=step_labels,
+        )
+        save_step_contact_sheet(step_videos, contact_path, step_labels=step_labels)
 
     # ---- final videos (all batch members) ----
     finals = decode_batch_to_uint8(model, result.final_latent.to(device))
@@ -209,6 +247,12 @@ def write_outputs(
         "fps": cfg.fps,
         "output_dir": str(out_dir),
         "outputs": written,
+        "step_preview_semantics": (
+            "Steps 1..T-1 decode the post-CFG predicted-clean x0 at source_sigma; "
+            "step T decodes the actual final latent at sigma=0. expand_timesteps "
+            "previews keep latent frame zero pinned to the input condition."
+        ),
+        "step_previews": step_previews,
         "grid": str(grid_path) if grid_path is not None else None,
         "contact_sheet": str(contact_path) if contact_path is not None else None,
     }

@@ -524,6 +524,8 @@ Current rewards:
 
 - `neg_loss`: a model-internal negative flow-matching loss against GT. It supports expert filtering and runs dummy FSDP forwards when no sample routes to an expert.[^neg-loss]
 - `maze`: VAE-decodes generated latents, detects the ball by RGB distance, and combines trajectory, on-path, and goal rewards. It requires `maze_*` metadata from the latent dataset and forces the VAE to load even in precomputed-latent training.[^maze-reward]
+- `vbvr_rule`: the pinned task-specific VBVR-Pro EvalKit reward described above.[^vbvr-rule]
+- `vbvr_vlm`: VAE-decodes bounded preview frames and asynchronously submits the exact task-specific evaluator rubric, input first frame, and generated frames to a standalone OpenAI-compatible service. Its dynamic regex validates each rubric's distinct output fields.[^vbvr-vlm]
 
 ## Practical Launch Notes
 
@@ -540,7 +542,16 @@ Use the GRPO launcher for DanceGRPO:
 fish scripts/train/grpo.fish --nproc 8 --config configs/train_grpo_maze.yaml
 fish scripts/train/grpo.fish --nproc 8 --config configs/train_dancegrpo_maze.yaml
 fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8
+fish scripts/train/grpo_vlm_eval_multinode.fish --nproc 8 --config \
+  configs/train_dancegrpo_vbvr_pro_5b_384x384x81_vlm_qwen36_smoke_1node_3step.yaml
 ```
+
+The VLM launcher keeps the standard scheduler environment while starting one
+node-local Qwen endpoint and cleaning it up after training. The cluster wrapper
+detects 4/8/16 nodes and defaults each endpoint to DP4 x TP2, whereas the
+generic wrapper keeps standalone DP1 x TP8 unless overridden. See
+[`vlm_judge_reward.md`](vlm_judge_reward.md) for the service topology and why
+the default 50% vLLM memory budget is not a hard GPU partition.
 
 For the four-node full-FT A14B TP2 run, use the fixed wrapper on every node.
 It requires `WORLD_SIZE=4`, maps 32 ranks to DP16 x TP2, overrides the local
@@ -637,6 +648,7 @@ the bounded smoke semantics:
 [^neg-loss]: [`src/trainer/rewards/neg_loss.py`](../src/trainer/rewards/neg_loss.py)
 [^maze-reward]: [`src/trainer/rewards/maze.py`](../src/trainer/rewards/maze.py)
 [^vbvr-rule]: [`src/trainer/rewards/vbvr_rule.py`](../src/trainer/rewards/vbvr_rule.py)
+[^vbvr-vlm]: [`src/trainer/rewards/vbvr_vlm.py`](../src/trainer/rewards/vbvr_vlm.py)
 [^vbvr-prepare]: [`src/cli/prepare_vbvr_eval_videos.py`](../src/cli/prepare_vbvr_eval_videos.py)
 [^vbvr-eval-wrapper]: [`src/eval/vbvr_run_evaluation_parallel.py`](../src/eval/vbvr_run_evaluation_parallel.py)
 [^vbvr-alignment-validator]: [`scripts/dev/validate_vbvr_reward_alignment.py`](../scripts/dev/validate_vbvr_reward_alignment.py)

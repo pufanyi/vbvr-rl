@@ -1,9 +1,10 @@
 #!/usr/bin/env fish
 
-# Evaluate one checkpoint from the Fujian 384x384x81 manifest-RL run on the
-# complete 500-sample VBVR-Pro bench. Generation uses the training rollout
-# policy (30-step Flow-CPS 0.7, CFG 1.0, seed 0) at the requested native
-# inference resolution and exact 16-FPS playback.
+# Evaluate one checkpoint from the Fujian manifest-RL run on the complete
+# 500-sample VBVR-Pro bench. The default remains the training rollout policy
+# (30-step Flow-CPS 0.7, CFG 1.0, seed 0), while callers may select another
+# CPS coefficient or a matched 30-step Euler/UniPC ODE through environment
+# variables. This keeps all non-sampler evaluation settings identical.
 
 source (dirname (status filename))/../../../lib/env.fish
 
@@ -87,10 +88,30 @@ set -q WIDTH[1]
 or set -lx WIDTH 384
 set -l native_shape "$HEIGHT"x"$WIDTH"x81
 
+set -q GENERATION_MODE[1]
+or set -lx GENERATION_MODE cps
+set -q ODE_SOLVER[1]
+or set -lx ODE_SOLVER unipc
+set -q CPS_NOISE_LEVEL[1]
+or set -lx CPS_NOISE_LEVEL 0.7
+contains -- $GENERATION_MODE cps ode
+or _fail "GENERATION_MODE must be cps or ode: $GENERATION_MODE"
+contains -- $ODE_SOLVER euler unipc
+or _fail "ODE_SOLVER must be euler or unipc: $ODE_SOLVER"
+
+set -l sampler_label
+if test "$GENERATION_MODE" = cps
+    .venv/bin/python -c 'import sys; x=float(sys.argv[1]); raise SystemExit(0 if 0 <= x <= 1 else 1)' $CPS_NOISE_LEVEL
+    or _fail "CPS_NOISE_LEVEL must be in [0, 1]: $CPS_NOISE_LEVEL"
+    set sampler_label cps-noise-$CPS_NOISE_LEVEL
+else
+    set sampler_label $ODE_SOLVER-ode-30steps-cfg1
+end
+
 set -q OUTPUT_BASE[1]
 or set -l OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_$native_shape"_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028"
 set -q OUTPUT_ROOT[1]
-or set -lx OUTPUT_ROOT $OUTPUT_BASE/dancegrpo_vbvr_pro_5b_checkpoint-$CHECKPOINT_STEP-cps-noise-0.7
+or set -lx OUTPUT_ROOT $OUTPUT_BASE/dancegrpo_vbvr_pro_5b_checkpoint-$CHECKPOINT_STEP-$sampler_label
 set -q GENERATED_DIR[1]
 or set -lx GENERATED_DIR $OUTPUT_ROOT/generated_$native_shape
 set -q PREPARED_DIR[1]
@@ -98,8 +119,6 @@ or set -lx PREPARED_DIR $OUTPUT_ROOT/eval_1024x1024_81f_fps16_5p0625s
 set -q SCORE_DIR[1]
 or set -lx SCORE_DIR $OUTPUT_ROOT/scores
 
-set -lx GENERATION_MODE cps
-set -lx CPS_NOISE_LEVEL 0.7
 set -lx NUM_INFERENCE_STEPS 30
 set -lx GUIDANCE_SCALE 1.0
 set -lx SEED 0

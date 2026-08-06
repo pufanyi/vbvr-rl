@@ -12,6 +12,7 @@ from src.trainer.rewards import maze_line as _maze_line  # noqa: F401  — regis
 from src.trainer.rewards import maze_tracker as _maze_tracker  # noqa: F401  — register side-effect
 from src.trainer.rewards import neg_loss as _neg_loss  # noqa: F401  — register side-effect
 from src.trainer.rewards import vbvr_rule as _vbvr_rule  # noqa: F401  — register side-effect
+from src.trainer.rewards import vbvr_vlm as _vbvr_vlm  # noqa: F401  — register side-effect
 from src.trainer.rewards.base import BaseReward
 from src.trainer.rewards.registry import build_reward, list_rewards, register_reward
 

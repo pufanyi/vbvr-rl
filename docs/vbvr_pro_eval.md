@@ -127,9 +127,73 @@ Latest-scorer outputs default to
 to `42a1593d` or `6fedd9d9` keep their original paths; their scores must not be
 relabeled or mixed with `e140038f` scores.
 
-The formal current evaluation for the Fujian manifest-RL checkpoint series
-generates native 512x512x81 video, then resizes/pads every frame to the
-1024x1024 scorer canvas while retaining all 81 frames at exact 16 FPS:
+The formal evaluation for the native-512 Fujian run trained against the e140
+reward uses its matching rollout policy and an isolated converted-model
+namespace:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/vbvr_pro_5b_dancegrpo_manifest_rl_fujian_new_e140_cps0p7_sweep_main_v2.fish
+```
+
+This targets
+`dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian_new_evalkit_e140038f`,
+discovers every complete DCP checkpoint, and generates native 512x512x81 with
+30-step Flow-CPS 0.7 / CFG 1.0 / seed 0. It then resizes/pads every frame to
+the 1024x1024 scorer canvas while preserving all 81 frames at exact 16 FPS.
+
+The 2026-08-06 run completed checkpoints 100--800. All 4,000 generated videos,
+4,000 prepared videos, and 4,000 finite scores completed without errors; every
+checkpoint contained 500 samples over 100 tasks with the expected 250/250
+domain split. All 24 generation/preparation/score provenance manifests passed
+both the launcher's strict audit and a separate full recomputation. One native
+and prepared pair per checkpoint also passed a physical media probe.
+
+The sampler-matched step-0 baseline is the merged DiffSynth step-35500
+initialization, evaluated with the same Flow-CPS-30/0.7, CFG-1, seed-0,
+512x512x81, exact-16-FPS, and e140 contract:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/vbvr_pro_5b_diffsynth_step35500_baseline_cps0p7_main_v2.fish
+```
+
+Its additional 500 generated videos, 500 prepared videos, and 500 finite scores
+completed without errors. All three provenance manifests passed the launcher
+audit and a separate full recomputation, and the native/prepared media probe
+confirmed 512/1024 square, 81 frames, exact 16 FPS, and 5.0625 seconds:
+
+| Step | Overall | Delta vs baseline | In-Domain | Out-of-Domain |
+| ---: | ---: | ---: | ---: | ---: |
+| Baseline | 0.472177 | -- | 0.628099 | 0.316256 |
+| 100 | 0.481617 | +0.009440 | 0.634598 | 0.328637 |
+| 200 | 0.490144 | +0.017967 | 0.645314 | 0.334975 |
+| 300 | 0.500188 | +0.028011 | 0.666405 | 0.333972 |
+| 400 | 0.509672 | +0.037495 | 0.673760 | 0.345585 |
+| 500 | 0.512673 | +0.040495 | 0.673658 | 0.351688 |
+| 600 | 0.518889 | +0.046711 | 0.679263 | 0.358515 |
+| **700** | **0.523973** | **+0.051795** | **0.682113** | **0.365832** |
+| 800 | 0.519987 | +0.047810 | 0.676687 | 0.363287 |
+
+Checkpoint 100 already improves Overall over the sampler-matched baseline by
+`+0.009440`; a paired 100-task, 100,000-resample bootstrap gives a 95% interval
+of `[+0.002448, +0.017438]`. Checkpoint 700 is the best Overall, In-Domain,
+and Out-of-Domain point estimate. Its Overall gain over baseline is `+0.051795`
+with interval `[+0.032053, +0.072562]`; its In-Domain and Out-of-Domain gains
+are `+0.054014` and `+0.049576`, with intervals
+`[+0.031450, +0.079340]` and `[+0.017611, +0.082936]`. Its five category point
+estimates all improve over baseline, led by Spatiality `+0.084247` and
+Perception `+0.075632`.
+
+Checkpoint 700's `+0.005084` lead over checkpoint 600 has interval
+`[-0.001573, +0.012038]`, and its `+0.003986` lead over checkpoint 800 has
+interval `[-0.003360, +0.011956]`. Select checkpoint 700 when one point
+estimate is required, but treat checkpoints 600--800 as a statistically tied
+late plateau. The complete results, per-category tables, task workbooks, and
+provenance live under
+`storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028/`.
+
+For the earlier 384-trained Fujian manifest-RL checkpoint series, the formal
+evaluation also generates native 512x512x81 video before the same scorer
+preparation:
 
 ```fish
 fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_384x384x81_fujian/vbvr_pro_5b_dancegrpo_manifest_rl_fujian_cps0p7_512x512_sweep_main_v2.fish
@@ -575,6 +639,51 @@ Space tree, run:
 The generator validates 500 error-free samples per run, stable sample identity
 across the baseline and all 20 strict-sweep runs, five samples per task, and
 the exact task means before writing score indexes or materializing media.
+
+### Per-step clean-trajectory visualization
+
+The unified `python -m src.inference --save_steps` renderer supports ODE, SDE,
+and Flow-CPS with one definition: cells 1 through `T-1` decode the post-CFG
+predicted-clean endpoint `x0 = x_sigma - sigma * velocity` from the sampler's
+actual current state, while cell `T` decodes the actual final latent at sigma
+zero. These are clean endpoint predictions, not decoded noisy sampler states or
+pixel-space interpolation. For 5B `expand_timesteps` I2V, the renderer re-pins
+latent frame zero to the encoded input condition in every preview, matching the
+real rollout's frozen-first-frame contract. Grid/contact-sheet labels are
+one-based and include the source sigma; compatibility MP4 filenames remain
+zero-based (`step_00.mp4` through `step_{T-1}.mp4`). `manifest.json` records the
+kind, source sigma, output sigma, and file for every displayed cell.
+
+For the native-512 Fujian comparison, run the complete matched matrix with:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/vbvr_pro_5b_sampler_matrix_30steps_main_v2.fish
+```
+
+It evaluates the DiffSynth step-35500 baseline plus every complete checkpoint
+with Flow-CPS coefficients 0.1/0.3/0.7/0.9, deterministic FlowMatch Euler,
+and UniPC. Every cell fixes 30 steps, CFG 1.0, seed 0, 512x512x81, exact 16
+FPS, the 500-sample manifest, and EvalKit e140. The launcher resumes by a
+recorded-contract audit and uses four two-GPU jobs per eight-GPU wave.
+
+After every quantitative cell is complete, render the fixed sample's full
+30-step gallery with:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/render_vbvr_pro_sampler_matrix_30steps.fish
+```
+
+The trajectory renderer intercepts Euler/UniPC only after the real scheduler
+step and computes `x0 = x_t - sigma * velocity` on CPU. The displayed cell 30
+and `final_00.mp4` are copied byte-for-byte from the quantitative MP4 scored by
+EvalKit; this avoids claiming that a separately observed fused-CUDA run is
+bit-exact. Build score tables and the 60-cell HTML video gallery with:
+
+```bash
+.venv/bin/python -m src.cli.summarize_vbvr_sampler_matrix \
+  --eval-output-base storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028 \
+  --trajectory-root storage/eval_out/vbvr_pro_sampler_matrix_30step_trajectories
+```
 
 Use `FORCE_REGENERATE=1` only when intentionally replacing personal generated
 videos after a generation-provenance change; the launcher will also rebuild
