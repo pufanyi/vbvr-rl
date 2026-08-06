@@ -1,10 +1,35 @@
 """Shared utilities for training."""
 
 import math
+import os
+from unittest.mock import patch
 
 import torch
 from loguru import logger
 from torch.distributed.fsdp import fully_shard
+
+_PINNED_HUB_ATTENTION_KERNELS = {
+    "_flash_3_hub": (
+        "kernels-community/flash-attn3",
+        "43f0bd269777115d94ff826e0d113ce9c1c9087b",
+    ),
+    "_flash_3_varlen_hub": (
+        "kernels-community/flash-attn3",
+        "43f0bd269777115d94ff826e0d113ce9c1c9087b",
+    ),
+}
+
+
+def prefetch_diffusers_attention_backend(backend: str) -> str:
+    """Download the pinned binary for a supported Hub attention backend."""
+    pinned_kernel = _PINNED_HUB_ATTENTION_KERNELS.get(backend)
+    if pinned_kernel is None:
+        raise ValueError(f"Attention backend {backend!r} has no pinned downloadable kernel")
+
+    repo_id, revision = pinned_kernel
+    from kernels import install_kernel
+
+    return str(install_kernel(repo_id, revision=revision, validate_dependencies=True))
 
 
 def _collate_tensor_values(values: list[torch.Tensor]) -> torch.Tensor | list[torch.Tensor]:
@@ -31,6 +56,68 @@ def apply_liger_rms_norm(model: torch.nn.Module) -> int:
             setattr(parent, name, replacement)
             count += 1
     return count
+
+
+def prepare_diffusers_attention_backend(backend: str | None) -> bool:
+    """Validate and initialize a configured Diffusers attention backend.
+
+    Hub-backed implementations are resolved lazily by Diffusers. Entering the
+    public context once downloads/loads the selected kernel and populates the
+    dispatcher registry before individual Wan attention modules store that
+    backend explicitly.
+    """
+    if backend is None:
+        return False
+
+    from diffusers.models import attention_dispatch
+
+    pinned_kernel = _PINNED_HUB_ATTENTION_KERNELS.get(backend)
+    if pinned_kernel is None:
+        with attention_dispatch.attention_backend(backend):
+            pass
+        return True
+
+    # Compute nodes may have no route to the Hub. Diffusers 0.37 resolves its
+    # versioned Hub backend online even when the binary is already cached, so
+    # replace that exact request with kernels' official offline locked loader.
+    # The repository and revision are both pinned and checked here.
+    pinned_repo, pinned_revision = pinned_kernel
+    from kernels import load_kernel
+
+    def _get_pinned_kernel(repo_id, *args, **kwargs):
+        if repo_id != pinned_repo:
+            raise RuntimeError(f"Attention backend {backend!r} requested unexpected Hub kernel repository {repo_id!r}")
+        if args:
+            raise RuntimeError(f"Attention backend {backend!r} requested unsupported positional kernel arguments")
+
+        requested_revision = kwargs.pop("revision", None)
+        requested_version = kwargs.pop("version", None)
+        kernel_backend = kwargs.pop("backend", None)
+        if requested_revision not in (None, pinned_revision) or requested_version not in (None, 1):
+            raise RuntimeError(
+                f"Attention backend {backend!r} requested an unexpected kernel revision/version: "
+                f"revision={requested_revision!r}, version={requested_version!r}"
+            )
+        if kwargs:
+            raise RuntimeError(f"Attention backend {backend!r} requested unsupported kernel options: {sorted(kwargs)}")
+        try:
+            return load_kernel(
+                repo_id,
+                lockfile=None,
+                revision=pinned_revision,
+                backend=kernel_backend,
+            )
+        except FileNotFoundError as exc:
+            cache_dir = os.environ.get("KERNELS_CACHE", "<Hugging Face default cache>")
+            raise FileNotFoundError(
+                f"Pinned attention kernel {repo_id}@{pinned_revision} is unavailable in "
+                f"KERNELS_CACHE={cache_dir!r}. On a networked login node run: "
+                ".venv/bin/python -m src.cli.prefetch_attention_kernel --backend _flash_3_hub"
+            ) from exc
+
+    with patch("kernels.get_kernel", _get_pinned_kernel), attention_dispatch.attention_backend(backend):
+        pass
+    return True
 
 
 def format_eta(seconds: float) -> str:

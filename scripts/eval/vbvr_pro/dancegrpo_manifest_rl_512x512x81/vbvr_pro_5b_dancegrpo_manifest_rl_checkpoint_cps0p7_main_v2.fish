@@ -36,12 +36,12 @@ test "$actual_manifest_sha256" = "$expected_manifest_sha256"
 or _fail "split manifest fingerprint mismatch: expected=$expected_manifest_sha256 actual=$actual_manifest_sha256"
 
 set -q EVALKIT_REV[1]
-or set -lx EVALKIT_REV 6fedd9d9edb8daafa56aca8e53885aa8ad6f6037
+or set -lx EVALKIT_REV e140038f2aee76ca518f464755fa8bc19b783ba5
 set -q EVALKIT_SOURCE_SHA256[1]
-or set -lx EVALKIT_SOURCE_SHA256 eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c
+or set -lx EVALKIT_SOURCE_SHA256 4cc7d028d4106a28190a63bc179562d5ac9add9263cb71926dd6385c5714bcf8
 
 set -q OUTPUT_BASE[1]
-or set -l OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_manifest_326f7bda_evalkit_eb977da6
+or set -l OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_manifest_326f7bda_evalkit_4cc7d028
 set -q OUTPUT_ROOT[1]
 or set -lx OUTPUT_ROOT $OUTPUT_BASE/dancegrpo_vbvr_pro_5b_checkpoint-$CHECKPOINT_STEP-cps-noise-0.7
 set -q GENERATED_DIR[1]

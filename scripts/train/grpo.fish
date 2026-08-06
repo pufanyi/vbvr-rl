@@ -47,6 +47,24 @@ source (dirname (status filename))/../lib/env.fish
 # override when one is already set.
 set -q PYTORCH_CUDA_ALLOC_CONF; or set -gx PYTORCH_CUDA_ALLOC_CONF expandable_segments:True
 set -q WAN_TRAINER_DECORD_NUM_THREADS; or set -gx WAN_TRAINER_DECORD_NUM_THREADS 1
+set -q TRITON_CACHE_DIR; or set -gx TRITON_CACHE_DIR /tmp/wan-trainer-triton-cache
+# Hub attention bundles are large and must survive scheduler job turnover.
+# Training loads the predownloaded pinned snapshot offline; use
+# src.cli.prefetch_attention_kernel once on a networked login node.
+if set -q WAN_TRAINER_KERNELS_CACHE; and test -n "$WAN_TRAINER_KERNELS_CACHE"
+    set -gx KERNELS_CACHE $WAN_TRAINER_KERNELS_CACHE
+else
+    # Do not preserve an ambient KERNELS_CACHE: scheduler images may inject an
+    # ephemeral /tmp path that disappears between jobs.
+    set -gx KERNELS_CACHE ~/.cache/wan-trainer/kernels
+end
+echo "[preflight] Persistent attention kernel cache: $KERNELS_CACHE"
+
+.venv/bin/python -m src.cli.validate_grpo_runtime $train_args
+or begin
+    echo "ERROR: GRPO runtime preflight failed before torchrun." >&2
+    exit 1
+end
 
 echo "Launching DanceGRPO training with $nproc GPUs..."
 

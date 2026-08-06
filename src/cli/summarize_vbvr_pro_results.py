@@ -591,13 +591,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--root",
         type=Path,
-        default=Path("storage/eval_out/vbvr_pro_main_v2_evalkit_eb977da6"),
+        default=Path("storage/eval_out/vbvr_pro_main_v2_evalkit_4cc7d028"),
     )
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--expected-samples", type=int, default=500)
     parser.add_argument(
         "--expected-evalkit-source-sha256",
-        default="eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c",
+        default="4cc7d028d4106a28190a63bc179562d5ac9add9263cb71926dd6385c5714bcf8",
         help="Only include complete runs with this exact scorer-contract fingerprint",
     )
     return parser.parse_args()

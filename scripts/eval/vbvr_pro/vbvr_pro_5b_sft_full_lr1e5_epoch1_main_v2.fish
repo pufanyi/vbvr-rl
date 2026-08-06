@@ -16,7 +16,7 @@ set -q CONVERTED_MODEL[1]
 or set -lx CONVERTED_MODEL storage/models/dcp_converted_5b/sft_vbvr_5b_256x256x161_full_lr_1e-5_checkpoint-epoch1-main-v2
 
 set -q OUTPUT_ROOT[1]
-or set -lx OUTPUT_ROOT storage/eval_out/vbvr_pro_main_v2_evalkit_eb977da6/sft_vbvr_5b_256x256x161_full_lr_1e-5_checkpoint-epoch1
+or set -lx OUTPUT_ROOT storage/eval_out/vbvr_pro_main_v2_evalkit_4cc7d028/sft_vbvr_5b_256x256x161_full_lr_1e-5_checkpoint-epoch1
 
 set -q PREPARED_DIR[1]
 or set -lx PREPARED_DIR $OUTPUT_ROOT/eval_1024x1024_161f_5s

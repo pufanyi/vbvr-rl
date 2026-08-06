@@ -39,8 +39,8 @@ portable between clusters.
 | Typical node | 8 x 80-GiB H100 | 8 x 80-GiB H800 |
 | Repository path seen in jobs | `/mnt/umm/users/pufanyi/workspace/Wan-Trainer` | `/mnt/umm/users/pufanyi/projects/Wan-Trainer` |
 | VBVR-Pro data | Read-only private manifest and raw trees under `/mnt/aigc/...` and `/mnt/umm/users/xujunxiang/...` | Public `pufanyi/vbvr-pro-rl-indomain-50k` snapshot restored under `storage/datasets/vbvr-pro-rl-indomain-50k/materialized` |
-| Production config | `configs/train_dancegrpo_vbvr_pro_5b_384x384x81_rule_cps_from_nsft_bs_32_lr_1e-6_manifest_rl.yaml` | `configs/train_dancegrpo_vbvr_pro_5b_384x384x81_rule_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_fujian.yaml` |
-| Multi-node topology | Scheduler-driven HSDP; node count varies by job | Current production job is 8 nodes x 8 GPUs, world size 64 |
+| Production config | `configs/train_dancegrpo_vbvr_pro_5b_384x384x81_rule_cps_from_nsft_bs_32_lr_1e-6_manifest_rl.yaml` | `configs/train_dancegrpo_vbvr_pro_5b_512x512x81_rule_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_fujian.yaml` |
+| Multi-node topology | Scheduler-driven HSDP; node count varies by job | Current production job is 16 nodes x 8 GPUs, world size 128 |
 | Local validation | Eight-H100 production-shape runs recorded in `docs/training.md` | `configs/train_dancegrpo_vbvr_pro_5b_384x384x81_rule_cps_from_nsft_bs_4_lr_1e-6_manifest_rl_local_1node_10step.yaml` |
 | Shared/local storage | `/mnt/umm` is shared; use node-local `/tmp` for disposable work | `/mnt/umm` is QuarkFS; `/tmp` is node-local container storage |
 
@@ -85,7 +85,26 @@ Runtime-only images often omit `Python.h`; provision the ignored shared
 toolchain once with
 `fish scripts/dev/bootstrap_triton_python_headers.fish`, or preferably install
 the matching `python3.12-dev` package in the image. Triton cache defaults to
-node-local `/tmp/wan-trainer-triton-cache`.
+node-local `/tmp/wan-trainer-triton-cache`. Hub attention binaries are
+different: the GRPO launchers keep them across scheduler jobs under
+`~/.cache/wan-trainer/kernels`. The Fujian FA3 path is pinned to revision
+`43f0bd269777115d94ff826e0d113ce9c1c9087b` and loads that snapshot through
+the offline locked-kernel API, so compute nodes do not need Hub or proxy
+access after the one-time prefetch. Run the download once on a networked login
+node before submitting training:
+
+```bash
+.venv/bin/python -m src.cli.prefetch_attention_kernel --backend _flash_3_hub
+```
+
+The launchers intentionally replace any ambient `KERNELS_CACHE`, because
+scheduler images may inject an ephemeral `/tmp` value. Set
+`WAN_TRAINER_KERNELS_CACHE` only when an explicit persistent override is
+required; the effective absolute path is printed before runtime preflight.
+Remember that `~` follows the runtime user: root-launched jobs default to
+`/root/.cache/wan-trainer/kernels`. Either bake the prefetched cache into that
+path before saving the image, or point `WAN_TRAINER_KERNELS_CACHE` at a shared
+absolute cache such as `/mnt/umm/users/pufanyi/.cache/wan-trainer/kernels`.
 
 ### Cluster-Specific Data Rules
 
@@ -140,9 +159,12 @@ exactly zero without raising an exception.
 For VBVR reward work, keep generated/prepared temporary videos and Triton
 artifacts under `/tmp`, not QuarkFS. `vbvr_reward_cpu_workers` is per
 reward-producing rank, so multiply it by eight to estimate the node-wide
-process/thread budget. The 5B manifest configs use two workers x eight native
-threads per rank. Point `WANDB_DIR` at a writable run-local directory when the
-shared repository's `wandb/` ownership is unsuitable.
+process/thread budget. Most 5B manifest configs use two workers x eight native
+threads per rank. The Fujian 512x512x81 world128 config instead uses four x
+four, doubling concurrent samples while preserving the same 128-thread nominal
+node budget; validate `reward_drain` before propagating that tuning. Point
+`WANDB_DIR` at a writable run-local directory when the shared repository's
+`wandb/` ownership is unsuitable.
 
 ### Reward-Zero Triage and Validated Boundaries
 
@@ -169,12 +191,12 @@ Flow-CPS with nonzero reward at every step (`0.4437` to `0.6467`, mean
 `0.5589`), gradient norms `0.0001` to `0.0002`, and a 25.7/28.4-GiB
 allocated/reserved peak.
 
-The same fix is also active in the Fujian world-64 job. As of 2026-07-30, its
+The same fix was also active in the earlier Fujian world-64 384x384 job. As of 2026-07-30, its
 first 19 optimizer steps all had nonzero reward (`0.5102` to `0.6924`) with a
 53.3/58.2-GiB allocated/reserved peak. This is strong early-run evidence, not a
-claim that the still-running job has completed. A new multi-node topology
-should still be monitored through its first optimizer step before committing
-to a long run.
+claim about the current world-128 512x512 job. A new multi-node topology should
+still be monitored through its first optimizer step before committing to a long
+run.
 
 Resume semantics also matter across clusters. `auto_resume: true` combined with
 `reset_dataloader: true` loads the latest checkpoint as weight-only
