@@ -23,9 +23,14 @@ The VBVR-Pro DanceGRPO wrappers are further separated by training run:
   reuse prepared videos with bounded CPU multiprocessing and never generate or
   prepare video.
 - `vbvr_pro/dancegrpo_manifest_rl_512x512x81/`: the 512x512x81 manifest-RL
-  checkpoint series evaluated with the matching 30-step CPS 0.7 rollout policy;
-  its sweep launcher evaluates checkpoints 100--400 on four disjoint two-GPU
-  groups, then evaluates checkpoint 500 on all eight GPUs.
+  checkpoint series evaluated with the matching 30-step CPS 0.7 rollout policy.
+  The original fixed sweep evaluates checkpoints 100--500; the
+  `...fujian_new_e140...` wrapper discovers every complete checkpoint in the
+  native-512/e140-reward Fujian run, isolates its converted models and outputs,
+  and fills all eight local GPUs in each wave. The
+  `...diffsynth_step35500_baseline_cps0p7...` entry point evaluates that run's
+  pre-RL initialization with the exact same sampler, media, dataset, and scorer
+  contract so it can serve as a valid step-0 baseline.
 
 Run every launcher from the repository root. Most fish launchers source
 `scripts/lib/env.fish`, which activates `.venv` and sets `PYTHONPATH`.

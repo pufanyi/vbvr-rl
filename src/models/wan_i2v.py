@@ -1090,6 +1090,25 @@ class WanI2VForTraining:
         return prev_sample_mean, std_dev_t
 
     @staticmethod
+    def _predicted_clean_latent(
+        sample: torch.Tensor,
+        model_output: torch.Tensor,
+        sigma: float,
+        *,
+        cond_first_frame: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Return the flow-matching clean endpoint prediction for display.
+
+        ``expand_timesteps`` TI2V rollouts keep latent frame zero fixed to the
+        encoded input image.  The transformer's frame-zero velocity is not used
+        by the actual transition, so it must not leak into a rendered preview.
+        """
+        pred_x0 = sample.to(torch.float32) - sigma * model_output.to(torch.float32)
+        if cond_first_frame is not None:
+            pred_x0[:, :, 0:1] = cond_first_frame.to(device=pred_x0.device, dtype=pred_x0.dtype)
+        return pred_x0
+
+    @staticmethod
     def _flowcps_transition_log_prob(
         sample: torch.Tensor, mean: torch.Tensor, skip_first_frame: bool = False
     ) -> torch.Tensor:
@@ -1343,7 +1362,13 @@ class WanI2VForTraining:
             # Predicted clean latent z0 = x_t - sigma * v (post-CFG, before stepping).
             # Same quantity the step renderer decodes for per-step previews.
             if return_pred_x0:
-                all_pred_x0.append((latent.to(torch.float32) - sigma * model_output.to(torch.float32)).detach().cpu())
+                pred_x0 = self._predicted_clean_latent(
+                    latent,
+                    model_output,
+                    sigma,
+                    cond_first_frame=cond_first_frame,
+                )
+                all_pred_x0.append(pred_x0.detach().cpu())
 
             # SDE step
             if sde_formula == "dancegrpo":

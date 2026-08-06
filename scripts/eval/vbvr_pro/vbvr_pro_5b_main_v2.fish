@@ -286,6 +286,10 @@ function _generation_provenance
         set sampler_args \
             --value generation_mode=ode \
             --value ode_solver=flowmatch_euler
+    else
+        set sampler_args \
+            --value generation_mode=ode \
+            --value ode_solver=unipc
     end
     $PYTHON -m src.eval.evaluation_provenance $mode \
         --manifest $GENERATION_PROVENANCE \

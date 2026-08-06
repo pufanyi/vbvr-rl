@@ -42,10 +42,13 @@ set -q OUTPUT_BASE[1]
 or set -gx OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_$_fujian_native_shape"_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028"
 set -q CONVERTED_BASE[1]
 or set -g CONVERTED_BASE storage/models/dcp_converted_5b
+set -q CONVERTED_PREFIX[1]
+or set -g CONVERTED_PREFIX dancegrpo_vbvr_pro_5b_384x384x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian
 
 set -g _fujian_sweep_log_dir $EVAL_LOG_DIR
 set -g _fujian_sweep_output_base $OUTPUT_BASE
 set -g _fujian_sweep_converted_base $CONVERTED_BASE
+set -g _fujian_sweep_converted_prefix $CONVERTED_PREFIX
 mkdir -p $_fujian_sweep_log_dir
 or _fail "could not create log directory: $_fujian_sweep_log_dir"
 
@@ -83,7 +86,7 @@ or _fail "no complete checkpoints found under $CHECKPOINT_ROOT"
 
 function _converted_model_for_step
     set -l step $argv[1]
-    echo $_fujian_sweep_converted_base/dancegrpo_vbvr_pro_5b_384x384x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian_checkpoint-$step
+    echo $_fujian_sweep_converted_base/$_fujian_sweep_converted_prefix"_checkpoint-$step"
 end
 
 function _output_root_for_step
