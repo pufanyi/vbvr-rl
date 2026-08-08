@@ -43,6 +43,36 @@ set -q EASYOCR_ROOT[1]
 or set -gx EASYOCR_ROOT storage/evalkits/easyocr-shared
 set -q EASYOCR_SOURCE_MODELS[1]
 or set -gx EASYOCR_SOURCE_MODELS $EASYOCR_ROOT/model
+set -q MATRIX_INCLUDE_BASELINE[1]
+or set -g MATRIX_INCLUDE_BASELINE 1
+contains -- $MATRIX_INCLUDE_BASELINE 0 1
+or _fail "MATRIX_INCLUDE_BASELINE must be 0 or 1: $MATRIX_INCLUDE_BASELINE"
+set -q MATRIX_LOCAL_GPU_COUNT[1]
+or set -g MATRIX_LOCAL_GPU_COUNT 8
+string match -qr '^[1-9][0-9]*$' -- "$MATRIX_LOCAL_GPU_COUNT"
+or _fail "MATRIX_LOCAL_GPU_COUNT must be a positive integer: $MATRIX_LOCAL_GPU_COUNT"
+test (math "$MATRIX_LOCAL_GPU_COUNT % 2") -eq 0
+or _fail "MATRIX_LOCAL_GPU_COUNT must be even because each formal evaluation uses two GPUs"
+
+set -l matrix_node_count 1
+set -l matrix_node_rank 0
+if set -q MATRIX_NODE_COUNT[1]
+    string match -qr '^[1-9][0-9]*$' -- "$MATRIX_NODE_COUNT"
+    or _fail "MATRIX_NODE_COUNT must be a positive integer: $MATRIX_NODE_COUNT"
+    set matrix_node_count $MATRIX_NODE_COUNT
+end
+if set -q MATRIX_NODE_RANK[1]
+    string match -qr '^[0-9]+$' -- "$MATRIX_NODE_RANK"
+    or _fail "MATRIX_NODE_RANK must be a non-negative integer: $MATRIX_NODE_RANK"
+    set matrix_node_rank $MATRIX_NODE_RANK
+end
+test $matrix_node_rank -lt $matrix_node_count
+or _fail "MATRIX_NODE_RANK=$matrix_node_rank is outside [0, $matrix_node_count)"
+
+set -g _matrix_device_pairs
+for first_device in (seq 0 2 (math $MATRIX_LOCAL_GPU_COUNT - 2))
+    set -a _matrix_device_pairs "$first_device,"(math $first_device + 1)
+end
 
 set -g _matrix_manifest_sha256 afab352e08c590c9f4b480ef314b37f6896eef6430f42ea6c0ce0494f2aa8c4e
 set -g _matrix_output_base $OUTPUT_BASE
@@ -64,21 +94,35 @@ set -l checksums_sha256 (sha256sum $GT_BASE/SHA256SUMS | awk '{print $1}')
 test "$checksums_sha256" = a67c534293724ddfc6657af755ab65e9b1354879deb2cfc47de22ede43942861
 or _fail "unexpected dataset checksum-manifest SHA-256: $checksums_sha256"
 
-echo "[dataset] verifying the complete downloaded VBVR-Pro eval snapshot"
-pushd $GT_BASE >/dev/null; or exit 1
-sha256sum -c SHA256SUMS --quiet
-set -l checksum_status $status
-popd >/dev/null; or exit 1
-test $checksum_status -eq 0; or _fail "VBVR-Pro eval snapshot failed SHA-256 verification"
-set -gx WAN_TRAINER_VBVR_EVAL_DATA_VERIFIED 1
+if not set -q MATRIX_ASSIGNMENT_ONLY[1]
+    echo "[dataset] verifying the complete downloaded VBVR-Pro eval snapshot"
+    pushd $GT_BASE >/dev/null; or exit 1
+    sha256sum -c SHA256SUMS --quiet
+    set -l checksum_status $status
+    popd >/dev/null; or exit 1
+    test $checksum_status -eq 0; or _fail "VBVR-Pro eval snapshot failed SHA-256 verification"
+    set -gx WAN_TRAINER_VBVR_EVAL_DATA_VERIFIED 1
+end
 
 set -l checkpoint_steps
-for checkpoint_dir in (find $CHECKPOINT_ROOT -mindepth 1 -maxdepth 1 -type d -name 'checkpoint-*' | sort -V)
-    test -f $checkpoint_dir/high/.metadata; or begin
-        echo "[skip] incomplete checkpoint: $checkpoint_dir" >&2
-        continue
+if set -q MATRIX_CHECKPOINT_STEPS[1]
+    set -l requested_steps (string match -ra '[^,[:space:]]+' -- (string join ',' -- $MATRIX_CHECKPOINT_STEPS))
+    for step in $requested_steps
+        string match -qr '^[1-9][0-9]*$' -- "$step"
+        or _fail "MATRIX_CHECKPOINT_STEPS contains an invalid step: $step"
+        contains -- $step $checkpoint_steps; and _fail "MATRIX_CHECKPOINT_STEPS contains duplicate step $step"
+        test -f $CHECKPOINT_ROOT/checkpoint-$step/high/.metadata
+        or _fail "requested checkpoint is missing or incomplete: checkpoint-$step"
+        set -a checkpoint_steps $step
     end
-    set -a checkpoint_steps (string replace 'checkpoint-' '' -- (basename $checkpoint_dir))
+else
+    for checkpoint_dir in (find $CHECKPOINT_ROOT -mindepth 1 -maxdepth 1 -type d -name 'checkpoint-*' | sort -V)
+        test -f $checkpoint_dir/high/.metadata; or begin
+            echo "[skip] incomplete checkpoint: $checkpoint_dir" >&2
+            continue
+        end
+        set -a checkpoint_steps (string replace 'checkpoint-' '' -- (basename $checkpoint_dir))
+    end
 end
 test (count $checkpoint_steps) -gt 0; or _fail "no complete checkpoints under $CHECKPOINT_ROOT"
 
@@ -156,9 +200,14 @@ end
 # Convert any newly completed checkpoint once before multiple sampler jobs try
 # to share it. Existing models/provenance are validated and skipped by the
 # regular conversion stage.
+set -l conversion_index 0
 for step in $checkpoint_steps
+    set conversion_index (math $conversion_index + 1)
+    if test (math "($conversion_index - 1) % $matrix_node_count") -ne $matrix_node_rank
+        continue
+    end
     set -l converted (_converted_model $step)
-    if not set -q DRY_RUN[1]; and not test -f $converted/model_index.json
+    if not set -q MATRIX_ASSIGNMENT_ONLY[1]; and not set -q DRY_RUN[1]; and not test -f $converted/model_index.json
         echo "[convert-preflight] checkpoint-$step -> $converted"
         env \
             CHECKPOINT_STEP=$step \
@@ -179,7 +228,10 @@ for step in $checkpoint_steps
     end
 end
 
-set -l model_ids baseline $checkpoint_steps
+set -l model_ids $checkpoint_steps
+if test "$MATRIX_INCLUDE_BASELINE" = 1
+    set -p model_ids baseline
+end
 set -l sampler_ids cps0p1 cps0p3 cps0p7 cps0p9 euler unipc
 set -l tasks
 for sampler_id in $sampler_ids
@@ -195,9 +247,33 @@ for sampler_id in $sampler_ids
 end
 test (count $tasks) -gt 0; or _fail "filters selected no matrix tasks"
 
+set -l global_task_count (count $tasks)
+set -l node_tasks
+for task_index in (seq $global_task_count)
+    if test (math "($task_index - 1) % $matrix_node_count") -eq $matrix_node_rank
+        set -a node_tasks $tasks[$task_index]
+    end
+end
+set tasks $node_tasks
+
+echo "[matrix] node shard: rank=$matrix_node_rank count=$matrix_node_count"
+echo "[matrix] global selected tasks: $global_task_count"
+echo "[matrix] node-assigned tasks: "(count $tasks)
+for task_index in (seq (count $tasks))
+    set -l device_slot (math "(($task_index - 1) % "(count $_matrix_device_pairs)") + 1")
+    echo "[assignment] node=$matrix_node_rank GPUs=$_matrix_device_pairs[$device_slot] task=$tasks[$task_index]"
+end
+if test (count $tasks) -eq 0
+    echo "[done] node $matrix_node_rank has no assigned formal matrix tasks"
+    exit 0
+end
+if set -q MATRIX_ASSIGNMENT_ONLY[1]; and test "$MATRIX_ASSIGNMENT_ONLY" = 1
+    echo "[done] assignment-only mode; no model was converted or evaluated"
+    exit 0
+end
+
 function _launch_wave
     set -l wave_tasks $argv
-    set -l devices_by_slot 0,1 2,3 4,5 6,7
     set -l running_pids
     set -l running_tasks
     set -l running_logs
@@ -210,7 +286,7 @@ function _launch_wave
         set -l mode $parts[1]
         set -l level $parts[2]
         set -l solver $parts[3]
-        set -l devices $devices_by_slot[$slot]
+        set -l devices $_matrix_device_pairs[$slot]
         set -l output_root (_output_root $model_id $sampler_id)
         set -l converted (_converted_model $model_id)
         set -l log_path $_matrix_log_dir/$model_id-$sampler_id.log
@@ -284,7 +360,7 @@ echo "[matrix] output base: $_matrix_output_base"
 set -l task_start 1
 while test $task_start -le (count $tasks)
     set -l wave
-    for offset in 0 1 2 3
+    for offset in (seq 0 (math (count $_matrix_device_pairs) - 1))
         set -l position (math $task_start + $offset)
         if test $position -le (count $tasks)
             set -a wave $tasks[$position]
@@ -292,7 +368,7 @@ while test $task_start -le (count $tasks)
     end
     echo "[wave] $wave"
     _launch_wave $wave; or _fail "matrix wave failed: $wave"
-    set task_start (math $task_start + 4)
+    set task_start (math $task_start + (count $_matrix_device_pairs))
 end
 
 echo "[done] all selected sampler-matrix runs passed the recorded-contract audit"

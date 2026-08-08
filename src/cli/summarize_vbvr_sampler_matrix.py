@@ -7,6 +7,8 @@ import html
 import json
 from pathlib import Path
 
+from src.cli.audit_vbvr_i2v_trajectories import _relative_video_path
+
 SAMPLERS = (
     ("cps0p1", "CPS 0.1", "cps-noise-0.1"),
     ("cps0p3", "CPS 0.3", "cps-noise-0.3"),
@@ -23,6 +25,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--eval-output-base", required=True, type=Path)
     parser.add_argument("--trajectory-root", required=True, type=Path)
     parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--model-id", action="append", dest="model_ids", default=None)
+    parser.add_argument(
+        "--trajectory-layout",
+        choices=("auto", "fixed-sample", "all-samples"),
+        default="auto",
+    )
     return parser.parse_args(argv)
 
 
@@ -37,6 +45,15 @@ def _model_ids(eval_base: Path) -> list[str]:
     return ["baseline", *(str(step) for step in sorted(steps))]
 
 
+def _all_trajectory_model_ids(trajectory_root: Path) -> list[str]:
+    values = [path.parent.name.removesuffix("-cps0p7") for path in trajectory_root.glob("*-cps0p7/cell_manifest.json")]
+    if not values:
+        return []
+    if "baseline" not in values:
+        raise RuntimeError(f"Trajectory root has CPS 0.7 cells but no baseline: {trajectory_root}")
+    return ["baseline", *(str(step) for step in sorted(int(value) for value in values if value != "baseline"))]
+
+
 def _eval_root(eval_base: Path, model_id: str, sampler_id: str, label: str) -> Path:
     if model_id == "baseline":
         if sampler_id == "cps0p7":
@@ -45,8 +62,42 @@ def _eval_root(eval_base: Path, model_id: str, sampler_id: str, label: str) -> P
     return eval_base / f"dancegrpo_vbvr_pro_5b_checkpoint-{model_id}-{label}"
 
 
-def _load_rows(eval_base: Path, trajectory_root: Path) -> list[dict]:
-    models = _model_ids(eval_base)
+def _trajectory_paths(
+    *,
+    eval_root: Path,
+    trajectory_root: Path,
+    model_id: str,
+    sampler_id: str,
+    layout: str,
+) -> tuple[Path, Path | None, str]:
+    all_cell = trajectory_root / f"{model_id}-{sampler_id}"
+    selected_layout = layout
+    if selected_layout == "auto":
+        selected_layout = "all-samples" if (all_cell / "cell_manifest.json").is_file() else "fixed-sample"
+    if selected_layout == "fixed-sample":
+        return trajectory_root / f"{model_id}-{sampler_id}-sample00000", None, selected_layout
+
+    data = json.loads((eval_root / "eval_samples.json").read_text(encoding="utf-8"))
+    if not isinstance(data, list) or not data:
+        raise RuntimeError(f"No eval samples in {eval_root / 'eval_samples.json'}")
+    item = data[0]
+    name = next((str(item[key]) for key in ("name", "id") if item.get(key) is not None and str(item[key])), "0")
+    sample = (all_cell / _relative_video_path(name)).with_suffix("")
+    return sample, all_cell / "cell_manifest.json", selected_layout
+
+
+def _load_rows(
+    eval_base: Path,
+    trajectory_root: Path,
+    *,
+    layout: str = "auto",
+    model_ids: list[str] | None = None,
+) -> list[dict]:
+    use_all_model_ids = layout == "all-samples" or (
+        layout == "auto" and (trajectory_root / "baseline-cps0p7/cell_manifest.json").is_file()
+    )
+    trajectory_models = _all_trajectory_model_ids(trajectory_root) if use_all_model_ids else []
+    models = model_ids or trajectory_models or _model_ids(eval_base)
     if models == ["baseline"]:
         raise RuntimeError(f"No checkpoint CPS 0.7 runs found under {eval_base}")
     rows: list[dict] = []
@@ -55,9 +106,17 @@ def _load_rows(eval_base: Path, trajectory_root: Path) -> list[dict]:
         for sampler_id, sampler_name, label in SAMPLERS:
             eval_root = _eval_root(eval_base, model_id, sampler_id, label)
             result = eval_root / "scores/eval_1024x1024_81f_fps16_5p0625s_vbvr_results.json"
-            trajectory = trajectory_root / f"{model_id}-{sampler_id}-sample00000"
+            trajectory, cell_manifest_path, selected_layout = _trajectory_paths(
+                eval_root=eval_root,
+                trajectory_root=trajectory_root,
+                model_id=model_id,
+                sampler_id=sampler_id,
+                layout=layout,
+            )
             manifest = trajectory / "manifest.json"
             required = (result, manifest, trajectory / "steps_grid.mp4", trajectory / "step_contact_sheet.jpg")
+            if cell_manifest_path is not None:
+                required = (*required, cell_manifest_path)
             absent = [str(path) for path in required if not path.is_file()]
             if absent:
                 missing.extend(absent)
@@ -65,6 +124,13 @@ def _load_rows(eval_base: Path, trajectory_root: Path) -> list[dict]:
             score = json.loads(result.read_text())["summary"]
             categories = score["overall"]["by_category"]
             trajectory_data = json.loads(manifest.read_text())
+            cell_sample_count = 1
+            if cell_manifest_path is not None:
+                cell_manifest = json.loads(cell_manifest_path.read_text(encoding="utf-8"))
+                if cell_manifest.get("state") != "complete":
+                    missing.append(f"incomplete cell manifest: {cell_manifest_path}")
+                    continue
+                cell_sample_count = int(cell_manifest.get("completed_count", 0))
             binding = trajectory_data.get("formal_final_binding") or {}
             rows.append(
                 {
@@ -72,6 +138,8 @@ def _load_rows(eval_base: Path, trajectory_root: Path) -> list[dict]:
                     "model": "DiffSynth step-35500 baseline" if model_id == "baseline" else f"checkpoint-{model_id}",
                     "sampler_id": sampler_id,
                     "sampler": sampler_name,
+                    "trajectory_layout": selected_layout,
+                    "trajectory_sample_count": cell_sample_count,
                     "overall": float(score["overall"]["mean_score"]),
                     "in_domain": float(score["In_Domain"]["mean_score"]),
                     "out_of_domain": float(score["Out_of_Domain"]["mean_score"]),
@@ -112,6 +180,8 @@ def _write_tsv(rows: list[dict], path: Path) -> None:
         "model",
         "sampler_id",
         "sampler",
+        "trajectory_layout",
+        "trajectory_sample_count",
         "overall",
         "in_domain",
         "out_of_domain",
@@ -129,6 +199,8 @@ def _write_tsv(rows: list[dict], path: Path) -> None:
             row["model"],
             row["sampler_id"],
             row["sampler"],
+            row["trajectory_layout"],
+            str(row["trajectory_sample_count"]),
             f"{row['overall']:.9f}",
             f"{row['in_domain']:.9f}",
             f"{row['out_of_domain']:.9f}",
@@ -204,18 +276,32 @@ def main(argv: list[str] | None = None) -> int:
     trajectory_root = args.trajectory_root.resolve()
     output_dir = (args.output_dir or trajectory_root).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    rows = _load_rows(eval_base, trajectory_root)
+    rows = _load_rows(
+        eval_base,
+        trajectory_root,
+        layout=args.trajectory_layout,
+        model_ids=args.model_ids,
+    )
     (output_dir / "scores.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
     _write_tsv(rows, output_dir / "scores.tsv")
+    layouts = ", ".join(sorted({row["trajectory_layout"] for row in rows}))
+    sample_counts = sorted({row["trajectory_sample_count"] for row in rows})
+    sample_count_text = ", ".join(str(value) for value in sample_counts)
+    gallery_note = (
+        "Open `index.html` for the compact 60-cell sample-0 gallery; the all-output browser is under `gallery/`."
+        if any(row["trajectory_layout"] == "all-samples" for row in rows)
+        else "Open `index.html` for the complete 60-cell 30-step video gallery."
+    )
     report = [
         "# VBVR-Pro matched 30-step sampler matrix",
         "",
         "Contract: 512×512×81, 16 FPS, 30 steps, CFG 1.0, seed 0, EvalKit e140.",
+        f"Trajectory layout: {layouts}; completed outputs per cell: {sample_count_text}.",
         "",
         _markdown_matrix(rows, "overall", "Overall"),
         _markdown_matrix(rows, "in_domain", "In-domain"),
         _markdown_matrix(rows, "out_of_domain", "Out-of-domain"),
-        "Open `index.html` for the complete 60-cell 30-step video gallery.",
+        gallery_note,
         "",
     ]
     (output_dir / "report.md").write_text("\n".join(report), encoding="utf-8")

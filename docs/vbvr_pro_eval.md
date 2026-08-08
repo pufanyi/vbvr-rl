@@ -665,6 +665,10 @@ with Flow-CPS coefficients 0.1/0.3/0.7/0.9, deterministic FlowMatch Euler,
 and UniPC. Every cell fixes 30 steps, CFG 1.0, seed 0, 512x512x81, exact 16
 FPS, the 500-sample manifest, and EvalKit e140. The launcher resumes by a
 recorded-contract audit and uses four two-GPU jobs per eight-GPU wave.
+The 2026-08-06 quantitative process captured the immutable model snapshot
+`baseline,100,200,...,900` when it started. Checkpoints 1000 and later appeared
+while that process was running and are not members of this 60-cell comparison;
+they need all six formal evaluations before being added to its trajectory set.
 
 After every quantitative cell is complete, render the fixed sample's full
 30-step gallery with:
@@ -672,6 +676,12 @@ After every quantitative cell is complete, render the fixed sample's full
 ```fish
 fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/render_vbvr_pro_sampler_matrix_30steps.fish
 ```
+
+The renderer defaults to one cell per local GPU. To fill only otherwise-idle
+devices while a quantitative wave is running, set the Fish list
+`TRAJECTORY_CUDA_DEVICES` before launch; `MODEL_FILTER` and `SAMPLER_FILTER`
+select one model/sampler cell. A filtered render must finish before the next
+quantitative wave reclaims that GPU.
 
 The trajectory renderer intercepts Euler/UniPC only after the real scheduler
 step and computes `x0 = x_t - sigma * velocity` on CPU. The displayed cell 30
@@ -683,6 +693,171 @@ bit-exact. Build score tables and the 60-cell HTML video gallery with:
 .venv/bin/python -m src.cli.summarize_vbvr_sampler_matrix \
   --eval-output-base storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028 \
   --trajectory-root storage/eval_out/vbvr_pro_sampler_matrix_30step_trajectories
+```
+
+The fixed-sample gallery above is only a compact diagnostic. To render the
+requested trajectory for all 500 outputs in every one of the 60 formal cells,
+run:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/render_vbvr_pro_sampler_matrix_all_outputs_30steps.fish
+```
+
+The full launcher first audits every quantitative cell, then keeps each model
+loaded while it renders its assigned samples. It is sample-level resumable and
+pins its default checkpoint snapshot to 100 through 900 so later training
+checkpoints cannot enter only part of the matrix. `MODEL_FILTER`,
+`SAMPLER_FILTER`, and the Fish-list `TRAJECTORY_CUDA_DEVICES` narrow a run;
+`TRAJECTORY_LIMIT` is intended only for small end-to-end smoke tests.
+`TRAJECTORY_WORKERS_PER_GPU=N` splits every cell into `N` deterministic sample
+shards and starts `N` independent batch-one workers per selected GPU. This is
+process-level concurrency, not a tensor batch: it preserves each sample's seed,
+CPS random stream, and numerical path while allowing one worker's media-writing
+gaps to overlap another worker's GPU work. It deliberately creates no tar
+archive. The default unpacked layout is:
+
+```text
+storage/eval_out/vbvr_pro_sampler_matrix_all_500_30step_trajectories/
+  baseline-cps0p1/
+    cell_manifest.json
+    In-Domain_50/<task>/<sample>/
+      step_00.mp4 ... step_29.mp4
+      final_00.mp4
+      steps_grid.mp4
+      step_contact_sheet.jpg
+      manifest.json
+```
+
+This is 30,000 sample trajectories and 900,000 individual step MP4s, plus
+final/grid/contact/manifest files. A two-sample native-512 CPS smoke measured
+63.23 and 55.06 seconds per sample after one model load; use roughly three days
+as an eight-GPU order-of-magnitude runtime, with sampler and filesystem
+variation. Measured representative media projected about 45–52 GiB allocated;
+retain 60–80 GiB free for margin. `src.cli.audit_vbvr_i2v_trajectories` is the
+lightweight strict completion check used by the launcher: it verifies the full
+contract, CPS coefficient, exact artifact set, and SHA-256 equality between
+`step_29.mp4`, `final_00.mp4`, and the formal quantitative MP4.
+
+For a scheduler allocation with multiple eight-GPU machines, launch this on
+every node instead:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/render_vbvr_pro_sampler_matrix_all_outputs_30steps_multinode.fish
+```
+
+It consumes the same scheduler contract as `scripts/train/grpo_multinode.fish`:
+`WORLD_SIZE` is the number of machines and `RANK` is the zero-based machine
+rank. `--nproc 8` and `--workers-per-gpu 2` are the defaults. The wrapper does
+not create a `torchrun` process group; it round-robin shards the fixed 60-cell
+list by node, splits each local cell into even/odd sample shards, and runs 14–16
+independent batch-one workers per node when `WORLD_SIZE=8`. Every completed
+sample is discovered and skipped before generation, including samples made by
+the older unsharded launcher. Only a strict audit of all 500 samples publishes
+the canonical complete-cell manifest.
+
+Two workers were pressure-tested on one 80-GiB H800 at a 53,963-MiB combined
+peak. Ten one-second samples during the main phase reported 100% SM utilization,
+and all 136 non-manifest artifacts from four trajectories were byte-identical
+to their single-worker counterparts. This concurrency is primarily a safe
+gap-hiding knob: a deliberately synchronized same-cell pair took about 119
+seconds for two samples versus about 115 seconds sequentially, so it does not
+speed up the already saturated transformer work. Use `--workers-per-gpu 1` on
+cards with less memory or when duplicate model residency is not worthwhile;
+do not raise it above two without a new production-shape memory test.
+
+The launcher prints trajectory counts, percent complete, run throughput, ETA,
+and per-cell counts every 30 seconds (`--progress-interval N` changes the
+period). Each node reports its own assigned cells. On any node that can see the
+shared output tree, run this for one global 60-cell view:
+
+```bash
+.venv/bin/python -m src.cli.watch_vbvr_trajectory_progress \
+  --trajectory-root storage/eval_out/vbvr_pro_sampler_matrix_all_500_30step_trajectories \
+  --shard-count 2 --watch --interval 30
+```
+
+All nodes must see the same repository, formal evaluation roots, converted
+models, trajectory root, and log directory. Set
+`TRAJECTORY_ASSIGNMENT_ONLY=1` to print the node/GPU/sample-shard assignment
+without loading a model or writing outputs. The wrapper captures then removes
+the ambient distributed rank variables before entering Python, because these
+jobs are independent single-GPU inference processes rather than distributed
+model workers.
+
+The immutable 2026-08-07 extension for checkpoints 1000, 1100, 1200, 1300,
+and 1400 uses one two-stage wrapper. Run the formal stage on all eight nodes
+first:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/evaluate_new_checkpoints_1000_1400_multinode.fish \
+  formal --nproc 8
+```
+
+After every node exits successfully, submit the same eight nodes for all-output
+trajectories:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/evaluate_new_checkpoints_1000_1400_multinode.fish \
+  trajectories --nproc 8 --workers-per-gpu 2 --progress-interval 30
+```
+
+The formal stage contains exactly 30 cells (five checkpoints times six
+samplers), assigns four disjoint two-GPU cells to ranks 0–5 and three to ranks
+6–7, and strictly skips complete results. The trajectory stage contains the
+same 30 cells split into 60 deterministic sample shards; ranks 0–5 use all
+eight GPUs and ranks 6–7 use six. It reuses the shared output roots, skips every
+already-valid sample, and refuses to start generation until all corresponding
+formal cells pass their provenance audit. Baseline and checkpoints 100–900 are
+excluded from both stages. Add `--assignment-only` to either command to inspect
+the complete node/GPU plan without conversion, inference, or scoring. There is
+deliberately no cross-submission barrier: do not start `trajectories` until the
+eight `formal` commands have all succeeded.
+
+The immutable 2026-08-08 extension covers the next four complete checkpoints,
+1500, 1600, 1700, and 1800. Run its two stages on all eight nodes in the same
+order:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/evaluate_new_checkpoints_1500_1800_multinode.fish \
+  formal --nproc 8
+```
+
+After all formal processes exit successfully:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/evaluate_new_checkpoints_1500_1800_multinode.fish \
+  trajectories --nproc 8 --workers-per-gpu 2 --progress-interval 30
+```
+
+This snapshot adds 24 formal cells, exactly three two-GPU cells per node, and
+48 trajectory shards, exactly six single-GPU workers per node. GPUs 6–7 are
+therefore unused by this balanced four-checkpoint extension. Both stages
+exclude baseline and checkpoints 100–1400, retain strict completion/provenance
+checks, and resume at cell/sample granularity. Add `--assignment-only` to
+either command for a side-effect-free assignment audit.
+
+After all cells finish, build the lazy-loading browser without copying or
+archiving media (30,000 outputs for the original snapshot, 45,000 after the
+five-checkpoint extension, or 57,000 after both extensions):
+
+```bash
+.venv/bin/python -m src.cli.build_vbvr_trajectory_gallery \
+  --eval-output-base storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028 \
+  --trajectory-root storage/eval_out/vbvr_pro_sampler_matrix_all_500_30step_trajectories
+```
+
+Its matrix index is `gallery/index.html`; each cell page (60 originally, 90
+after the first extension, or 114 after both) provides a searchable list of 500
+lazy-loaded grid videos, contact sheets, exact scored finals, manifests, and
+direct links to all 30 individual step MP4s.
+The score-table summarizer also understands this layout:
+
+```bash
+.venv/bin/python -m src.cli.summarize_vbvr_sampler_matrix \
+  --eval-output-base storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028 \
+  --trajectory-root storage/eval_out/vbvr_pro_sampler_matrix_all_500_30step_trajectories \
+  --trajectory-layout all-samples \
+  --output-dir storage/eval_out/vbvr_pro_sampler_matrix_all_500_30step_trajectories/summary
 ```
 
 Use `FORCE_REGENERATE=1` only when intentionally replacing personal generated

@@ -28,6 +28,8 @@ set -q TRAJECTORY_LOG_DIR[1]
 or set -g TRAJECTORY_LOG_DIR storage/eval_logs/vbvr_pro_sampler_matrix_30step_trajectories
 set -q SAMPLE_INDEX[1]
 or set -g SAMPLE_INDEX 0
+set -q TRAJECTORY_CUDA_DEVICES[1]
+or set -g TRAJECTORY_CUDA_DEVICES 0 1 2 3 4 5 6 7
 
 set -g _trajectory_converted_base $CONVERTED_BASE
 set -g _trajectory_converted_prefix $CONVERTED_PREFIX
@@ -35,7 +37,9 @@ set -g _trajectory_baseline_model $BASELINE_MODEL
 set -g _trajectory_eval_base $EVAL_OUTPUT_BASE
 set -g _trajectory_root $TRAJECTORY_ROOT
 set -g _trajectory_log_dir $TRAJECTORY_LOG_DIR
+set -g _trajectory_cuda_devices $TRAJECTORY_CUDA_DEVICES
 mkdir -p $_trajectory_root $_trajectory_log_dir; or _fail "could not create trajectory output/log directories"
+test (count $_trajectory_cuda_devices) -gt 0; or _fail "TRAJECTORY_CUDA_DEVICES must select at least one GPU"
 
 set -l checkpoint_steps
 for checkpoint_dir in (find $CHECKPOINT_ROOT -mindepth 1 -maxdepth 1 -type d -name 'checkpoint-*' | sort -V)
@@ -168,7 +172,7 @@ function _launch_wave
         set -l model_path (_model_path $model_id)
         set -l output_dir (_trajectory_dir $model_id $sampler_id)
         set -l log_path $_trajectory_log_dir/$model_id-$sampler_id.log
-        set -l device (math $slot - 1)
+        set -l device $_trajectory_cuda_devices[$slot]
 
         test -f $eval_json; or begin
             echo "[error] quantitative eval JSON missing: $eval_json" >&2
@@ -225,10 +229,11 @@ end
 
 echo "[trajectory] fixed sample index: $SAMPLE_INDEX"
 echo "[trajectory] selected tasks: "(count $tasks)
+set -l wave_size (count $_trajectory_cuda_devices)
 set -l start 1
 while test $start -le (count $tasks)
     set -l wave
-    for offset in 0 1 2 3 4 5 6 7
+    for offset in (seq 0 (math $wave_size - 1))
         set -l position (math $start + $offset)
         if test $position -le (count $tasks)
             set -a wave $tasks[$position]
@@ -236,7 +241,7 @@ while test $start -le (count $tasks)
     end
     echo "[wave] $wave"
     _launch_wave $wave; or _fail "trajectory wave failed: $wave"
-    set start (math $start + 8)
+    set start (math $start + $wave_size)
 end
 
 echo "[done] all 30-step trajectory displays are complete under $_trajectory_root"

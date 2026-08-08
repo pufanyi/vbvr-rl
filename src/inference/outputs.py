@@ -165,12 +165,33 @@ def write_outputs(
     result: StepwiseResult,
     out_dir: Path,
     started: float | None = None,
+    *,
+    final_video_override: np.ndarray | None = None,
 ) -> dict[str, Any]:
-    """Decode and write references, per-step previews, final videos and manifest."""
+    """Decode and write references, per-step previews, final videos and manifest.
+
+    ``final_video_override`` lets a trajectory display use frames decoded from
+    the exact formal evaluation MP4 for its final cell.  The caller remains
+    responsible for copying that MP4 over the individually written final files
+    when byte-for-byte binding (rather than frame equality) is required.
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device(cfg.device)
     written: dict[str, list[str]] = {"references": [], "steps": [], "finals": []}
+    if final_video_override is not None:
+        if result.final_latent.shape[0] != 1:
+            raise ValueError(
+                "final_video_override is only supported for a single output, "
+                f"got batch size {result.final_latent.shape[0]}"
+            )
+        if final_video_override.dtype != np.uint8 or final_video_override.ndim != 4:
+            raise ValueError(
+                "final_video_override must be uint8 with shape (frames, height, width, channels), "
+                f"got dtype={final_video_override.dtype} shape={final_video_override.shape}"
+            )
+        if final_video_override.shape[-1] != 3:
+            raise ValueError(f"final_video_override must have three RGB channels, got {final_video_override.shape}")
 
     # ---- reference videos (latent input only) ----
     if cfg.save_reference and prepared.reference_latents:
@@ -191,8 +212,11 @@ def write_outputs(
         for step_idx, z0 in enumerate(result.pred_x0):
             step_path = out_dir / f"step_{step_idx:02d}.mp4"
             is_final = step_idx == len(result.pred_x0) - 1
-            preview_latent = result.final_latent if is_final else z0
-            video = decode_latents_to_uint8(model, preview_latent.to(device))
+            if is_final and final_video_override is not None:
+                video = final_video_override
+            else:
+                preview_latent = result.final_latent if is_final else z0
+                video = decode_latents_to_uint8(model, preview_latent.to(device))
             export_uint8_video(video, step_path, cfg.fps)
             step_videos.append(video)
             written["steps"].append(str(step_path))
@@ -221,7 +245,11 @@ def write_outputs(
         save_step_contact_sheet(step_videos, contact_path, step_labels=step_labels)
 
     # ---- final videos (all batch members) ----
-    finals = decode_batch_to_uint8(model, result.final_latent.to(device))
+    finals = (
+        final_video_override[None]
+        if final_video_override is not None
+        else decode_batch_to_uint8(model, result.final_latent.to(device))
+    )
     for member in range(finals.shape[0]):
         final_path = out_dir / f"final_{member:02d}.mp4"
         export_uint8_video(finals[member], final_path, cfg.fps)
