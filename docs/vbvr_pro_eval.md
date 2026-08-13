@@ -1118,6 +1118,24 @@ each row and do not interpret absolute Qwen-judge and EvalKit scores as directly
 comparable. Keeping all plots in the independent output root also supports
 read-only evaluation result directories.
 
+To plot a single checkpoint-only offline VLM-judge run, use the dedicated
+entry point and supply any already-complete VLM result root that contains the
+six matched DiffSynth baselines:
+
+```fish
+.venv/bin/python -m src.cli.plot_vbvr_vlm_checkpoint_trends \
+  --vlm-judge-root $checkpoint_vlm_root \
+  --vlm-baseline-root $matched_vlm_baseline_root \
+  --output-dir $trend_output_root
+```
+
+The loader imports only the six baseline rows and requires the complete judge
+contract to match exactly, including Qwen revision, prompt source, media
+settings, and evaluator protocol. It refuses partial checkpoint matrices,
+nonzero-error cells, duplicate rows, and a mismatched external baseline. The
+output directory receives the standalone PNG/SVG curve, audited score CSV, and
+JSON summary.
+
 ## Outputs And Resume
 
 The default run root contains:

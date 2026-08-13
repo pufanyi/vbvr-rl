@@ -272,6 +272,15 @@ fish scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_vlm_judge_mu
 
 The command is single-node by default and uses evaluation-machine
 `WORLD_SIZE/RANK` for deterministic multi-node cell sharding when provided.
+After a checkpoint-only judge matrix completes, render its audited standalone
+curve with a contract-matched six-sampler baseline root:
+
+```fish
+.venv/bin/python -m src.cli.plot_vbvr_vlm_checkpoint_trends \
+  --vlm-judge-root /path/to/checkpoint-vlm-results \
+  --vlm-baseline-root /path/to/complete-vlm-results-with-baselines \
+  --output-dir /path/to/trend-plots
+```
 
 Single-GPU official Wan2.2-TI2V-5B end-to-end smoke:
 

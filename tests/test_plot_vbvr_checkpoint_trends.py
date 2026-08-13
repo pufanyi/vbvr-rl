@@ -12,6 +12,7 @@ from src.cli.plot_vbvr_checkpoint_trends import (
     load_vlm_judge_series,
     write_outputs,
 )
+from src.cli.plot_vbvr_vlm_checkpoint_trends import main as plot_vlm_main
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -27,7 +28,7 @@ def _vlm_cell_name(step: int, suffix: str) -> str:
     return f"diffsynth_step35500-baseline-{suffix}"
 
 
-def _build_vlm_fixture(root: Path) -> None:
+def _build_vlm_fixture(root: Path, *, steps: tuple[int, ...] = (0, 100)) -> None:
     contract = {
         "model": "fixture-qwen",
         "model_revision": "a" * 40,
@@ -36,7 +37,7 @@ def _build_vlm_fixture(root: Path) -> None:
     }
     contract_sha = "c" * 64
     rows: list[dict[str, object]] = []
-    for step in (0, 100):
+    for step in steps:
         for index, sampler in enumerate(SAMPLERS):
             cell_name = _vlm_cell_name(step, sampler.suffix)
             overall = 0.4 + step / 1000 + index / 1000
@@ -183,3 +184,53 @@ def test_write_outputs_creates_individual_and_comparison_artifacts(tmp_path: Pat
     assert all(path.is_file() and path.stat().st_size > 0 for path in outputs.values())
     summary = json.loads(outputs["summary_json"].read_text(encoding="utf-8"))
     assert summary["series"][1]["missing_cells"] == [{"sampler": "UniPC ODE", "sampler_id": "unipc", "step": 200}]
+
+
+def test_vlm_checkpoint_only_series_reuses_contract_matched_external_baseline(tmp_path: Path) -> None:
+    checkpoint_root = tmp_path / "checkpoint-vlm"
+    baseline_root = tmp_path / "baseline-vlm"
+    _build_vlm_fixture(checkpoint_root, steps=(100,))
+    _build_vlm_fixture(baseline_root, steps=(0,))
+
+    series = load_vlm_judge_series(
+        checkpoint_root,
+        baseline_root=baseline_root,
+        epoch_one_end=None,
+        key="qwen_judge_rl_qwen_judge",
+        label="Qwen-judge-RL model · Qwen3.6-27B task judge",
+    )
+
+    assert len(series.rows) == 12
+    assert series.expected_steps == (100,)
+    assert series.baseline_root == baseline_root.resolve()
+    assert all(row.baseline_source == baseline_root.resolve() for row in series.baseline_rows)
+
+
+def test_vlm_only_plot_cli_writes_curve_csv_and_audit_summary(tmp_path: Path) -> None:
+    checkpoint_root = tmp_path / "checkpoint-vlm"
+    baseline_root = tmp_path / "baseline-vlm"
+    output_dir = tmp_path / "plots"
+    _build_vlm_fixture(checkpoint_root, steps=(100,))
+    _build_vlm_fixture(baseline_root, steps=(0,))
+
+    status = plot_vlm_main(
+        [
+            "--vlm-judge-root",
+            str(checkpoint_root),
+            "--vlm-baseline-root",
+            str(baseline_root),
+            "--output-dir",
+            str(output_dir),
+            "--dpi",
+            "20",
+        ]
+    )
+
+    assert status == 0
+    expected = (
+        output_dir / "qwen_judge_rl_qwen_judge_sampler_checkpoint_trends.png",
+        output_dir / "qwen_judge_rl_qwen_judge_sampler_checkpoint_trends.svg",
+        output_dir / "qwen_judge_rl_qwen_judge_sampler_checkpoint_scores.csv",
+        output_dir / "qwen_judge_rl_qwen_judge_sampler_checkpoint_trend_summary.json",
+    )
+    assert all(path.is_file() and path.stat().st_size > 0 for path in expected)

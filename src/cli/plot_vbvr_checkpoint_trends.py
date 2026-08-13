@@ -209,8 +209,8 @@ def _parse_vlm_csv_row(raw: dict[str, str], index_path: Path) -> tuple[int, str,
     return step, sampler, overall, in_domain, out_of_domain, num_samples, errors
 
 
-def load_vlm_judge_series(root: Path, *, epoch_one_end: int | None = 1546) -> TrendSeries:
-    """Load and cross-check a complete offline VLM-judge root."""
+def _load_vlm_judge_root(root: Path) -> tuple[Path, tuple[ScoreRow, ...], str, dict[str, Any]]:
+    """Load one complete offline judge root without imposing matrix shape."""
 
     root = root.expanduser().resolve()
     root_summary_path = root / "summary.json"
@@ -289,6 +289,61 @@ def load_vlm_judge_series(root: Path, *, epoch_one_end: int | None = 1546) -> Tr
         )
     if root_summary.get("num_sample_judgments") != len(ordered) * EXPECTED_SAMPLES:
         raise RuntimeError(f"VLM root judgment count mismatch in {root_summary_path}")
+    return root, ordered, contract_sha, contract
+
+
+def load_vlm_judge_series(
+    root: Path,
+    *,
+    epoch_one_end: int | None = 1546,
+    baseline_root: Path | None = None,
+    key: str = "rule_rl_qwen_judge",
+    label: str = "Rule-RL model · Qwen3.6-27B task judge",
+) -> TrendSeries:
+    """Load and cross-check a complete six-sampler offline VLM-judge series.
+
+    A checkpoint-only judge run may reuse the six baseline rows from another
+    complete judge root. The full judge contract must match exactly, so this
+    cannot silently mix model revisions, prompt contracts, or media settings.
+    """
+
+    root, root_rows, contract_sha, contract = _load_vlm_judge_root(root)
+    rows = list(root_rows)
+    resolved_baseline_root: Path | None = None
+    if baseline_root is not None:
+        if any(row.step == 0 for row in rows):
+            raise RuntimeError(f"VLM judge root already contains baseline cells: {root}")
+        resolved_baseline_root, baseline_rows, baseline_contract_sha, baseline_contract = _load_vlm_judge_root(
+            baseline_root
+        )
+        if baseline_contract_sha != contract_sha or baseline_contract != contract:
+            raise RuntimeError(
+                "VLM baseline judge contract does not exactly match the checkpoint judge contract: "
+                f"checkpoint={contract_sha} baseline={baseline_contract_sha}"
+            )
+        selected_baselines = tuple(row for row in baseline_rows if row.step == 0)
+        baseline_missing = _expected_missing(selected_baselines, (0,))
+        if baseline_missing or len(selected_baselines) != len(SAMPLERS):
+            raise RuntimeError(
+                f"VLM baseline root does not contain one complete six-sampler baseline: {resolved_baseline_root}"
+            )
+        rows.extend(
+            ScoreRow(
+                step=row.step,
+                sampler=row.sampler,
+                overall=row.overall,
+                in_domain=row.in_domain,
+                out_of_domain=row.out_of_domain,
+                num_samples=row.num_samples,
+                errors=row.errors,
+                cell_name=row.cell_name,
+                result_path=row.result_path,
+                baseline_source=resolved_baseline_root,
+            )
+            for row in selected_baselines
+        )
+
+    ordered = _validate_unique_rows(rows, source=root)
     steps = tuple(sorted({row.step for row in ordered if row.step > 0}))
     missing = _expected_missing(ordered, (0, *steps))
     if missing:
@@ -303,8 +358,8 @@ def load_vlm_judge_series(root: Path, *, epoch_one_end: int | None = 1546) -> Tr
         "sampled_video_frames": contract.get("sampled_video_frames"),
     }
     return TrendSeries(
-        key="rule_rl_qwen_judge",
-        label="Rule-RL model · Qwen3.6-27B task judge",
+        key=key,
+        label=label,
         evaluator="Qwen3.6-27B task-specific direct-video judge",
         root=root,
         rows=ordered,
@@ -313,6 +368,7 @@ def load_vlm_judge_series(root: Path, *, epoch_one_end: int | None = 1546) -> Tr
         missing_cells=(),
         epoch_one_end=epoch_one_end,
         subtitle=("Task-specific direct-video judge · 512×512×81 · 500 samples per cell · matched 30-step samplers"),
+        baseline_root=resolved_baseline_root,
     )
 
 
