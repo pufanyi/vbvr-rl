@@ -36,7 +36,7 @@ Paths are resolved against `root`, or against the Parquet parent if `root` is ab
 {
     "index": idx,
     "videos": [video_0, ..., final_video],  # each (C, T, H, W), uint8
-    "image": image,                         # (C, H, W), uint8
+    "image": image,  # (C, H, W), uint8
     "prompt": prompt,
 }
 ```

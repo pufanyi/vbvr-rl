@@ -206,15 +206,9 @@ You can also use it as a Python library:
 ```python
 from vbvr_bench import VBVRBench
 
-bench = VBVRBench(
-    gt_base_path='/path/to/VBVR-Bench',
-    output_path='./results'
-)
+bench = VBVRBench(gt_base_path="/path/to/VBVR-Bench", output_path="./results")
 
-results = bench.evaluate(
-    videos_path='/path/to/model_outputs',
-    name='my_model'
-)
+results = bench.evaluate(videos_path="/path/to/model_outputs", name="my_model")
 
 print(f"In-Domain:      {results['In_Domain']['mean_score']:.4f}")
 print(f"Out-of-Domain:  {results['Out_of_Domain']['mean_score']:.4f}")
