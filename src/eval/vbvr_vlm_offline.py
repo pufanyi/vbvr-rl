@@ -812,9 +812,7 @@ def aggregate_complete_cells(
     rows.sort(key=lambda row: _cell_sort_key(str(row["cell_name"])))
     total_samples = sum(int(row["num_samples"]) for row in rows)
     weighted_mean = (
-        sum(float(row["overall"]) * int(row["num_samples"]) for row in rows) / total_samples
-        if total_samples
-        else 0.0
+        sum(float(row["overall"]) * int(row["num_samples"]) for row in rows) / total_samples if total_samples else 0.0
     )
     by_sampler: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:

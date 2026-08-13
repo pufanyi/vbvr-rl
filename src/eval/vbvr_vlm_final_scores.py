@@ -52,8 +52,7 @@ def render_final_scores(cell_summary: dict[str, Any]) -> str:
     out_of_domain_count = _count(out_of_domain, "out-of-domain")
     if sample_count != in_domain_count + out_of_domain_count:
         raise ValueError(
-            "VLM cell summary domain counts do not add up: "
-            f"{sample_count} != {in_domain_count} + {out_of_domain_count}"
+            f"VLM cell summary domain counts do not add up: {sample_count} != {in_domain_count} + {out_of_domain_count}"
         )
     by_task = overall.get("by_task")
     if not isinstance(by_task, dict):

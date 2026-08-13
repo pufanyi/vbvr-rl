@@ -175,9 +175,7 @@ reason: Mostly correct."""
     assert user_content[0] == {"type": "text", "text": EVAL_PROMPTS[G21_TASK].strip()}
     assert sum(block["type"] == "image_url" for block in user_content) == 1
     assert sum(block["type"] == "video_url" for block in user_content) == 1
-    assert payload["media_io_kwargs"] == {
-        "video": {"video_backend": "opencv", "num_frames": 32, "fps": -1}
-    }
+    assert payload["media_io_kwargs"] == {"video": {"video_backend": "opencv", "num_frames": 32, "fps": -1}}
     assert payload["mm_processor_kwargs"] == {"do_sample_frames": False}
     assert not any("Expected final frame" in block.get("text", "") for block in user_content)
     assert user_content[-1] == {"type": "text", "text": TASK_VLM_JUDGE_OUTPUT_REMINDER}

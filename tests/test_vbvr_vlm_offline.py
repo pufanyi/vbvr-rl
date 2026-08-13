@@ -108,9 +108,7 @@ def test_offline_judge_sends_native_mp4_with_exact_training_contract(tmp_path: P
     assert outcome.score == pytest.approx(0.795)
     payload = captured["payload"]
     assert payload["structured_outputs"] == {"regex": task_vlm_judge_output_regex(EVAL_PROMPTS[G21_TASK])}
-    assert payload["media_io_kwargs"] == {
-        "video": {"video_backend": "opencv", "num_frames": 32, "fps": -1}
-    }
+    assert payload["media_io_kwargs"] == {"video": {"video_backend": "opencv", "num_frames": 32, "fps": -1}}
     assert payload["mm_processor_kwargs"] == {"do_sample_frames": False}
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     content = payload["messages"][0]["content"]

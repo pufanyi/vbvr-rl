@@ -32,9 +32,7 @@ def test_task_prompt_payload_matches_production_video_and_regex_contract(tmp_pat
     assert payload["max_tokens"] == 1024
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert payload["structured_outputs"] == {"regex": task_vlm_judge_output_regex(task_prompt)}
-    assert payload["media_io_kwargs"] == {
-        "video": {"video_backend": "opencv", "num_frames": 32, "fps": -1}
-    }
+    assert payload["media_io_kwargs"] == {"video": {"video_backend": "opencv", "num_frames": 32, "fps": -1}}
     assert payload["mm_processor_kwargs"] == {"do_sample_frames": False}
 
     content = payload["messages"][0]["content"]

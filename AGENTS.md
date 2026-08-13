@@ -8,6 +8,7 @@
 - Keep `README.md`, `docs/`, runnable `configs/`, launcher scripts, and this file in sync when data contracts, checkpoint layouts, training modes, or evaluation flows change.
 - For long-running tasks, keep monitoring the process instead of leaving it hanging. Poll logs or command output, verify the exit status or completion signal, and make sure no required background session is still running before reporting the task as done.
 - Run the project suite as `.venv/bin/python -m pytest tests`, not bare `pytest` from the repository root. Root-wide discovery descends into vendored `aoss/tests`, ignored reward/W&B artifacts, and historical permission-restricted temp trees, so it can fail during unrelated collection before reaching the project tests.
+- Before pushing, mirror the GitHub lint workflow with both `.venv/bin/ruff check --output-format=github .` and `.venv/bin/ruff format --check .`; CI applies the format check to the whole non-excluded repository, not only files changed by the current commit.
 - This workstation exposes Fish commands `proxy_on`, `proxy_off`, and `proxy_status`. The credentialed proxy URL lives only in the user-private `~/.config/fish/private/workstation_proxy_url` file; never copy it into the repository, logs, or committed configuration.
 - This workstation enables tmux mouse support through `~/.tmux.conf`; mouse clicks select panes/windows, dragging resizes panes, and the wheel enters copy-mode for scrollback.
 

@@ -145,8 +145,7 @@ def build_task_vlm_judge_messages(
         {
             "type": "text",
             "text": (
-                f"Generated video ({source_frame_count} source frames encoded at "
-                f"{video_fps} FPS, chronological order):"
+                f"Generated video ({source_frame_count} source frames encoded at {video_fps} FPS, chronological order):"
             ),
         },
         {"type": "video_url", "video_url": {"url": generated_video_data_url}},
