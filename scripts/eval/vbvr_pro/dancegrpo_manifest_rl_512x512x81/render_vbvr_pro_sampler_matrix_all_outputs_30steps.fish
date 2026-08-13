@@ -44,6 +44,10 @@ set -q TRAJECTORY_WORKERS_PER_GPU[1]
 or set -g TRAJECTORY_WORKERS_PER_GPU 1
 string match -qr '^[1-9][0-9]*$' -- "$TRAJECTORY_WORKERS_PER_GPU"
 or _fail "TRAJECTORY_WORKERS_PER_GPU must be a positive integer, got '$TRAJECTORY_WORKERS_PER_GPU'"
+set -q TRAJECTORY_SAMPLE_SHARDS_PER_CELL[1]
+or set -g TRAJECTORY_SAMPLE_SHARDS_PER_CELL $TRAJECTORY_WORKERS_PER_GPU
+string match -qr '^[1-9][0-9]*$' -- "$TRAJECTORY_SAMPLE_SHARDS_PER_CELL"
+or _fail "TRAJECTORY_SAMPLE_SHARDS_PER_CELL must be a positive integer, got '$TRAJECTORY_SAMPLE_SHARDS_PER_CELL'"
 set -q TRAJECTORY_PROGRESS_INTERVAL[1]
 or set -g TRAJECTORY_PROGRESS_INTERVAL 30
 string match -qr '^[1-9][0-9]*$' -- "$TRAJECTORY_PROGRESS_INTERVAL"
@@ -73,6 +77,7 @@ set -g _trajectory_root $TRAJECTORY_ROOT
 set -g _trajectory_log_dir $TRAJECTORY_LOG_DIR
 set -g _trajectory_cuda_devices $TRAJECTORY_CUDA_DEVICES
 set -g _trajectory_workers_per_gpu $TRAJECTORY_WORKERS_PER_GPU
+set -g _trajectory_sample_shards_per_cell $TRAJECTORY_SAMPLE_SHARDS_PER_CELL
 set -g _trajectory_progress_interval $TRAJECTORY_PROGRESS_INTERVAL
 
 test (count $_trajectory_cuda_devices) -gt 0; or _fail "TRAJECTORY_CUDA_DEVICES must select at least one GPU"
@@ -304,15 +309,22 @@ set tasks $node_tasks
 
 set -l worker_tasks
 for task_value in $tasks
-    for shard_index in (seq 0 (math $_trajectory_workers_per_gpu - 1))
-        set -a worker_tasks "$task_value,$shard_index,$_trajectory_workers_per_gpu"
+    for shard_index in (seq 0 (math $_trajectory_sample_shards_per_cell - 1))
+        set -a worker_tasks "$task_value,$shard_index,$_trajectory_sample_shards_per_cell"
     end
 end
+
+set -l worker_wave_size (math (count $_trajectory_cuda_devices) \* $_trajectory_workers_per_gpu)
+test $_trajectory_sample_shards_per_cell -le $worker_wave_size
+or _fail "sample shards/cell ($_trajectory_sample_shards_per_cell) exceed concurrent worker slots ($worker_wave_size)"
+test (math "$worker_wave_size % $_trajectory_sample_shards_per_cell") -eq 0
+or _fail "sample shards/cell ($_trajectory_sample_shards_per_cell) must divide concurrent worker slots ($worker_wave_size) so one cell never straddles waves"
 
 echo "[trajectory] node shard: rank=$trajectory_node_rank count=$trajectory_node_count"
 echo "[trajectory] global selected cells before node sharding: $unsharded_task_count"
 echo "[trajectory] node-assigned cells: "(count $tasks)
-echo "[trajectory] workers per GPU/cell: $_trajectory_workers_per_gpu"
+echo "[trajectory] maximum workers/GPU: $_trajectory_workers_per_gpu"
+echo "[trajectory] sample shards/cell: $_trajectory_sample_shards_per_cell"
 set -l assignment_wave_size (count $_trajectory_cuda_devices)
 for task_index in (seq (count $worker_tasks))
     set -l assignment_slot (math "(($task_index - 1) % $assignment_wave_size) + 1")
@@ -388,7 +400,7 @@ function _launch_wave
     if test (count $running_pids) -gt 0
         set -l progress_args \
             --trajectory-root $_trajectory_root \
-            --shard-count $_trajectory_workers_per_gpu \
+            --shard-count $_trajectory_sample_shards_per_cell \
             --samples-per-cell (set -q TRAJECTORY_LIMIT[1]; and echo $TRAJECTORY_LIMIT; or echo 500) \
             --interval $_trajectory_progress_interval
         for cell in $launched_cells
@@ -440,12 +452,13 @@ end
 echo "[trajectory] models: $model_ids"
 echo "[trajectory] samplers: $sampler_ids"
 echo "[trajectory] selected cells: "(count $tasks)
-echo "[trajectory] concurrent workers: "(count $worker_tasks)
+echo "[trajectory] total worker shards: "(count $worker_tasks)
+echo "[trajectory] concurrent worker slots: $worker_wave_size"
 echo "[trajectory] selected samples/cell: "(set -q TRAJECTORY_LIMIT[1]; and echo $TRAJECTORY_LIMIT; or echo 500)
 echo "[trajectory] output root: $_trajectory_root"
 echo "[trajectory] files remain unpacked; no tar archive will be created"
 
-set -l wave_size (math (count $_trajectory_cuda_devices) \* $_trajectory_workers_per_gpu)
+set -l wave_size $worker_wave_size
 set -l start 1
 while test $start -le (count $worker_tasks)
     set -l wave

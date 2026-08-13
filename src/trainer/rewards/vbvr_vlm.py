@@ -1,16 +1,14 @@
 """OpenAI-compatible VLM judge reward for VBVR GRPO training.
 
-Generated latents are decoded by the training process, sampled into a small
-chronological image sequence, and sent to a separately hosted multimodal model.
-The service owns the judge weights and KV cache; training ranks only retain the
-HTTP payload and the decoded preview frames.
+Generated latents are decoded by the training process, encoded as an in-memory
+MP4, and sent to a separately hosted multimodal model. The service owns video
+frame sampling, judge weights, and KV cache; training ranks only retain the HTTP
+payload and the decoded rollout while a request is pending.
 """
 
 from __future__ import annotations
 
 import atexit
-import base64
-import io
 import json
 import math
 import os
@@ -29,24 +27,28 @@ import torch
 from loguru import logger
 from PIL import Image
 
+from src.eval.vbvr_vlm_protocol import (
+    EVAL_PROMPTS_SOURCE_SHA256,
+    TASK_VLM_JUDGE_OUTPUT_REMINDER,  # noqa: F401 - compatibility re-export
+    TASK_VLM_JUDGE_REPAIR_PROMPT,
+    build_task_vlm_judge_messages,
+    build_task_vlm_judge_payload,
+    encode_vlm_image_data_url,
+    encode_vlm_video_data_url,
+    parse_task_vlm_judge_score,
+    task_vlm_judge_output_regex,  # noqa: F401 - compatibility re-export
+    vllm_video_sampling_overrides,
+)
 from src.trainer.rewards.base import BaseReward
 from src.trainer.rewards.registry import register_reward
 from src.trainer.rewards.vbvr_vlm_eval_prompts import EVAL_PROMPTS
-
-# SHA-256 of the byte-identical source copied from
-# storage/codes/eval_prompts.py on 2026-08-05.
-EVAL_PROMPTS_SOURCE_SHA256 = "4d3159232590bd4b99266c9e82df445a3a54ada50a7af30051cf505057574202"
-TASK_VLM_JUDGE_OUTPUT_REMINDER = (
-    'Follow the "Output format (exactly these lines)" instruction in the task prompt. '
-    "Return only those lines, in that order, with no analysis, headings, bullets, Markdown, or code fences."
-)
 
 # This remains available as an explicit custom-prompt mode. The default reward
 # uses the task-specific EVAL_PROMPTS contract above.
 DEFAULT_VLM_JUDGE_SYSTEM_PROMPT = """You are an expert evaluator of video-based visual reasoning.
 
-You will receive an instruction, a starting frame, an expected final frame, and chronological frames sampled from a
-generated video. Judge whether the generated video actually performs the requested task. Use the expected final frame
+You will receive an instruction, a starting frame, an expected final frame, and a generated video. Judge whether the
+generated video actually performs the requested task. Use the expected final frame
 as a semantic reference, not as a demand for pixel-perfect copying. Check object identity and count, spatial relations,
 state changes, task progress, temporal consistency, and the final outcome. Do not reward visual quality when the
 requested reasoning or action is wrong.
@@ -63,71 +65,6 @@ Scoring anchors:
 
 Use intermediate numeric scores when appropriate so that similar candidates can still be distinguished. Do not include
 markdown fences or any text outside the JSON object."""
-
-
-def _task_prompt_output_fields(task_prompt: str) -> list[str]:
-    marker = "Output format (exactly these lines):"
-    if marker not in task_prompt:
-        raise ValueError("Task-specific VLM prompt has no output-format section")
-    output_section = task_prompt.split(marker, maxsplit=1)[1]
-    fields = re.findall(r"^([a-z][a-z0-9_]*):", output_section, flags=re.MULTILINE)
-    if not fields or fields[-2:] != ["total_score", "reason"]:
-        raise ValueError(f"Task-specific VLM prompt has an invalid output contract: {fields}")
-    if len(fields) != len(set(fields)):
-        raise ValueError(f"Task-specific VLM prompt repeats output fields: {fields}")
-    return fields
-
-
-def task_vlm_judge_output_regex(task_prompt: str) -> str:
-    """Build a vLLM regex constraint for one prompt's exact line schema."""
-    number = r"(?:100(?:\.0+)?|(?:[0-9]|[1-9][0-9])(?:\.[0-9]+)?)"
-    lines = []
-    for field in _task_prompt_output_fields(task_prompt):
-        if field == "reason":
-            lines.append(r"reason: [^\n]+")
-        else:
-            lines.append(rf"{re.escape(field)}: {number}")
-    return "\n".join(lines)
-
-
-def parse_task_vlm_judge_score(
-    response: str,
-    *,
-    task_prompt: str,
-    score_max: float = 100.0,
-) -> tuple[float, str]:
-    """Parse and validate the exact per-task line-oriented judge contract."""
-    if not math.isfinite(score_max) or score_max <= 0:
-        raise ValueError(f"score_max must be finite and > 0, got {score_max}")
-
-    expected_fields = _task_prompt_output_fields(task_prompt)
-    values: dict[str, float] = {}
-    reason = ""
-    for field in expected_fields:
-        matches = re.findall(
-            rf"^\s*{re.escape(field)}\s*:\s*(.*?)\s*$",
-            response,
-            flags=re.MULTILINE,
-        )
-        if len(matches) != 1:
-            raise ValueError(f"VLM response must contain exactly one {field!r} line: {response[:1000]!r}")
-        if field == "reason":
-            reason = matches[0].strip()
-            if not reason:
-                raise ValueError("VLM response reason must not be empty")
-            continue
-        try:
-            value = float(matches[0])
-        except ValueError as exc:
-            raise ValueError(f"VLM response field {field!r} is not numeric: {matches[0]!r}") from exc
-        if not math.isfinite(value) or not 0.0 <= value <= score_max:
-            raise ValueError(f"VLM response field {field!r} is outside [0, {score_max}]: {value}")
-        values[field] = value
-
-    weights = [value for field, value in values.items() if field.endswith("_weight")]
-    if not weights or not math.isclose(sum(weights), 100.0, abs_tol=0.5):
-        raise ValueError(f"VLM response weights must sum to 100, got {sum(weights):.6g}")
-    return values["total_score"] / score_max, reason
 
 
 def parse_vlm_judge_score(response: str, *, score_max: float = 100.0) -> tuple[float, str]:
@@ -236,12 +173,14 @@ class VBVRVLMReward(BaseReward):
             self._validate_service()
         if trainer.rank == 0:
             logger.info(
-                "VBVR VLM reward: endpoint={} model={} prompt_mode={} frames={} image_max_edge={} include_start={} "
+                "VBVR VLM reward: endpoint={} model={} prompt_mode={} media=video video_fps={} sampled_frames={} "
+                "image_max_edge={} include_start={} "
                 "decode_batch={} requests/rank={} max_pending={} structured_output={} prompt_sha256={}",
                 self._base_url,
                 self._model_name,
                 self._prompt_mode,
-                cfg.vlm_reward_num_frames,
+                cfg.vlm_reward_video_fps,
+                cfg.vlm_reward_video_num_frames,
                 cfg.vlm_reward_image_max_edge,
                 cfg.vlm_reward_include_gt_first_frame,
                 self._decode_batch_size,
@@ -392,7 +331,6 @@ class VBVRVLMReward(BaseReward):
         gt_final_frame_path: str | None,
     ) -> float:
         try:
-            sampled_frames = self._sample_video_frames(generated_video, int(self.cfg.vlm_reward_num_frames))
             task_prompt: str | None = None
             if self._prompt_mode == "task_specific":
                 task_prompt = self._task_prompt(task_name)
@@ -400,7 +338,7 @@ class VBVRVLMReward(BaseReward):
                 messages = self._build_task_messages(
                     task_prompt=task_prompt,
                     first_frame=first_frame,
-                    generated_frames=sampled_frames,
+                    generated_video=generated_video,
                 )
             else:
                 first_frame = (
@@ -414,20 +352,17 @@ class VBVRVLMReward(BaseReward):
                     prompt=prompt,
                     first_frame=first_frame,
                     final_frame=final_frame,
-                    generated_frames=sampled_frames,
+                    generated_video=generated_video,
                 )
-            response = self._chat_completion(
-                messages,
-                task_prompt=task_prompt,
-            )
             if self._prompt_mode == "task_specific":
                 assert task_prompt is not None
-                score, reasoning = parse_task_vlm_judge_score(
-                    response,
+                score, reasoning, response = self._task_completion_with_retries(
+                    messages=messages,
                     task_prompt=task_prompt,
-                    score_max=float(self.cfg.vlm_reward_score_max),
+                    task_name=task_name,
                 )
             else:
+                response = self._chat_completion(messages)
                 score, reasoning = parse_vlm_judge_score(response, score_max=float(self.cfg.vlm_reward_score_max))
             self._log_response(task_name, score, reasoning, response)
             return score
@@ -435,11 +370,61 @@ class VBVRVLMReward(BaseReward):
             with self._error_lock:
                 self._error_count += 1
                 error_count = self._error_count
-            if self.trainer.rank == 0 and error_count <= 10:
-                logger.warning("VBVR VLM reward failed for task '{}': {}", task_name, exc)
-            if bool(self.cfg.vlm_reward_fail_on_error):
+            fail_on_error = bool(self.cfg.vlm_reward_fail_on_error)
+            error_score = float(self.cfg.vlm_reward_error_score)
+            if error_count <= 10:
+                action = "raising" if fail_on_error else f"using fallback score {error_score:.4f}"
+                logger.warning(
+                    "VBVR VLM reward failed: rank={} task={} action={} error={}",
+                    self.trainer.rank,
+                    task_name or "<unknown>",
+                    action,
+                    exc,
+                )
+            if fail_on_error:
                 raise RuntimeError(f"VBVR VLM reward failed for task {task_name or '<unknown>'}: {exc}") from exc
-            return float(self.cfg.vlm_reward_error_score)
+            return error_score
+
+    def _task_completion_with_retries(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        task_prompt: str,
+        task_name: str,
+    ) -> tuple[float, str, str]:
+        """Request and semantically validate a task response, repairing invalid outputs."""
+        request_messages = messages
+        retries = int(self.cfg.vlm_reward_max_retries)
+        for attempt in range(retries + 1):
+            response = self._chat_completion(request_messages, task_prompt=task_prompt)
+            try:
+                score, reasoning = parse_task_vlm_judge_score(
+                    response,
+                    task_prompt=task_prompt,
+                    score_max=float(self.cfg.vlm_reward_score_max),
+                )
+                return score, reasoning, response
+            except ValueError as exc:
+                if attempt >= retries:
+                    raise
+                logger.warning(
+                    "Retrying semantically invalid VLM response: rank={} task={} retry={}/{} error={}",
+                    self.trainer.rank,
+                    task_name or "<unknown>",
+                    attempt + 1,
+                    retries,
+                    exc,
+                )
+                request_messages = [
+                    *request_messages,
+                    {"role": "assistant", "content": response},
+                    {
+                        "role": "user",
+                        "content": f"{TASK_VLM_JUDGE_REPAIR_PROMPT}\nValidation error: {str(exc)[:300]}",
+                    },
+                ]
+                time.sleep(float(self.cfg.vlm_reward_retry_backoff_seconds) * (2**attempt))
+        raise AssertionError("unreachable")
 
     @staticmethod
     def _task_prompt(task_name: str) -> str:
@@ -456,25 +441,17 @@ class VBVRVLMReward(BaseReward):
         *,
         task_prompt: str,
         first_frame: Image.Image,
-        generated_frames: list[Image.Image],
+        generated_video: np.ndarray,
     ) -> list[dict[str, Any]]:
-        content: list[dict[str, Any]] = [
-            {"type": "text", "text": task_prompt.strip()},
-            {"type": "text", "text": "First frame (input):"},
-            self._image_content(first_frame),
-            {
-                "type": "text",
-                "text": (
-                    "Generated video, represented by chronological frames sampled uniformly "
-                    f"from the complete video ({len(generated_frames)} total, earliest first):"
-                ),
-            },
-        ]
-        for index, frame in enumerate(generated_frames, start=1):
-            content.append({"type": "text", "text": f"Generated frame {index}/{len(generated_frames)}:"})
-            content.append(self._image_content(frame))
-        content.append({"type": "text", "text": TASK_VLM_JUDGE_OUTPUT_REMINDER})
-        return [{"role": "user", "content": content}]
+        first_frame_data_url = self._image_content(first_frame)["image_url"]["url"]
+        generated_video_data_url = self._video_content(generated_video)["video_url"]["url"]
+        return build_task_vlm_judge_messages(
+            task_prompt=task_prompt,
+            first_frame_data_url=first_frame_data_url,
+            generated_video_data_url=generated_video_data_url,
+            source_frame_count=len(generated_video),
+            video_fps=int(self.cfg.vlm_reward_video_fps),
+        )
 
     def _build_custom_messages(
         self,
@@ -483,7 +460,7 @@ class VBVRVLMReward(BaseReward):
         prompt: str,
         first_frame: Image.Image | None,
         final_frame: Image.Image,
-        generated_frames: list[Image.Image],
+        generated_video: np.ndarray,
     ) -> list[dict[str, Any]]:
         task_prefix = f"Task identifier: {task_name}\n" if task_name else ""
         content: list[dict[str, Any]] = [
@@ -505,15 +482,13 @@ class VBVRVLMReward(BaseReward):
                 {
                     "type": "text",
                     "text": (
-                        "Chronological frames sampled uniformly from the generated video "
-                        f"({len(generated_frames)} total, earliest first):"
+                        f"Generated video ({len(generated_video)} source frames encoded at "
+                        f"{int(self.cfg.vlm_reward_video_fps)} FPS, chronological order):"
                     ),
                 },
+                self._video_content(generated_video),
             ]
         )
-        for index, frame in enumerate(generated_frames, start=1):
-            content.append({"type": "text", "text": f"Generated frame {index}/{len(generated_frames)}:"})
-            content.append(self._image_content(frame))
         content.append({"type": "text", "text": "Return the JSON verdict now."})
         if self._system_prompt is None:
             raise RuntimeError("Custom VLM prompt mode was initialized without a system prompt")
@@ -524,17 +499,23 @@ class VBVRVLMReward(BaseReward):
 
     def _image_content(self, image: Image.Image) -> dict[str, Any]:
         max_edge = int(self.cfg.vlm_reward_image_max_edge)
-        image = image.convert("RGB")
         # Preserve native judge pixels whenever they already fit the configured
         # safety bound. PIL.thumbnail is deliberately downscale-only: this path
         # never expands a 384/512 frame to EvalKit's separate 1024 preparation.
-        if max(image.size) > max_edge:
-            image = image.copy()
-            image.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
-        buffer = io.BytesIO()
-        image.save(buffer, format="JPEG", quality=int(self.cfg.vlm_reward_jpeg_quality), optimize=False)
-        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-        return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}}
+        data_url = encode_vlm_image_data_url(
+            image,
+            max_edge=max_edge,
+            jpeg_quality=int(self.cfg.vlm_reward_jpeg_quality),
+        )
+        return {"type": "image_url", "image_url": {"url": data_url}}
+
+    def _video_content(self, video: np.ndarray) -> dict[str, Any]:
+        data_url = encode_vlm_video_data_url(
+            video,
+            fps=int(self.cfg.vlm_reward_video_fps),
+            max_edge=int(self.cfg.vlm_reward_image_max_edge),
+        )
+        return {"type": "video_url", "video_url": {"url": data_url}}
 
     def _chat_completion(
         self,
@@ -542,24 +523,33 @@ class VBVRVLMReward(BaseReward):
         *,
         task_prompt: str | None = None,
     ) -> str:
-        payload: dict[str, Any] = {
-            "model": self._model_name,
-            "messages": messages,
-            "temperature": 0.0,
-            "max_tokens": int(self.cfg.vlm_reward_max_new_tokens),
-            "seed": 0,
-            # Qwen3.6 enables thinking by default. A scalar judge response is
-            # faster and easier to constrain when hidden reasoning is disabled.
-            "chat_template_kwargs": {"enable_thinking": False},
-        }
+        payload: dict[str, Any]
         if self._prompt_mode == "task_specific":
             if task_prompt is None:
                 raise ValueError("Task-specific VLM chat completion requires its task prompt")
             # A per-task regex preserves the source's exact line-oriented
             # contract and prevents verbose analysis from consuming the token
             # budget before the required fields.
-            payload["structured_outputs"] = {"regex": task_vlm_judge_output_regex(task_prompt)}
-        elif self._structured_output:
+            payload = build_task_vlm_judge_payload(
+                model_name=self._model_name,
+                messages=messages,
+                task_prompt=task_prompt,
+                max_tokens=int(self.cfg.vlm_reward_max_new_tokens),
+                video_num_frames=int(self.cfg.vlm_reward_video_num_frames),
+            )
+        else:
+            payload = {
+                "model": self._model_name,
+                "messages": messages,
+                "temperature": 0.0,
+                "max_tokens": int(self.cfg.vlm_reward_max_new_tokens),
+                "seed": 0,
+                # Qwen3.6 enables thinking by default. A scalar judge response is
+                # faster and easier to constrain when hidden reasoning is disabled.
+                "chat_template_kwargs": {"enable_thinking": False},
+                **vllm_video_sampling_overrides(int(self.cfg.vlm_reward_video_num_frames)),
+            }
+        if self._prompt_mode != "task_specific" and self._structured_output:
             score_max = float(self.cfg.vlm_reward_score_max)
             payload["response_format"] = {
                 "type": "json_schema",
@@ -648,14 +638,6 @@ class VBVRVLMReward(BaseReward):
             reasoning,
             response[:1000],
         )
-
-    @staticmethod
-    def _sample_video_frames(video: np.ndarray, count: int) -> list[Image.Image]:
-        if video.ndim != 4 or video.shape[-1] != 3 or video.shape[0] <= 0:
-            raise ValueError(f"Expected nonempty video shaped (T,H,W,3), got {video.shape}")
-        frame_count = min(count, int(video.shape[0]))
-        indices = np.linspace(0, video.shape[0] - 1, frame_count).round().astype(np.int64)
-        return [Image.fromarray(video[index], mode="RGB") for index in indices]
 
     @staticmethod
     def _load_reference_frame(path: str | None, gt_video: np.ndarray | None, *, frame_index: int) -> Image.Image:

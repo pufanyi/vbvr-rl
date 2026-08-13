@@ -448,13 +448,18 @@ class RLConfig(TrainConfig):
     vlm_reward_model: str = "qwen3.6-27b"
     vlm_reward_api_key: str = "EMPTY"
     # task_specific selects the pinned 100-task EvalKit-derived prompt map.
-    # custom preserves the generic start/final/generated-frame contract below.
+    # custom preserves the generic start/final/generated-video contract below.
     vlm_reward_prompt_mode: Literal["task_specific", "custom"] = "task_specific"
     # Custom-mode prompt overrides. A text file takes precedence over the
     # inline value; when both are absent, the generic in-repo prompt is used.
     vlm_reward_system_prompt: str | None = None
     vlm_reward_system_prompt_path: str | None = None
-    vlm_reward_num_frames: int = 6
+    # The decoded rollout is encoded completely at this FPS before vLLM's
+    # single uniform sampling pass.
+    vlm_reward_video_fps: int = 16
+    # vLLM uniformly selects this many frames from the complete MP4. The HF
+    # processor's own sampling is disabled so the video is sampled only once.
+    vlm_reward_video_num_frames: int = 32
     vlm_reward_include_gt_first_frame: bool = True
     vlm_reward_decode_batch_size: int = 1
     vlm_reward_concurrency: int = 2
@@ -462,11 +467,13 @@ class RLConfig(TrainConfig):
     # Zero selects max(decode_batch_size, 2*concurrency).
     vlm_reward_max_pending_jobs: int = 0
     vlm_reward_request_timeout_seconds: float = 180.0
+    # Retry transient HTTP failures and, independently, task-output semantic
+    # validation failures such as rubric weights that do not sum to 100.
     vlm_reward_max_retries: int = 2
     vlm_reward_retry_backoff_seconds: float = 1.0
     vlm_reward_max_new_tokens: int = 1024
-    # This is a downscale-only safety bound, not a target resize. A generated
-    # frame at or below the bound is JPEG-encoded at its native resolution.
+    # This is a downscale-only safety bound, not a target resize. First-frame
+    # JPEGs and generated-video frames at or below it retain native resolution.
     vlm_reward_image_max_edge: int = 512
     vlm_reward_jpeg_quality: int = 85
     vlm_reward_score_max: float = 100.0
@@ -474,12 +481,16 @@ class RLConfig(TrainConfig):
     # prompts have distinct exact line-oriented schemas.
     vlm_reward_use_structured_output: bool = False
     vlm_reward_validate_service: bool = True
-    vlm_reward_fail_on_error: bool = True
+    # Production training is fail-open: exhausted request/schema failures use
+    # error_score so one judge failure cannot tear down the distributed job.
+    # Strict smoke/preflight configs may override this to true.
+    vlm_reward_fail_on_error: bool = False
     vlm_reward_error_score: float = 0.0
     vlm_reward_log_first_n: int = 2
 
     @field_validator(
-        "vlm_reward_num_frames",
+        "vlm_reward_video_fps",
+        "vlm_reward_video_num_frames",
         "vlm_reward_decode_batch_size",
         "vlm_reward_concurrency",
         "vlm_reward_max_new_tokens",

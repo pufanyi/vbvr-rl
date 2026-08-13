@@ -12,7 +12,8 @@
 #
 # Optional:
 #   --nproc N                       local GPUs to expose (default: 8)
-#   --workers-per-gpu N              independent B=1 workers/GPU (default: 2)
+#   --workers-per-gpu N             maximum independent B=1 workers/GPU (default: 2)
+#   --sample-shards-per-cell N      deterministic sample shards/cell (default: workers/GPU)
 #   --progress-interval N            live progress period in seconds (default: 30)
 #   TRAJECTORY_ASSIGNMENT_ONLY=1    print this node's cells and exit
 #   MODEL_FILTER / SAMPLER_FILTER   retain the base launcher's exact filters
@@ -28,9 +29,11 @@ end
 
 set -l nproc 8
 set -l workers_per_gpu 2
+set -l sample_shards_per_cell
 set -l progress_interval 30
 set -l expect_nproc false
 set -l expect_workers false
+set -l expect_shards false
 set -l expect_progress false
 for arg in $argv
     if test "$expect_nproc" = true
@@ -41,6 +44,11 @@ for arg in $argv
     if test "$expect_workers" = true
         set workers_per_gpu $arg
         set expect_workers false
+        continue
+    end
+    if test "$expect_shards" = true
+        set sample_shards_per_cell $arg
+        set expect_shards false
         continue
     end
     if test "$expect_progress" = true
@@ -56,19 +64,28 @@ for arg in $argv
         set expect_workers true
         continue
     end
+    if test "$arg" = "--sample-shards-per-cell"
+        set expect_shards true
+        continue
+    end
     if test "$arg" = "--progress-interval"
         set expect_progress true
         continue
     end
-    _fail "unknown argument '$arg' (supported: --nproc N --workers-per-gpu N --progress-interval N)"
+    _fail "unknown argument '$arg' (supported: --nproc N --workers-per-gpu N --sample-shards-per-cell N --progress-interval N)"
 end
 test "$expect_nproc" = false; or _fail "--nproc requires a value"
 test "$expect_workers" = false; or _fail "--workers-per-gpu requires a value"
+test "$expect_shards" = false; or _fail "--sample-shards-per-cell requires a value"
 test "$expect_progress" = false; or _fail "--progress-interval requires a value"
 string match -qr '^[1-9][0-9]*$' -- "$nproc"
 or _fail "--nproc must be a positive integer, got '$nproc'"
 string match -qr '^[1-9][0-9]*$' -- "$workers_per_gpu"
 or _fail "--workers-per-gpu must be a positive integer, got '$workers_per_gpu'"
+if test -n "$sample_shards_per_cell"
+    string match -qr '^[1-9][0-9]*$' -- "$sample_shards_per_cell"
+    or _fail "--sample-shards-per-cell must be a positive integer, got '$sample_shards_per_cell'"
+end
 string match -qr '^[1-9][0-9]*$' -- "$progress_interval"
 or _fail "--progress-interval must be a positive integer, got '$progress_interval'"
 
@@ -87,6 +104,9 @@ set -gx TRAJECTORY_NODE_COUNT $scheduler_world_size
 set -gx TRAJECTORY_NODE_RANK $scheduler_rank
 set -gx TRAJECTORY_LOCAL_GPU_COUNT $nproc
 set -gx TRAJECTORY_WORKERS_PER_GPU $workers_per_gpu
+if test -n "$sample_shards_per_cell"
+    set -gx TRAJECTORY_SAMPLE_SHARDS_PER_CELL $sample_shards_per_cell
+end
 set -gx TRAJECTORY_PROGRESS_INTERVAL $progress_interval
 set -e TRAJECTORY_CUDA_DEVICES
 set -l local_devices (seq 0 (math $nproc - 1))
@@ -95,7 +115,8 @@ set -l script_dir (realpath (dirname (status filename)))
 set -l base_launcher $script_dir/render_vbvr_pro_sampler_matrix_all_outputs_30steps.fish
 test -f $base_launcher; or _fail "base launcher is missing: $base_launcher"
 
-echo "[multinode] node=$scheduler_rank/$scheduler_world_size local_gpus=$nproc workers_per_gpu=$workers_per_gpu"
+set -l shard_text (set -q TRAJECTORY_SAMPLE_SHARDS_PER_CELL[1]; and echo $TRAJECTORY_SAMPLE_SHARDS_PER_CELL; or echo default)
+echo "[multinode] node=$scheduler_rank/$scheduler_world_size local_gpus=$nproc workers_per_gpu=$workers_per_gpu sample_shards_per_cell=$shard_text"
 echo "[multinode] devices=$local_devices"
 echo "[multinode] cells are round-robin sharded by node; no cross-node process group is created"
 

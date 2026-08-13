@@ -709,12 +709,15 @@ pins its default checkpoint snapshot to 100 through 900 so later training
 checkpoints cannot enter only part of the matrix. `MODEL_FILTER`,
 `SAMPLER_FILTER`, and the Fish-list `TRAJECTORY_CUDA_DEVICES` narrow a run;
 `TRAJECTORY_LIMIT` is intended only for small end-to-end smoke tests.
-`TRAJECTORY_WORKERS_PER_GPU=N` splits every cell into `N` deterministic sample
-shards and starts `N` independent batch-one workers per selected GPU. This is
-process-level concurrency, not a tensor batch: it preserves each sample's seed,
-CPS random stream, and numerical path while allowing one worker's media-writing
-gaps to overlap another worker's GPU work. It deliberately creates no tar
-archive. The default unpacked layout is:
+`TRAJECTORY_SAMPLE_SHARDS_PER_CELL=N` splits every cell into `N` deterministic
+sample shards, while `TRAJECTORY_WORKERS_PER_GPU=N` caps concurrent independent
+batch-one workers per selected GPU. The shard count defaults to the worker cap
+for backward compatibility. This is process-level concurrency, not a tensor
+batch: it preserves each sample's seed, CPS random stream, and numerical path
+while allowing one worker's media-writing gaps to overlap another worker's GPU
+work. A custom shard count must fit within and evenly divide the node's
+`GPU count * workers/GPU` slots so a cell never straddles launch waves. The
+renderer deliberately creates no tar archive. The default unpacked layout is:
 
 ```text
 storage/eval_out/vbvr_pro_sampler_matrix_all_500_30step_trajectories/
@@ -738,6 +741,69 @@ lightweight strict completion check used by the launcher: it verifies the full
 contract, CPS coefficient, exact artifact set, and SHA-256 equality between
 `step_29.mp4`, `final_00.mp4`, and the formal quantitative MP4.
 
+### Baseline versus checkpoint-2200 trajectory Space
+
+Build the interactive left/right comparison site from the completed all-output
+archive with:
+
+```bash
+.venv/bin/python scripts/eval/vbvr_pro/build_vbvr_trajectory_space.py \
+  --output-root storage/hf_spaces/vbvrpro_sampler_trajectories \
+  --skip-videos \
+  --media-url-prefix https://huggingface.co/datasets/pufanyi/vbvrpro_sampler_trajectories-data/resolve/main/videos \
+  --step-media-url-prefix baseline=https://huggingface.co/datasets/pufanyi/vbvrpro_sampler_trajectories-baseline-steps/resolve/main/videos \
+  --step-media-url-prefix checkpoint-2200=https://huggingface.co/datasets/pufanyi/vbvrpro_sampler_trajectories-2200-steps/resolve/main/videos
+```
+
+The builder selects exactly the DiffSynth step-35500 baseline and DanceGRPO
+checkpoint 2200 across CPS 0.1/0.3/0.7/0.9, Euler ODE, and UniPC ODE. It
+requires the same 500 sample identities in all 12 cells and validates every
+cell manifest, prompt, 30-step schedule, all native `step_00.mp4` through
+`step_29.mp4` files, `steps_grid.mp4`, and `final_00.mp4`. It also resolves the
+exact formal result for each cell, verifies the result fingerprint and complete
+score provenance, requires one numeric `[0, 1]` score for every matched sample,
+and verifies that each public final/step-30 video is bound to the corresponding
+formally scored output. The compact index therefore contains 6,000 aligned
+scores plus Overall/In-Domain/Out-of-Domain cell means. The complete deployment
+is 192,000 MP4s/about 6.51 GiB: 180,000 native step videos/about 5.65 GiB plus
+the existing 6,000 overview grids and 6,000 native finals/about 0.86 GiB.
+
+The public frontend is
+[`pufanyi/vbvrpro_sampler_trajectories`](https://huggingface.co/spaces/pufanyi/vbvrpro_sampler_trajectories),
+backed by
+[`pufanyi/vbvrpro_sampler_trajectories-data`](https://huggingface.co/datasets/pufanyi/vbvrpro_sampler_trajectories-data),
+[`pufanyi/vbvrpro_sampler_trajectories-baseline-steps`](https://huggingface.co/datasets/pufanyi/vbvrpro_sampler_trajectories-baseline-steps),
+and
+[`pufanyi/vbvrpro_sampler_trajectories-2200-steps`](https://huggingface.co/datasets/pufanyi/vbvrpro_sampler_trajectories-2200-steps).
+The two native-step archives each contain 90,000 MP4s, keeping both below the
+[Hub's recommended 100,000 files per Git-backed repository](https://huggingface.co/docs/hub/storage-limits#repository-limitations-and-recommendations).
+The static UI independently selects the model and sampler on each side,
+synchronizes paired playback, selects any of the 30 original step videos,
+auto-advances through a complete path, retains the compressed grid only as an
+optional overview, preserves comparisons and the selected step in shareable
+URLs, and lazily opens the full 2x6 matrix at the current step/view. Both sides
+and every matrix card show the selected test case's final EvalKit score to four
+decimal places and the cell's 500-sample mean. The score is explicitly
+final-only (public step 30 / `final_00.mp4`); it remains visible while stepping
+through the path but does not claim that intermediate previews were rescored.
+
+Publish or resume the native files directly from the strict trajectory source
+tree with:
+
+```bash
+ulimit -n 65536
+HF_XET_HIGH_PERFORMANCE=1 \
+  .venv/bin/python scripts/eval/vbvr_pro/upload_vbvr_trajectory_steps.py \
+    --batch-size 1000 \
+    --num-threads 16
+```
+
+The uploader is additive: it enumerates the exact expected paths, skips files
+already present on each Dataset, commits bounded batches, retries uncertain
+requests after checking the remote paths, and performs a strict 90,000-video
+completion audit per model. The descriptor limit is process-local; do not
+change the system-wide limit.
+
 For a scheduler allocation with multiple eight-GPU machines, launch this on
 every node instead:
 
@@ -747,7 +813,9 @@ fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/render_vbvr_pro_samp
 
 It consumes the same scheduler contract as `scripts/train/grpo_multinode.fish`:
 `WORLD_SIZE` is the number of machines and `RANK` is the zero-based machine
-rank. `--nproc 8` and `--workers-per-gpu 2` are the defaults. The wrapper does
+rank. `--nproc 8` and `--workers-per-gpu 2` are the defaults;
+`--sample-shards-per-cell N` optionally decouples sample partitioning from the
+per-GPU concurrency cap. The wrapper does
 not create a `torchrun` process group; it round-robin shards the fixed 60-cell
 list by node, splits each local cell into even/odd sample shards, and runs 14–16
 independent batch-one workers per node when `WORLD_SIZE=8`. Every completed
@@ -836,6 +904,58 @@ exclude baseline and checkpoints 100–1400, retain strict completion/provenance
 checks, and resume at cell/sample granularity. Add `--assignment-only` to
 either command for a side-effect-free assignment audit.
 
+For all later checkpoints in this same rule-reward series, use the reusable
+incremental wrapper instead of creating another fixed step-range script. On
+every evaluation node run:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/evaluate_incremental_multinode.fish \
+  formal --nproc 8
+```
+
+It discovers only complete numeric DCP checkpoints, strictly audits all six
+formal sampler cells, and delegates only checkpoints with at least one missing
+or invalid result. After every node exits successfully, the corresponding
+incremental all-output trajectory command is:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/evaluate_incremental_multinode.fish \
+  trajectories --nproc 8 --workers-per-gpu 2 --progress-interval 30
+```
+
+The trajectory stage accepts only checkpoints whose six formal cells already
+pass, then relies on the existing strict cell/sample audit to skip complete
+trajectory cells and resume partial ones. `formal` is the default stage, and
+`--assignment-only` remains available for both stages. Evaluation node count is
+not fixed; scheduler `WORLD_SIZE=6`, `RANK=0..5` is valid. Do not overlap two
+invocations, and do not start `trajectories` until every formal node exits.
+
+To generate only checkpoint 2200, pin the same snapshot on every node. First
+audit/resume its six formal 500-sample cells:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/evaluate_incremental_multinode.fish \
+  formal --checkpoints 2200 --nproc 8
+```
+
+After every formal node exits successfully, render all 500 outputs for CPS
+0.1/0.3/0.7/0.9, Euler ODE, and UniPC ODE, retaining every one of the 30 clean
+endpoint previews:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/evaluate_incremental_multinode.fish \
+  trajectories --checkpoints 2200 --nproc 8 \
+  --workers-per-gpu 1 --sample-shards-per-cell 8 --progress-interval 30
+```
+
+`--checkpoints` also accepts a comma-separated list such as `1900,2000,2100,2200`.
+The selected checkpoints must exist as complete numeric DCP directories; an
+unknown or incomplete requested step fails immediately instead of silently
+falling back to the automatic discovery set. For exactly one checkpoint, a
+six-node allocation maps its six sampler cells one per node; eight shards then
+use all eight local GPUs with one model process per GPU. With more than six
+nodes, the extra ranks correctly exit with no assigned cell.
+
 After all cells finish, build the lazy-loading browser without copying or
 archiving media (30,000 outputs for the original snapshot, 45,000 after the
 five-checkpoint extension, or 57,000 after both extensions):
@@ -860,11 +980,143 @@ The score-table summarizer also understands this layout:
   --output-dir storage/eval_out/vbvr_pro_sampler_matrix_all_500_30step_trajectories/summary
 ```
 
+### Incremental Qwen3.6-VLM checkpoint evaluation
+
+The native-512 Qwen3.6-VLM DanceGRPO run has a thin multi-node adapter around
+the shared native-512 incremental evaluator. To evaluate exactly one DCP save,
+run the same command on every evaluation node and pass the complete
+`checkpoint-N` directory directly:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_incremental_multinode.fish \
+  formal \
+  --checkpoint-dir storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_task_prompts_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_new_2_nodes16_world128/checkpoint-600 \
+  --nproc 8
+```
+
+It uses scheduler `WORLD_SIZE` as the current evaluation-machine count and
+`RANK` as the zero-based machine rank; this is independent of the source
+training topology, so five or six eight-GPU evaluation nodes are valid even
+though this checkpoint was trained with world128. `--checkpoint-dir` derives
+the parent checkpoint root and numeric step, then isolates the converted model,
+formal results, logs, and optional trajectory outputs using the parent run
+name. It cannot be combined with `--checkpoints` because it already selects one
+step.
+
+Omit `--checkpoint-dir` to scan the default output of
+`configs/train_dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml`,
+currently the topology-suffixed `...manifest_rl_new_2_nodes16_world128` root.
+Use `--checkpoint-root PATH` for another run, optionally with
+`--checkpoints N[,N...]`; the older `VLM_EVAL_CHECKPOINT_ROOT` environment
+override remains supported.
+
+Every invocation discovers directories named exactly `checkpoint-<integer>`
+with `high/.metadata`, ignores incomplete saves and aliases such as
+`checkpoint-epoch0`, and strictly audits CPS 0.1/0.3/0.7/0.9 plus matched
+30-step Euler and UniPC results. A checkpoint is skipped only when all six
+500-sample results, workbooks, media counts, and provenance contracts pass.
+New or partial checkpoints reuse conversion artifacts and resume the existing
+generation/preparation/scoring trees.
+
+For this VLM-trained-run adapter, `formal` now continues automatically into the
+training-time Qwen3.6 judge. Checkpoint discovery is frozen at invocation so
+formal inference and judge evaluation use the same exact six-cell-per-step
+snapshot. After every node finishes its local formal shard, each node polls the
+shared evaluator's strict, side-effect-free audit until all selected formal
+cells are complete; only then are those exact cell names deterministically
+sharded across judge nodes. The judge's source/contract audit skips completed
+cells and resumes partial JSONL, and a node with no pending assigned cell does
+not start Qwen. Thus rerunning the same `formal --nproc 8` command is the normal
+way to discover and fill missing judge results without regenerating videos.
+The default judge root is the formal output root plus
+`_vlm_qwen36_27b_task_judge_4d315923`.
+
+All nodes should come from the same scheduler launch. If training may finish a
+new DCP save while evaluation nodes are still starting, pass an explicit
+`--checkpoints N[,N...]` snapshot so different ranks cannot discover different
+checkpoint sets.
+
+Use `--no-vlm-judge` (or `VLM_EVAL_AUTO_JUDGE=0`) for the previous EvalKit-only
+behavior. `--vlm-concurrency N` defaults to twice `--nproc`, and
+`--vlm-output-root PATH` overrides the independent judge destination. The
+validated eight-GPU default is Qwen TP2 x DP4; for another even `--nproc`, the
+adapter defaults to TP2 and one DP replica per GPU pair. Add
+`--assignment-only` to inspect formal allocation without conversion,
+evaluation, Qwen startup, or judge writes. Wait for every node from one
+invocation to exit before starting the next one; overlapping invocations can
+observe different completion snapshots while a cell is being promoted.
+
+After all six formal cells for an exact checkpoint are complete, the same
+adapter also delegates the optional all-output path without duplicating the
+evaluation logic:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_incremental_multinode.fish \
+  trajectories --checkpoint-dir /path/to/checkpoint-600 \
+  --nproc 8 --workers-per-gpu 1 --sample-shards-per-cell 8
+```
+
 Use `FORCE_REGENERATE=1` only when intentionally replacing personal generated
 videos after a generation-provenance change; the launcher will also rebuild
 the prepared videos. Use `FORCE_REPREPARE=1` for a preparation-only change such
 as CRF. A converted-model provenance mismatch requires a fresh conversion path
 or an explicit reconversion rather than silently overwriting a model tree.
+
+The automatic judge stage uses the existing formal videos directly and never
+runs a second Wan inference stage. The standalone command remains useful for
+backfilling any compatible native-512 formal result root or for operating a
+separately managed judge service:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_vlm_judge_multinode.fish \
+  score --input-root /path/to/formal-result-root --concurrency 16
+```
+
+The input may be the VLM-trained checkpoint result root or any compatible
+native-512 formal sampler matrix. `WORLD_SIZE/RANK` shard complete sampler
+cells across evaluation machines; one machine needs neither variable. The
+judge reads each cell's `eval_samples.json` plus complete generation
+provenance, sends its existing `generated_512x512x81` MP4 directly with the
+matching first frame, and writes an independent resumable result root. See
+`docs/vlm_judge_reward.md` for the exact request, retry, fingerprint, startup,
+and aggregation contracts.
+
+The 2026-08-13 one-node run over the complete baseline-plus-checkpoint-100--2300
+matrix finished all 144 sampler cells and 72,000 videos with no request,
+semantic, or fallback errors. Its global Qwen mean was `0.587300`; checkpoint
+2200 had the best six-sampler mean (`0.601000`), and checkpoint-2200 Euler was
+the best individual cell (`0.615940`). The detailed sampler/domain breakdown
+and judge-versus-EvalKit comparison are recorded in
+`docs/vlm_judge_reward.md`.
+
+### Audited sampler checkpoint trend plots
+
+Use `src.cli.plot_vbvr_checkpoint_trends` to render the matched six-sampler
+checkpoint curves for an offline task-judge root and a formal EvalKit root:
+
+```fish
+.venv/bin/python -m src.cli.plot_vbvr_checkpoint_trends \
+  --vlm-judge-root $vlm_judge_root \
+  --evalkit-root $evalkit_checkpoint_root \
+  --evalkit-baseline-root $matched_formal_baseline_root \
+  --output-dir $trend_output_root
+```
+
+The command audits every plotted cell as a 500-sample, zero-error result. It
+cross-checks the offline judge CSV against each cell summary and judge
+contract; formal results additionally require complete score provenance plus
+the recorded result size and SHA-256. The six formal baselines may come from a
+different result root only when its EvalKit source and runtime contract exactly
+match the checkpoint results. Incremental cells whose score provenance is not
+yet complete remain explicit gaps instead of being treated as zero or stale
+scores.
+
+The output directory receives two individual PNG/SVG plots, one 2x3 comparison
+plot, a combined CSV, and a JSON audit/best-checkpoint summary. The two rows use
+different evaluators, so the plot labels this explicitly: compare trends within
+each row and do not interpret absolute Qwen-judge and EvalKit scores as directly
+comparable. Keeping all plots in the independent output root also supports
+read-only evaluation result directories.
 
 ## Outputs And Resume
 

@@ -23,7 +23,8 @@ set -l api_server_count (set -q WAN_TRAINER_VLM_API_SERVER_COUNT; and echo $WAN_
 set -l gpu_memory (set -q WAN_TRAINER_VLM_GPU_MEMORY_UTILIZATION; and echo $WAN_TRAINER_VLM_GPU_MEMORY_UTILIZATION; or echo 0.50)
 set -l max_model_len (set -q WAN_TRAINER_VLM_MAX_MODEL_LEN; and echo $WAN_TRAINER_VLM_MAX_MODEL_LEN; or echo 32768)
 set -l max_num_seqs (set -q WAN_TRAINER_VLM_MAX_NUM_SEQS; and echo $WAN_TRAINER_VLM_MAX_NUM_SEQS; or echo 32)
-set -l max_images (set -q WAN_TRAINER_VLM_MAX_IMAGES_PER_PROMPT; and echo $WAN_TRAINER_VLM_MAX_IMAGES_PER_PROMPT; or echo 8)
+set -l max_images (set -q WAN_TRAINER_VLM_MAX_IMAGES_PER_PROMPT; and echo $WAN_TRAINER_VLM_MAX_IMAGES_PER_PROMPT; or echo 2)
+set -l max_videos (set -q WAN_TRAINER_VLM_MAX_VIDEOS_PER_PROMPT; and echo $WAN_TRAINER_VLM_MAX_VIDEOS_PER_PROMPT; or echo 1)
 set -l renderer_workers (set -q WAN_TRAINER_VLM_RENDERER_NUM_WORKERS; and echo $WAN_TRAINER_VLM_RENDERER_NUM_WORKERS; or echo 1)
 set -l enforce_eager (set -q WAN_TRAINER_VLM_ENFORCE_EAGER; and echo $WAN_TRAINER_VLM_ENFORCE_EAGER; or echo 1)
 set -l gdn_prefill_backend (set -q WAN_TRAINER_VLM_GDN_PREFILL_BACKEND; and echo $WAN_TRAINER_VLM_GDN_PREFILL_BACKEND; or echo triton)
@@ -43,7 +44,7 @@ if not test -d $model_path
     echo "ERROR: Qwen model directory is missing: $model_path" >&2
     exit 1
 end
-for value_name in tensor_parallel data_parallel data_parallel_local api_server_count
+for value_name in tensor_parallel data_parallel data_parallel_local api_server_count max_images max_videos
     set -l value $$value_name
     if not string match -qr '^[1-9][0-9]*$' -- $value
         echo "ERROR: $value_name must be a positive integer, got '$value'" >&2
@@ -114,7 +115,7 @@ exec env \
     --max-model-len $max_model_len \
     --max-num-seqs $max_num_seqs \
     --renderer-num-workers $renderer_workers \
-    --limit-mm-per-prompt "{\"image\":$max_images,\"video\":0}" \
+    --limit-mm-per-prompt "{\"image\":$max_images,\"video\":$max_videos}" \
     --gdn-prefill-backend $gdn_prefill_backend \
     --reasoning-parser qwen3 \
     --generation-config vllm \

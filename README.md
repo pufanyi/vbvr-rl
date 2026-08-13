@@ -250,6 +250,29 @@ The VLM co-hosting design, isolated vLLM environment, Qwen model download,
 reward contract, and true multi-node vLLM alternatives are documented in
 [`docs/vlm_judge_reward.md`](docs/vlm_judge_reward.md).
 
+The VLM run's incremental formal evaluator now generates/EvalKit-scores missing
+cells and then automatically fills only missing task-specific Qwen judgments:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_incremental_multinode.fish \
+  formal --nproc 8
+```
+
+Run it on every evaluation node with scheduler `WORLD_SIZE/RANK`. Completed
+formal and VLM cells are audited and skipped; a node with no pending judge work
+does not start Qwen. Use `--no-vlm-judge` for an EvalKit-only invocation.
+
+To score another existing formal VBVR-Pro video tree with that same
+task-specific Qwen contract, without running Wan inference again:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_vlm_judge_multinode.fish \
+  score --input-root /path/to/formal-result-root --concurrency 16
+```
+
+The command is single-node by default and uses evaluation-machine
+`WORLD_SIZE/RANK` for deterministic multi-node cell sharding when provided.
+
 Single-GPU official Wan2.2-TI2V-5B end-to-end smoke:
 
 ```bash

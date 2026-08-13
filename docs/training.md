@@ -525,7 +525,7 @@ Current rewards:
 - `neg_loss`: a model-internal negative flow-matching loss against GT. It supports expert filtering and runs dummy FSDP forwards when no sample routes to an expert.[^neg-loss]
 - `maze`: VAE-decodes generated latents, detects the ball by RGB distance, and combines trajectory, on-path, and goal rewards. It requires `maze_*` metadata from the latent dataset and forces the VAE to load even in precomputed-latent training.[^maze-reward]
 - `vbvr_rule`: the pinned task-specific VBVR-Pro EvalKit reward described above.[^vbvr-rule]
-- `vbvr_vlm`: VAE-decodes bounded preview frames and asynchronously submits the exact task-specific evaluator rubric, input first frame, and generated frames to a standalone OpenAI-compatible service. Its dynamic regex validates each rubric's distinct output fields.[^vbvr-vlm]
+- `vbvr_vlm`: VAE-decodes the complete rollout, encodes an in-memory 16-FPS MP4, and asynchronously submits the exact task-specific evaluator rubric, input first frame, and generated video to a standalone OpenAI-compatible service. vLLM uniformly selects 32 frames and Qwen's second sampling pass is disabled. Its dynamic regex validates each rubric's distinct output fields.[^vbvr-vlm]
 
 ## Practical Launch Notes
 

@@ -21,7 +21,7 @@ fps: 16
 shuffle_raw_indices: true
 shuffle_raw_indices_seed: 42
 
-output_dir: storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_task_prompts_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl
+output_dir: storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_task_prompts_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_new_2
 resume_from: null
 reset_dataloader: null
 auto_resume: true
@@ -104,7 +104,8 @@ vlm_reward_base_url: http://127.0.0.1:18080/v1
 vlm_reward_model: qwen3.6-27b
 vlm_reward_api_key: EMPTY
 vlm_reward_prompt_mode: task_specific
-vlm_reward_num_frames: 6
+vlm_reward_video_fps: 16
+vlm_reward_video_num_frames: 32
 vlm_reward_include_gt_first_frame: true
 vlm_reward_decode_batch_size: 4
 
@@ -125,7 +126,9 @@ vlm_reward_jpeg_quality: 85
 vlm_reward_score_max: 100
 vlm_reward_use_structured_output: false
 vlm_reward_validate_service: true
-vlm_reward_fail_on_error: true
+# Keep the distributed optimizer alive if a runtime judge request or response
+# fails after retries; only the affected rollout receives reward zero.
+vlm_reward_fail_on_error: false
 vlm_reward_error_score: 0
 vlm_reward_log_first_n: 2
 

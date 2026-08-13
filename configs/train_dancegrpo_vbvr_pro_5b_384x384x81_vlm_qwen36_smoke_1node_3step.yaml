@@ -81,7 +81,8 @@ vlm_reward_base_url: http://127.0.0.1:18080/v1
 vlm_reward_model: qwen3.6-27b
 vlm_reward_api_key: EMPTY
 vlm_reward_prompt_mode: task_specific
-vlm_reward_num_frames: 6
+vlm_reward_video_fps: 16
+vlm_reward_video_num_frames: 32
 vlm_reward_include_gt_first_frame: true
 vlm_reward_decode_batch_size: 1
 vlm_reward_concurrency: 1

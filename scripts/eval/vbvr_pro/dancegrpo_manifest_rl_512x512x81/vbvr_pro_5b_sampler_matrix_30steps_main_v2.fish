@@ -186,6 +186,9 @@ function _task_complete
     else
         set -a sampler_args --ode-solver $solver
     end
+    # This command is a boolean resume predicate. Missing artifacts are the
+    # normal first-run case, so keep the auditor's exception traceback out of
+    # operator logs; a launched task still reports real failures from its log.
     .venv/bin/python -m src.cli.audit_vbvr_sampler_run \
         --output-root (_output_root $model_id $sampler_id) \
         --converted-model (_converted_model $model_id) \
@@ -194,7 +197,8 @@ function _task_complete
         --evalkit-revision $EVALKIT_REV \
         --evalkit-source-sha256 $EVALKIT_SOURCE_SHA256 \
         $sampler_args \
-        --fast --quiet
+        --fast --quiet \
+        >/dev/null 2>&1
 end
 
 # Convert any newly completed checkpoint once before multiple sampler jobs try

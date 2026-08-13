@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from PIL import Image
 
 
@@ -116,46 +117,41 @@ def _task_prompt_payload(
     task_name: str,
     frame_count: int,
     image_size: int,
+    video_fps: int = 16,
+    video_num_frames: int = 32,
 ) -> tuple[dict[str, Any], str]:
     """Build one exact task-rubric request and return its source prompt."""
-    from src.trainer.rewards.vbvr_vlm import (
-        TASK_VLM_JUDGE_OUTPUT_REMINDER,
-        task_vlm_judge_output_regex,
+    from src.eval.vbvr_vlm_protocol import (
+        build_task_vlm_judge_messages,
+        build_task_vlm_judge_payload,
+        encode_vlm_video_data_url,
+        load_pinned_eval_prompts,
     )
-    from src.trainer.rewards.vbvr_vlm_eval_prompts import EVAL_PROMPTS
 
-    task_prompt = EVAL_PROMPTS[task_name]
-    palette = ["#eeeeee", "#cccccc", "#aaaaaa", "#888888", "#666666", "#444444", "#222222", "#111111"]
-    frame_colors = palette[:frame_count]
-    content: list[dict[str, Any]] = [
-        {"type": "text", "text": task_prompt.strip()},
-        {"type": "text", "text": "First frame (input):"},
-        {"type": "image_url", "image_url": {"url": _image_data_url("white", size=image_size)}},
-        {
-            "type": "text",
-            "text": (
-                "Generated video, represented by chronological frames sampled uniformly "
-                f"from the complete video ({len(frame_colors)} total, earliest first):"
-            ),
-        },
-    ]
-    for index, color in enumerate(frame_colors, start=1):
-        content.extend(
-            [
-                {"type": "text", "text": f"Generated frame {index}/{len(frame_colors)}:"},
-                {"type": "image_url", "image_url": {"url": _image_data_url(color, size=image_size)}},
-            ]
-        )
-    content.append({"type": "text", "text": TASK_VLM_JUDGE_OUTPUT_REMINDER})
-    return {
-        "model": model,
-        "messages": [{"role": "user", "content": content}],
-        "temperature": 0.0,
-        "max_tokens": 1024,
-        "seed": 0,
-        "chat_template_kwargs": {"enable_thinking": False},
-        "structured_outputs": {"regex": task_vlm_judge_output_regex(task_prompt)},
-    }, task_prompt
+    task_prompt = load_pinned_eval_prompts()[task_name]
+    video = np.full((frame_count, image_size, image_size, 3), 224, dtype=np.uint8)
+    square_size = max(4, image_size // 8)
+    for index, frame in enumerate(video):
+        left = round((image_size - square_size) * index / max(1, frame_count - 1))
+        frame[image_size // 2 - square_size // 2 : image_size // 2 + square_size // 2, left : left + square_size] = 32
+    video_data_url = encode_vlm_video_data_url(video, fps=video_fps, max_edge=image_size)
+    messages = build_task_vlm_judge_messages(
+        task_prompt=task_prompt,
+        first_frame_data_url=_image_data_url("white", size=image_size),
+        generated_video_data_url=video_data_url,
+        source_frame_count=frame_count,
+        video_fps=video_fps,
+    )
+    return (
+        build_task_vlm_judge_payload(
+            model_name=model,
+            messages=messages,
+            task_prompt=task_prompt,
+            max_tokens=1024,
+            video_num_frames=video_num_frames,
+        ),
+        task_prompt,
+    )
 
 
 def _task_prompt_request(
@@ -167,7 +163,7 @@ def _task_prompt_request(
     payload: dict[str, Any],
     task_prompt: str,
 ) -> tuple[float, str]:
-    from src.trainer.rewards.vbvr_vlm import parse_task_vlm_judge_score
+    from src.eval.vbvr_vlm_protocol import parse_task_vlm_judge_score
 
     response = _request_json(
         opener,
@@ -199,8 +195,10 @@ def _task_prompt_smoke(
     payload, task_prompt = _task_prompt_payload(
         model=model,
         task_name="G-21_multiple_occlusions_vertical_data-generator",
-        frame_count=3,
+        frame_count=81,
         image_size=224,
+        video_fps=16,
+        video_num_frames=32,
     )
     return _task_prompt_request(
         opener,
@@ -232,15 +230,17 @@ def _benchmark_task_prompts(
     warmup_count: int,
 ) -> dict[str, float | int]:
     """Benchmark mixed exact rubrics with production-like image count/size."""
-    from src.trainer.rewards.vbvr_vlm_eval_prompts import EVAL_PROMPTS
+    from src.eval.vbvr_vlm_protocol import load_pinned_eval_prompts
 
-    task_names = sorted(EVAL_PROMPTS)
+    task_names = sorted(load_pinned_eval_prompts())
     requests = [
         _task_prompt_payload(
             model=model,
             task_name=task_names[index % len(task_names)],
-            frame_count=6,
+            frame_count=81,
             image_size=384,
+            video_fps=16,
+            video_num_frames=32,
         )
         for index in range(max(request_count, warmup_count))
     ]

@@ -1,11 +1,12 @@
 # Qwen3.6 vLLM Judge Reward
 
 Wan-Trainer can score DanceGRPO rollouts with `grpo_reward_fn: vbvr_vlm`.
-Training ranks VAE-decode generated latents, select chronological preview
-frames, and submit an OpenAI-compatible multimodal request to a standalone
-vLLM service. The service owns Qwen's weights and KV cache; the reward returns
-a normalized scalar in `[0, 1]` and preserves the existing asynchronous reward
-submission/resolve ordering.
+Training ranks VAE-decode the complete generated rollout, encode it as an
+in-memory H.264 MP4, and submit an OpenAI-compatible multimodal request to a
+standalone vLLM service. vLLM owns the configured temporal sampling pass; the
+service owns model weights and KV cache. The reward returns a normalized
+scalar in `[0, 1]` and preserves the
+existing asynchronous reward submission/resolve ordering.
 
 ## Pinned Runtime and Model
 
@@ -38,8 +39,8 @@ should receive less concurrency.
 ## Standalone Single-Node Service
 
 The default server uses tensor parallelism across eight visible GPUs, BF16,
-32,768 judge context, at most 32 concurrent sequences, and up to eight images
-per request:
+32,768 judge context, at most 32 concurrent sequences, and up to two images
+plus one video per request:
 
 ```fish
 fish scripts/serve/qwen36_27b_vllm.fish
@@ -69,7 +70,8 @@ Important service controls are environment variables:
 | `WAN_TRAINER_VLM_GPU_MEMORY_UTILIZATION` | `0.50` | vLLM engine memory budget |
 | `WAN_TRAINER_VLM_MAX_MODEL_LEN` | `32768` | Judge context limit |
 | `WAN_TRAINER_VLM_MAX_NUM_SEQS` | `32` | Per-DP-replica continuous-batching limit |
-| `WAN_TRAINER_VLM_MAX_IMAGES_PER_PROMPT` | `8` | Headroom for the first frame plus six generated frames |
+| `WAN_TRAINER_VLM_MAX_IMAGES_PER_PROMPT` | `2` | Task mode uses one input image; custom mode can also include the GT final image |
+| `WAN_TRAINER_VLM_MAX_VIDEOS_PER_PROMPT` | `1` | One generated MP4 per request |
 | `WAN_TRAINER_VLM_RENDERER_NUM_WORKERS` | `1` | Keeps vLLM's multimodal processor cache enabled |
 | `WAN_TRAINER_VLM_ENFORCE_EAGER` | `1` | Avoid CUDA-graph memory in the co-hosted smoke |
 | `WAN_TRAINER_VLM_GDN_PREFILL_BACKEND` | `triton` | Avoid FlashInfer GDN JIT on the workstation's CUDA 11.1 toolkit |
@@ -94,14 +96,17 @@ starts reused it.
 
 The runnable bounded config is
 [`train_dancegrpo_vbvr_pro_5b_384x384x81_vlm_qwen36_smoke_1node_3step.yaml`](../configs/train_dancegrpo_vbvr_pro_5b_384x384x81_vlm_qwen36_smoke_1node_3step.yaml).
-The core reward settings are:
+The core reward settings are below. This strict smoke deliberately sets
+`vlm_reward_fail_on_error: true`; the production multi-node configs use the
+fail-open zero fallback documented below.
 
 ```yaml
 grpo_reward_fn: vbvr_vlm
 vlm_reward_base_url: http://127.0.0.1:18080/v1
 vlm_reward_model: qwen3.6-27b
 vlm_reward_prompt_mode: task_specific
-vlm_reward_num_frames: 6
+vlm_reward_video_fps: 16
+vlm_reward_video_num_frames: 32
 vlm_reward_include_gt_first_frame: true
 vlm_reward_decode_batch_size: 1
 vlm_reward_concurrency: 1
@@ -121,14 +126,26 @@ The sample task name must match a mapping key; this is intentionally fail-closed
 so an unknown task cannot silently receive a generic rubric.
 
 Each task-specific request sends the exact rubric, the input first frame, and
-six uniformly sampled generated frames in chronological order. It does **not**
-send the GT final frame: the supplied evaluator prompts define their input as
-the first frame and generated video. The VLM path does not use the rule
-scorer's separate 1024x1024 preparation. `vlm_reward_image_max_edge` is a
-downscale-only safety bound: 384/512 frames at or below the bound retain their
-native dimensions, while only oversized inputs are reduced. Frames are
-JPEG-encoded in memory and sent as data URLs; no dataset path is exposed to the
-server. Qwen thinking is disabled per request.
+one MP4 containing the complete decoded rollout in chronological order. It
+does **not** send the GT final frame: the supplied evaluator prompts define
+their input as the first frame and generated video. `vlm_reward_video_fps`
+controls the MP4 metadata and is 16 for the 81-frame runs. The training client
+does no temporal sampling. Each request instructs vLLM's CPU OpenCV media
+loader to select exactly `vlm_reward_video_num_frames: 32` frames uniformly
+from the complete MP4, then passes `do_sample_frames: false` to the Qwen HF
+processor so it cannot perform a second 2-FPS sampling pass. For an 81-frame
+rollout the selected source indices span the complete interval from frame 0 to
+frame 80. Qwen's temporal patch size is 2, so those 32 retained frames become
+16 visual time groups; temporal patching is model encoding, not another frame
+selection pass.
+
+The VLM path does not use the rule scorer's separate 1024x1024 preparation.
+`vlm_reward_image_max_edge` is a downscale-only safety bound for both the input
+image and MP4 frames: 384/512 inputs at or below it retain native dimensions,
+while only oversized inputs are reduced. The input frame is JPEG-encoded and
+the rollout is H.264-encoded entirely in memory; both are sent as data URLs, so
+no dataset path is exposed to the server. Qwen thinking is disabled per
+request.
 
 Each rubric defines different aspect names and weights. The reward derives a
 vLLM regex constraint from that task's required output lines, requires every
@@ -136,18 +153,126 @@ aspect score, `total_score`, and a nonempty one-line `reason` exactly once,
 checks scores are finite and in `[0, 100]`, and verifies that rubric weights sum
 to 100. It then normalizes `total_score` to `[0, 1]`. The regex constraint is
 automatic in task mode; `vlm_reward_use_structured_output: false` only disables
-the fixed generic JSON schema.
+the fixed generic JSON schema. Regex cannot enforce arithmetic across separate
+weight lines, so the final reminder explicitly requires an exact 100-point sum.
+If semantic validation still fails, the reward sends the rejected answer and
+validation error back to the judge for correction, up to
+`vlm_reward_max_retries`. In production, an exhausted retry budget returns
+`vlm_reward_error_score` (normally zero) for only that rollout and lets the
+distributed step continue.
 
 Set `vlm_reward_prompt_mode: custom` and optionally
 `vlm_reward_system_prompt_path` to use the compatibility protocol instead. That
-mode interleaves task text, first frame, GT final frame, and generated frames,
+mode interleaves task text, first frame, GT final frame, and generated video,
 and can use the fixed score/reason JSON schema. Prompt or rubric changes alter
 the optimization target and should be pinned and recorded like scorer changes.
 
-`vlm_reward_fail_on_error: true` is the safe training default: malformed JSON,
-timeouts, missing references, non-finite values, and scores outside the rubric
-stop the run. Setting it false uses `vlm_reward_error_score`, which can silently
-flatten group advantages and is intended only for resilience experiments.
+`vlm_reward_fail_on_error: false` with `vlm_reward_error_score: 0` is the
+production default: malformed output, exhausted request retries, missing
+references, non-finite values, and scores outside the rubric become zero for
+the affected rollout. Failures are warning-logged on the scoring rank. This can
+flatten or bias group advantages when failures are frequent, so monitor those
+warnings. Strict smoke tests may set `vlm_reward_fail_on_error: true` to stop on
+the first judge-contract failure.
+
+## Offline Judge Evaluation Of Generated Videos
+
+Use
+[`evaluate_vlm_judge_multinode.fish`](../scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_vlm_judge_multinode.fish)
+to apply the training-time task-specific Qwen contract to formal VBVR-Pro
+videos that have already been generated. This is a judge-only stage: it never
+loads Wan, converts a checkpoint, runs diffusion inference, or modifies the
+formal EvalKit result tree.
+
+For the native-512 Qwen3.6 DanceGRPO run, the preferred incremental entry point
+is now a single command:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_incremental_multinode.fish \
+  formal --nproc 8
+```
+
+After strict formal evaluation completes across all scheduler nodes, that
+adapter automatically invokes this offline judge on the same frozen checkpoint
+snapshot. Exact cell filters keep every node's shard stable; completed cells
+are skipped, partial cells resume, and a node with no pending judgments does
+not load Qwen. Pass `--no-vlm-judge` only when an EvalKit-only run is intended.
+The standalone launcher below remains available for arbitrary compatible
+formal roots.
+
+For one machine, omit scheduler variables:
+
+```fish
+fish scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_vlm_judge_multinode.fish \
+  score \
+  --input-root storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028 \
+  --concurrency 16
+```
+
+For multiple machines, run the same command on every node with `WORLD_SIZE`
+set to the evaluation machine count and `RANK=0..WORLD_SIZE-1`. Cells are
+round-robin sharded by a deterministic sorted name list; the evaluation
+topology is independent of the source training topology. Rank 0 waits for all
+selected cells and writes the aggregate. Use `--assignment-only` to perform a
+strict, read-only source/resume audit without starting Qwen. Concurrent writers
+are valid only when scheduler assignment or explicit `--cell` filters make
+their cell sets disjoint; never let two clients own the same cell.
+
+The wrapper starts the same node-local DP4 x TP2 Qwen service and 50% memory
+budget as the production training launcher. It uses a 1,800-second startup
+timeout because four replicas cold-reading the 51.75-GiB snapshot from QuarkFS
+can exceed the co-hosted training timeout. Set `VLM_JUDGE_START_SERVICE=0` to
+reuse an already-managed endpoint through `WAN_TRAINER_VLM_BASE_URL`.
+
+The offline client shares its message and request-payload builders with
+`VBVRVLMReward`: pinned per-task rubric, input first frame only, no GT final
+frame, native 512 maximum edge, non-thinking Qwen, temperature 0/seed 0,
+per-task regex output, semantic weight validation/repair, and uniform 32-frame
+vLLM sampling. It base64-embeds the existing native MP4 byte-for-byte instead
+of decoding and lossy re-encoding it. The request label retains the known
+81-frame/16-FPS source contract.
+
+Outputs live in a separate suffix root by default. Every cell contains
+`metadata.json`, append-only `samples.jsonl`, `summary.json`, and an
+EvalKit-layout `final_scores.txt`. Successful samples survive interruption;
+error records are retried on the next invocation. A cell is complete only when
+all expected samples have non-error responses under matching source and judge
+fingerprints. Rank 0 writes global `summary.json`, `summary.csv`, and
+`summary.md`. Running either `score` or `summarize` also backfills a missing
+per-cell `final_scores.txt` without contacting Qwen when the judgments are
+already complete. The recorded contract includes
+the prompt, protocol/evaluator source hashes, Qwen revision, vLLM version,
+media settings, and source generation/eval fingerprints; the API key is never
+persisted.
+
+### Measured full native-512 matrix
+
+On 2026-08-13, one eight-H800 node judged the complete rule-trained native-512
+sampler matrix: baseline plus checkpoints 100 through 2300, six samplers, and
+500 videos per cell. All 144 cells and 72,000 unique samples completed under
+judge contract `5eeb2e1f3bc2e677daad6858dfab0a8f333741ac393fbb9b6eb4e007540f096a`.
+There were zero HTTP retries, semantic repair retries, error fallbacks, missing
+responses, or duplicate JSONL records. Consequently, valid zero scores must
+not be counted as service failures. The result tree occupies about 121 MiB.
+
+The mean over all 72,000 judgments was `0.587300`. Averaging all six samplers
+per model, checkpoint 2200 was best at `0.601000`, versus `0.559937` for the
+baseline (`+0.041063` absolute); checkpoint 2300 was `0.598543`. The best
+individual cell was checkpoint-2200 Euler ODE at `0.615940` Overall
+(`0.694400` In-Domain / `0.537480` Out-of-Domain), narrowly ahead of
+checkpoint-2200 CPS 0.9 at `0.615500`. Across all 24 model states, CPS 0.9 had
+the highest sampler mean (`0.598998`), followed by CPS 0.7 (`0.595707`), UniPC
+ODE (`0.591114`), Euler ODE (`0.586043`), CPS 0.3 (`0.583364`), and CPS 0.1
+(`0.568575`). VLM and EvalKit Overall cell means had Pearson correlation
+`0.836728` across the 144 matched cells, so the broad trend agrees while the
+best sampler choice differs.
+
+The node-local service used DP4 x TP2 at a 50% memory budget and occupied about
+42 GiB per card. One 16-request client sustained about 1.9 judgments/s; six
+explicitly disjoint clients (96 total requests, 24 per DP replica) sustained
+about 5.5-6.1 judgments/s without retries. Keep the wrapper's conservative
+default at 16 unless a judge-only node has comparable capacity, and coordinate
+disjoint cell ownership before adding clients.
 
 ## Co-hosted 50/50 Operation
 
@@ -161,7 +286,7 @@ fish scripts/train/grpo_vlm_eval_multinode.fish --nproc 8 \
 ```
 
 The generic wrapper starts one DP1 x TP8 Qwen endpoint inside each node/pod,
-runs both a real vision/JSON probe and an exact task-rubric/regex probe,
+runs both a real image/JSON probe and an exact task-rubric/video/regex probe,
 delegates training to the standard multi-node GRPO launcher, and terminates the
 whole vLLM process group on normal exit or signals. Every node uses the same
 loopback URL, so no scheduler-specific service discovery is needed. The
@@ -177,6 +302,12 @@ concurrency. Lower the vLLM fraction or sequence/context limits if combined
 peak memory is too close to the card limit.
 
 ### Measured single-node result
+
+The measurements below predate the direct-MP4 request path and used one input
+image plus six generated-frame JPEGs. They remain topology and co-hosting
+evidence, but do not establish latency, memory, or reward equivalence for the
+current fixed-32-frame video request. Re-run a monitored smoke before using
+the new path for production training.
 
 On 2026-08-05, the bounded config completed three real optimizer steps on one
 node with eight 81,559 MiB H800s. It used the merged 5B full-fine-tuning model,
@@ -218,7 +349,7 @@ fields and generated lengths. A single TP8 engine therefore has head-of-line
 tail even when every training rank submits the same number of requests. On the
 same eight-H800 node and 40% vLLM memory budget, a mixed benchmark used 32
 exact task-rubric requests, one input image plus six generated 384-pixel
-frames, a 1024-token cap, and client concurrency 16:
+frame JPEGs, a 1024-token cap, and client concurrency 16:
 
 | vLLM topology | Backend | Idle MiB/GPU | Throughput | Mean | p95 | Max |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
