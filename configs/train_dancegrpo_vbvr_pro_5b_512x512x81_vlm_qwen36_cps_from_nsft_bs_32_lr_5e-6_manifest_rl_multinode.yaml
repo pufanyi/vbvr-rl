@@ -1,6 +1,6 @@
 trainer: dancegrpo
-# Multi-node VLM-judge training candidate for 4/8/16 x 8 H800s. The cluster
-# launcher detects the node count. Every node starts four local TP2 Qwen3.6-27B
+# Multi-node VLM-judge training candidate for world sizes 32, 64, and 128. The
+# scale-out launcher validates the topology. Every machine starts four TP2 Qwen3.6-27B
 # replicas behind one vLLM DP endpoint while all ranks roll out/train Wan 5B.
 model_path: storage/models/diffsynth_converted_5b/wan2.2-TI2V-5B_260715_vbvr_pro_step-35500
 
@@ -21,12 +21,12 @@ fps: 16
 shuffle_raw_indices: true
 shuffle_raw_indices_seed: 42
 
-output_dir: storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_task_prompts_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_new_2
+output_dir: storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_task_prompts_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl
 resume_from: null
 reset_dataloader: null
 auto_resume: true
 
-# All-rank GRPO. HSDP creates one eight-GPU shard group per node; there are no
+# All-rank GRPO. HSDP creates one eight-rank shard group per machine; there are no
 # dedicated rollout-only ranks.
 rl_train_node_count: 0
 rl_train_rank_count: 0
@@ -36,7 +36,7 @@ rl_async_rollout: false
 rl_async_rollout_prefetch_steps: 0
 rl_split_debug_logs: false
 
-# Optimizer and schedule match the Fujian 512x512x81 rule-reward run.
+# Optimizer and schedule match the 512x512x81 rule-reward config.
 batch_size: 32
 gradient_accumulation_steps: 1
 num_epochs: 5
@@ -61,7 +61,7 @@ num_workers: 2
 prefetch_factor: 2
 persistent_workers: true
 
-# 4/8/16 nodes => 4/8/16 HSDP replicas x eight intra-node shards.
+# World sizes 32/64/128 use 4/8/16 HSDP replicas x eight shards.
 fsdp: true
 expert_parallel: false
 hsdp: true
@@ -74,7 +74,7 @@ lora_alpha: 32
 grpo_shared_prompt_batch: true
 grpo_shared_prompt_microbatch_size: 16
 
-# Retain the Fujian one-update-delayed pipeline so next-step VLM requests can
+# Retain the one-update-delayed pipeline so next-step VLM requests can
 # overlap replay. Qwen shares these GPUs, so the first run must monitor whether
 # simultaneous vLLM DP/TP and HSDP collectives reduce throughput or stability.
 grpo_delayed_replay: true

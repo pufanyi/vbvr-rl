@@ -26,7 +26,7 @@ The failed generated rollout was stored in a `TemporaryDirectory` with `vbvr_rew
 
 ## Independent prompt-wave confirmation
 
-`logs-acp-20260725T204210.txt.gz` is a second run made before the zero-score fallback was enabled. It used `prompt_wave=16`, two waves, and two ranks per prompt. The run completed optimizer step 15, then encountered the same G-16 sample during step 16.
+`logs-run-20260725T204210.txt.gz` is a second run made before the zero-score fallback was enabled. It used `prompt_wave=16`, two waves, and two ranks per prompt. The run completed optimizer step 15, then encountered the same G-16 sample during step 16.
 
 The second wave's global prompt 22 was split across ranks 6 and 22, with 16 rollouts on each rank. Both ranks independently raised the same `meta_px` exception at 20:34:19 local time. All later Gloo, TCPStore, NCCL, broken-pipe, and SIGTERM messages followed those scorer failures. This confirms that the failure is independent of rollout content and shared-prompt topology.
 

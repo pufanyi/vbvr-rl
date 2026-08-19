@@ -15,17 +15,16 @@ set -e NODE_RANK
 set -q CHECKPOINT[1]; or set CHECKPOINT storage/checkpoints/dancegrpo_vbvr_pro_5b_256x256x161_rule_cps_from_nsft_bs32/checkpoint-1200
 set -q BASE_MODEL[1]; or set BASE_MODEL storage/models/Wan2.2-TI2V-5B-Diffusers
 set -q CONVERTED_MODEL[1]; or set CONVERTED_MODEL storage/models/dcp_converted_5b/dancegrpo_vbvr_pro_5b_256x256x161_rule_cps_from_nsft_bs32_checkpoint-1200
-set -q GT_BASE[1]; or set GT_BASE /mnt/aigc/xujunxiang/VR_Data/VBVR-Bench_Pro-video
-set -q SPLIT_MANIFEST[1]; or set SPLIT_MANIFEST /mnt/aigc/xujunxiang/Code/VBVR-Pro/scripts/split_manifest.json
+set -q GT_BASE[1]; or set GT_BASE storage/datasets/vbvr-pro-eval-500
+set -q SPLIT_MANIFEST[1]; or set SPLIT_MANIFEST $GT_BASE/split_manifest.json
 
 set -q EVALKIT_DIR[1]; or set EVALKIT_DIR storage/evalkits/vbvr-evalkit-interleave-main_v2-e140038f
-set -q EVALKIT_REPO[1]; or set EVALKIT_REPO git@github.com:xujunxiangwork/VBVR-Evalkit-Interleave.git
 set -q EVALKIT_REV[1]; or set EVALKIT_REV e140038f2aee76ca518f464755fa8bc19b783ba5
 set -q EVALKIT_SOURCE_SHA256[1]; or set EVALKIT_SOURCE_SHA256 4cc7d028d4106a28190a63bc179562d5ac9add9263cb71926dd6385c5714bcf8
 set -q EVALKIT_INSTALL_LOCK[1]; or set EVALKIT_INSTALL_LOCK $EVALKIT_DIR.install.lock
 set -q EVALKIT_INSTALL_WAIT_SECONDS[1]; or set EVALKIT_INSTALL_WAIT_SECONDS 1800
 set -q EVALKIT_INSTALL_POLL_SECONDS[1]; or set EVALKIT_INSTALL_POLL_SECONDS 2
-set -q EASYOCR_SOURCE_MODELS[1]; or set EASYOCR_SOURCE_MODELS /mnt/aigc/xujunxiang/Code/VBVR-Bench/VBVR-EvalKit/easyocr_models
+set -q EASYOCR_SOURCE_MODELS[1]; or set EASYOCR_SOURCE_MODELS storage/evalkits/easyocr-shared/model
 
 set -q OUTPUT_ROOT[1]; or set OUTPUT_ROOT storage/eval_out/vbvr_pro_main_v2_evalkit_4cc7d028/dancegrpo_vbvr_pro_5b_checkpoint-1200
 set -q EVAL_JSON[1]; or set EVAL_JSON $OUTPUT_ROOT/eval_samples.json
@@ -399,6 +398,8 @@ test $visible_count -ge $NUM_GPUS; or _fail "CUDA_DEVICES exposes $visible_count
 set -gx CUDA_VISIBLE_DEVICES $CUDA_DEVICES
 
 if not test -f $EVALKIT_DIR/run_evaluation.py
+    set -q EVALKIT_REPO[1]; and test -n "$EVALKIT_REPO"
+    or _fail "EvalKit checkout is missing at $EVALKIT_DIR; set EVALKIT_REPO to an accessible main_v2 repository"
     set -l evalkit_parent (dirname $EVALKIT_DIR)
     mkdir -p $evalkit_parent; or exit 1
     set -l evalkit_waited_seconds 0

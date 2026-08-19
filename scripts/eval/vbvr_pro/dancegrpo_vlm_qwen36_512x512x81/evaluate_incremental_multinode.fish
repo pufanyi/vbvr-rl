@@ -59,10 +59,10 @@ if test $has_world_size -eq 0
     echo "[topology] WORLD_SIZE/RANK not set; using single node 0/1"
 end
 
-# This is the topology-isolated output produced by the requested YAML through
-# scripts/train/grpo_vlm_eval_cluster.fish on 16 x 8 GPUs.
+# This is the unsuffixed YAML output. Scale-out training adds a topology suffix;
+# point VLM_EVAL_CHECKPOINT_ROOT or --checkpoint-root at that run.
 set -l default_checkpoint_root \
-    storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_task_prompts_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_new_2_nodes16_world128
+    storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_task_prompts_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl
 
 set -l checkpoint_dir
 set -l checkpoint_root_arg

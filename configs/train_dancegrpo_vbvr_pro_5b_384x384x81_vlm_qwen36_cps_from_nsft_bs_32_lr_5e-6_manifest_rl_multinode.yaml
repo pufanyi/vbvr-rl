@@ -1,6 +1,6 @@
 trainer: dancegrpo
-# Multi-node native-384 VLM-judge training for 4/8/16 x 8 H800s. The cluster
-# launcher detects the node count. Every node starts four local TP2 Qwen3.6-27B
+# Multi-node native-384 VLM-judge training for world sizes 32, 64, and 128. The
+# scale-out launcher validates the topology. Every machine starts four TP2 Qwen3.6-27B
 # replicas behind one vLLM DP endpoint while all ranks roll out/train Wan 5B.
 model_path: storage/models/diffsynth_converted_5b/wan2.2-TI2V-5B_260715_vbvr_pro_step-35500
 
@@ -26,7 +26,7 @@ resume_from: null
 reset_dataloader: null
 auto_resume: true
 
-# All-rank GRPO. HSDP creates one eight-GPU shard group per node; there are no
+# All-rank GRPO. HSDP creates one eight-rank shard group per machine; there are no
 # dedicated rollout-only ranks.
 rl_train_node_count: 0
 rl_train_rank_count: 0
@@ -36,7 +36,7 @@ rl_async_rollout: false
 rl_async_rollout_prefetch_steps: 0
 rl_split_debug_logs: false
 
-# Match the Fujian 384 production optimizer and compiled-kernel stack.
+# Match the 384x384x81 rule-reward optimizer and compiled-kernel stack.
 batch_size: 32
 gradient_accumulation_steps: 1
 num_epochs: 5
@@ -61,7 +61,7 @@ num_workers: 2
 prefetch_factor: 2
 persistent_workers: true
 
-# 4/8/16 nodes => 4/8/16 HSDP replicas x eight intra-node shards.
+# World sizes 32/64/128 use 4/8/16 HSDP replicas x eight shards.
 fsdp: true
 expert_parallel: false
 hsdp: true
@@ -80,9 +80,9 @@ grpo_delayed_replay: true
 grpo_delayed_replay_clip_range: 1.0e-2
 grpo_group_size: 32
 
-# The validated standalone 384 production path peaked at 25.7/28.4 GiB
+# The validated standalone 384 path peaked at 25.7/28.4 GiB
 # allocated/reserved with rollout chunks of eight. Keep that throughput shape;
-# the 50%-vLLM combination still needs a production G32/T30 one-step smoke.
+# the 50%-vLLM combination still needs a G32/T30 one-step smoke.
 grpo_sample_batch_size: 8
 grpo_train_sample_batch_size: 8
 grpo_fsdp_sync_each_backward: true

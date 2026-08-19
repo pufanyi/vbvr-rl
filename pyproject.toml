@@ -66,9 +66,6 @@ override-dependencies = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-exclude = [
-    "aoss",
-]
 
 [tool.ruff.lint]
 select = [

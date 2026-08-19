@@ -1,14 +1,14 @@
 [
   {
-    "data_path": "/mnt/umm/users/pufanyi/workspace/maze/data_100k/easy_5x5/train.parquet",
-    "root": "/mnt/umm/users/pufanyi/workspace/maze/data_100k/easy_5x5/"
+    "data_path": "storage/datasets/maze/data_100k/easy_5x5/train.parquet",
+    "root": "storage/datasets/maze/data_100k/easy_5x5/"
   },
   {
-    "data_path": "/mnt/umm/users/pufanyi/workspace/maze/data_100k/medium_10x10/train.parquet",
-    "root": "/mnt/umm/users/pufanyi/workspace/maze/data_100k/medium_10x10/"
+    "data_path": "storage/datasets/maze/data_100k/medium_10x10/train.parquet",
+    "root": "storage/datasets/maze/data_100k/medium_10x10/"
   },
   {
-    "data_path": "/mnt/umm/users/pufanyi/workspace/maze/data_100k/hard_20x20/train.parquet",
-    "root": "/mnt/umm/users/pufanyi/workspace/maze/data_100k/hard_20x20/"
+    "data_path": "storage/datasets/maze/data_100k/hard_20x20/train.parquet",
+    "root": "storage/datasets/maze/data_100k/hard_20x20/"
   }
 ]

@@ -14,15 +14,15 @@ function _fail
 end
 
 set -q CHECKPOINT_ROOT[1]
-or set -gx CHECKPOINT_ROOT storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian_new_evalkit_e140038f
+or set -gx CHECKPOINT_ROOT storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_evalkit_e140038f
 set -q CONVERTED_BASE[1]
 or set -g CONVERTED_BASE storage/models/dcp_converted_5b
 set -q CONVERTED_PREFIX[1]
-or set -g CONVERTED_PREFIX dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian_new_evalkit_e140038f
+or set -g CONVERTED_PREFIX dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_evalkit_e140038f
 set -q BASELINE_MODEL[1]
 or set -g BASELINE_MODEL storage/models/diffsynth_converted_5b/wan2.2-TI2V-5B_260715_vbvr_pro_step-35500
 set -q EVAL_OUTPUT_BASE[1]
-or set -g EVAL_OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028
+or set -g EVAL_OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028
 set -q TRAJECTORY_ROOT[1]
 or set -g TRAJECTORY_ROOT storage/eval_out/vbvr_pro_sampler_matrix_all_500_30step_trajectories
 set -q TRAJECTORY_LOG_DIR[1]
@@ -278,8 +278,8 @@ for sampler_id in $sampler_ids
 end
 test (count $tasks) -gt 0; or _fail "filters selected no trajectory tasks"
 
-# A scheduler-facing wrapper can shard the immutable cell list by node. Keep
-# this launcher usable on one workstation by default, and shard only after the
+# A scheduler-facing wrapper can shard the immutable cell list by machine. Keep
+# this launcher usable on one machine by default, and shard only after the
 # model/sampler filters have been applied. Round-robin assignment balances the
 # 60-cell matrix across nodes; with WORLD_SIZE=8 each node receives 7 or 8
 # cells, so every selected local GPU runs at most one cell in the common case.

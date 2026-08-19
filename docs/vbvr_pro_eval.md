@@ -5,48 +5,13 @@ bench with the `main_v2` interleave rule scorer. It does not use FastVideo.
 
 ## Data And Scorer
 
-The authoritative raw inputs are read-only:
-
-- `/mnt/umm/users/xujunxiang/VBVR-Pro_revise`
-- `/mnt/umm/users/xujunxiang/VBVR-Pro`
-- `/mnt/aigc/xujunxiang/Code/VBVR-Pro/scripts/split_manifest.json`
-
-The manifest's evaluation subset is `bench` (five samples per task). The
-`main_v2` scorer supports the 50 `In-Domain_50` and 50 `Out-of-Domain_50`
-tasks, for 500 scored videos. It does not register the 50 `Extra_50` tasks.
-These domain names follow the official benchmark definition: In-Domain tasks
-were present in the original VBVR-Dataset, while Out-of-Domain tasks were held
-out there for generalization testing. They are not defined relative to the
-current DanceGRPO run. Its
-`data/vbvr_pro/vbvr_pro_train_supported_256x256x161.json` configuration loads
-manifest `train` samples for all 100 EvalKit-supported tasks: 50 official
-In-Domain tasks and 50 official Out-of-Domain tasks, 250k samples from each.
-Consequently, the reported Out-of-Domain score is not a held-out-task score for
-this RL-trained model; only the unsupported `Extra_50` tasks are absent from
-this RL dataset and they are not included in `main_v2` scoring. The manifest
-updated on 2026-07-20 removes every bench ID from every task's `train` list, so
-the current 500-video scored set is sample-disjoint from manifest training IDs.
-Treat its domain names as benchmark split labels, not held-out-task labels for
-this particular RL run.
-
-For a strict In-Domain-only RL run, use
-`configs/train_dancegrpo_vbvr_pro_5b_256x256x161_rule_cps_from_nsft_bs_32_lr_1e-6.yaml`.
-It points to `data/vbvr_pro/vbvr_pro_train_indomain_strict_256x256x161.json`,
-which selects only manifest records labeled `In-Domain_50` and subtracts every
-record's `bench` IDs from its `train` IDs. The verified current result is 50
-tasks and 250,000 samples with zero benchmark-ID overlap. Its checkpoint output path is
-separate and ends in `_indomain_strict`, so it cannot auto-resume a prior
-100-task run.
-The flattened, manifest-matched GT view can be read directly from:
-
-```text
-/mnt/aigc/xujunxiang/VR_Data/VBVR-Bench_Pro-video
-```
-
-The access-controlled Hugging Face snapshot `pufanyi/vbvr-pro-eval-500`
+The pinned Hugging Face snapshot `pufanyi/vbvr-pro-eval-500`
 revision `181e201076063eb8abbbd9d803f83258472d60a2` is a self-contained
-alternative under `storage/datasets/vbvr-pro-eval-500`. It contains the same
-500 supported samples, a sanitized path-free split manifest, and a complete
+evaluation source under `storage/datasets/vbvr-pro-eval-500`. Its `bench`
+subset contains five samples for each of the 50 `In-Domain_50` and 50
+`Out-of-Domain_50` tasks supported by `main_v2`, for 500 scored videos. The
+50 `Extra_50` tasks are not registered by this scorer. The snapshot includes a
+path-free split manifest and a complete
 `SHA256SUMS` file. The sanitized manifest SHA-256 is
 `afab352e08c590c9f4b480ef314b37f6896eef6430f42ea6c0ce0494f2aa8c4e`;
 its `dataset_config.json` also records the authoritative source-manifest hash
@@ -62,32 +27,22 @@ cd storage/datasets/vbvr-pro-eval-500
 sha256sum -c SHA256SUMS --quiet
 ```
 
-On this workstation, the 2026-08-02 mirror metadata probe was faster, but
-`huggingface_hub.snapshot_download` against `hf-mirror.com` did not receive the
-Hub metadata headers it requires, and anonymous direct mirror downloads later
-hit HTTP 429. Authenticated direct downloads from `huggingface.co` completed
-the pinned snapshot reliably. Prefer the official authenticated endpoint for
-the full snapshot; use the mirror only as a connectivity probe or fallback.
-
 Move Hugging Face's generated local-dir `.cache` outside `GT_BASE` before a
 run so mutable download metadata is not included in the evaluation-source
 provenance fingerprint. The checkpoint sweep below enforces this clean tree.
 
 Generation must use each sample's `video/prompt.txt`; the flattened view's
-`prompt.txt` already contains that prompt. Do not edit any of these shared
-paths. Personal scorer clones and all generated artifacts belong under the
-repository's ignored `storage/` tree.
+`prompt.txt` already contains that prompt. Keep scorer checkouts and generated
+artifacts under the repository's ignored `storage/` tree.
 
 The current verified scorer revision (2026-08-03) is
 `e140038f2aee76ca518f464755fa8bc19b783ba5` from the `main_v2` branch. Its
 scorer-contract SHA-256 is
 `4cc7d028d4106a28190a63bc179562d5ac9add9263cb71926dd6385c5714bcf8`; this
 covers the entrypoint, evaluator Python, bundled annotations, and
-`requirements.txt`.
-
-- GitLab: `https://gitlab.bj.sensetime.com/zeotrope/multimodal/vbvr-evalkit-interleave`
-- GitHub browser: `https://github.com/xujunxiangwork/VBVR-Evalkit-Interleave`
-- GitHub SSH: `git@github.com:xujunxiangwork/VBVR-Evalkit-Interleave.git`
+`requirements.txt`. The fork is not bundled with this repository. Place an
+existing checkout at `EVALKIT_DIR`, or set `EVALKIT_REPO` to an accessible
+repository when the launcher needs to fetch the pinned revision.
 
 The immediately preceding verified series used revision
 `6fedd9d9edb8daafa56aca8e53885aa8ad6f6037` and scorer-contract SHA-256
@@ -119,24 +74,24 @@ Important defaults are explicit in the launcher:
   1024x1024 scorer canvas, and raise FPS to at least 33 so playback is at most
   five seconds;
 - scoring: latest `main_v2`, 500 expected videos, CPU multiprocessing with
-  CUDA hidden from EasyOCR workers and bounded native thread pools (8 workers
-  x 16 threads on the current 128-core host).
+  CUDA hidden from EasyOCR workers and bounded native thread pools (the
+  reference benchmark used 8 workers x 16 threads on a 128-core machine).
 
 Latest-scorer outputs default to
 `storage/eval_out/vbvr_pro_main_v2_evalkit_4cc7d028/`. Historical results tied
 to `42a1593d` or `6fedd9d9` keep their original paths; their scores must not be
 relabeled or mixed with `e140038f` scores.
 
-The formal evaluation for the native-512 Fujian run trained against the e140
+The formal evaluation for the native-512 run trained against the e140
 reward uses its matching rollout policy and an isolated converted-model
 namespace:
 
 ```fish
-fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/vbvr_pro_5b_dancegrpo_manifest_rl_fujian_new_e140_cps0p7_sweep_main_v2.fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/vbvr_pro_5b_dancegrpo_manifest_rl_cps0p7_sweep_main_v2.fish
 ```
 
 This targets
-`dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian_new_evalkit_e140038f`,
+`dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_evalkit_e140038f`,
 discovers every complete DCP checkpoint, and generates native 512x512x81 with
 30-step Flow-CPS 0.7 / CFG 1.0 / seed 0. It then resizes/pads every frame to
 the 1024x1024 scorer canvas while preserving all 81 frames at exact 16 FPS.
@@ -189,20 +144,20 @@ interval `[-0.003360, +0.011956]`. Select checkpoint 700 when one point
 estimate is required, but treat checkpoints 600--800 as a statistically tied
 late plateau. The complete results, per-category tables, task workbooks, and
 provenance live under
-`storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028/`.
+`storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028/`.
 
-For the earlier 384-trained Fujian manifest-RL checkpoint series, the formal
+For the earlier 384-trained manifest-RL checkpoint series, the formal
 evaluation also generates native 512x512x81 video before the same scorer
 preparation:
 
 ```fish
-fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_384x384x81_fujian/vbvr_pro_5b_dancegrpo_manifest_rl_fujian_cps0p7_512x512_sweep_main_v2.fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_384x384x81/vbvr_pro_5b_dancegrpo_manifest_rl_cps0p7_512x512_sweep_main_v2.fish
 ```
 
 It discovers every complete `checkpoint-N/high/.metadata`, generates with
 30-step Flow-CPS 0.7 / CFG 1.0 / seed 0, and fills each generation wave across
-all eight local GPUs. The unsuffixed
-`...fujian_cps0p7_sweep_main_v2.fish` entry point instead generates native
+the configured GPU group. The unsuffixed
+`...cps0p7_sweep_main_v2.fish` entry point instead generates native
 384x384x81 and is retained only as a controlled resolution ablation. A
 checkpoint is complete only after 500 generated and prepared videos, 500
 error-free scores across 100 tasks, three recomputed provenance manifests, the
@@ -212,7 +167,7 @@ When the audited native-512 videos and their 1024x1024 prepared copies already
 exist, migrate only the scorer with:
 
 ```fish
-fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_384x384x81_fujian/vbvr_pro_5b_dancegrpo_manifest_rl_fujian_rescore_512x512_main_v2.fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_384x384x81/vbvr_pro_5b_dancegrpo_manifest_rl_rescore_512x512_main_v2.fish
 ```
 
 The wrapper requires generation provenance for native 512x512x81 media and
@@ -262,12 +217,12 @@ Overall by an average `-0.064370` (range `-0.066971` to `-0.062819`), with
 average In-Domain and Out-of-Domain shifts of `-0.029423` and `-0.099317`.
 This is a scorer-objective migration, not a model regression. The complete
 formal result is under
-`storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_rescore_from_evalkit_eb977da6_to_evalkit_4cc7d028/`.
+`storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_eval500_181e2010_manifest_afab352e_rescore_from_evalkit_eb977da6_to_evalkit_4cc7d028/`.
 
 The earlier native-384 e140 migration is a resolution ablation, not the formal
 checkpoint curve. It completed the same 14 checkpoints with 7,000 error-free
 scores and zero output MP4s under
-`storage/eval_out/vbvr_pro_main_v2_384x384x81_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_rescore_from_evalkit_eb977da6_to_evalkit_4cc7d028/`:
+`storage/eval_out/vbvr_pro_main_v2_384x384x81_manifest_rl_eval500_181e2010_manifest_afab352e_rescore_from_evalkit_eb977da6_to_evalkit_4cc7d028/`:
 
 | Step | Overall | In-Domain | Out-of-Domain |
 | ---: | ---: | ---: | ---: |
@@ -300,7 +255,7 @@ Evaluate the DiffSynth step-35500 initialization on that exact snapshot with
 its requested 50-step UniPC ODE recipe using:
 
 ```fish
-fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_384x384x81_fujian/vbvr_pro_5b_dancegrpo_manifest_rl_fujian_initial_unipc_main_v2.fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_384x384x81/vbvr_pro_5b_dancegrpo_manifest_rl_initial_unipc_main_v2.fish
 ```
 
 This baseline keeps native 384x384x81 generation, CFG 5.0, seed 0, exact 16
@@ -353,8 +308,8 @@ Run the same model series with direct native 512x512x81 generation using the
 fixed-resolution entry points:
 
 ```fish
-fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_384x384x81_fujian/vbvr_pro_5b_dancegrpo_manifest_rl_fujian_initial_unipc_512x512_main_v2.fish
-fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_384x384x81_fujian/vbvr_pro_5b_dancegrpo_manifest_rl_fujian_cps0p7_512x512_sweep_main_v2.fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_384x384x81/vbvr_pro_5b_dancegrpo_manifest_rl_initial_unipc_512x512_main_v2.fish
+fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_384x384x81/vbvr_pro_5b_dancegrpo_manifest_rl_cps0p7_512x512_sweep_main_v2.fish
 ```
 
 The audited 2026-08-03 native-512 rerun completed the initialization and all
@@ -376,7 +331,7 @@ from `+0.031715` to `+0.050747` and averages `+0.037926`. For checkpoint 1100,
 the 512-minus-384 delta is `+0.035491`, with paired-task 95% interval
 `[+0.016061, +0.055661]`. The complete curve, resolution table, bootstrap
 comparisons, and audit are under
-`storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_evalkit_eb977da6/`.
+`storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_eval500_181e2010_manifest_afab352e_evalkit_eb977da6/`.
 
 This native-512 comparison intentionally keeps each model's requested serving
 recipe: UniPC-50/CFG-5 for the initialization and CPS-30/CFG-1 for the RL
@@ -654,7 +609,7 @@ one-based and include the source sigma; compatibility MP4 filenames remain
 zero-based (`step_00.mp4` through `step_{T-1}.mp4`). `manifest.json` records the
 kind, source sigma, output sigma, and file for every displayed cell.
 
-For the native-512 Fujian comparison, run the complete matched matrix with:
+For the native-512 production comparison, run the complete matched matrix with:
 
 ```fish
 fish scripts/eval/vbvr_pro/dancegrpo_manifest_rl_512x512x81/vbvr_pro_5b_sampler_matrix_30steps_main_v2.fish
@@ -691,7 +646,7 @@ bit-exact. Build score tables and the 60-cell HTML video gallery with:
 
 ```bash
 .venv/bin/python -m src.cli.summarize_vbvr_sampler_matrix \
-  --eval-output-base storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028 \
+  --eval-output-base storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028 \
   --trajectory-root storage/eval_out/vbvr_pro_sampler_matrix_30step_trajectories
 ```
 
@@ -962,7 +917,7 @@ five-checkpoint extension, or 57,000 after both extensions):
 
 ```bash
 .venv/bin/python -m src.cli.build_vbvr_trajectory_gallery \
-  --eval-output-base storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028 \
+  --eval-output-base storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028 \
   --trajectory-root storage/eval_out/vbvr_pro_sampler_matrix_all_500_30step_trajectories
 ```
 
@@ -974,7 +929,7 @@ The score-table summarizer also understands this layout:
 
 ```bash
 .venv/bin/python -m src.cli.summarize_vbvr_sampler_matrix \
-  --eval-output-base storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028 \
+  --eval-output-base storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028 \
   --trajectory-root storage/eval_out/vbvr_pro_sampler_matrix_all_500_30step_trajectories \
   --trajectory-layout all-samples \
   --output-dir storage/eval_out/vbvr_pro_sampler_matrix_all_500_30step_trajectories/summary
@@ -990,7 +945,7 @@ run the same command on every evaluation node and pass the complete
 ```fish
 fish scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_incremental_multinode.fish \
   formal \
-  --checkpoint-dir storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_task_prompts_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_new_2_nodes16_world128/checkpoint-600 \
+  --checkpoint-dir storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_task_prompts_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl/checkpoint-600 \
   --nproc 8
 ```
 
@@ -1006,8 +961,9 @@ the parent run name. It cannot be combined with `--checkpoints` because it
 already selects one step.
 
 Omit `--checkpoint-dir` to scan the default output of
-`configs/train_dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml`,
-currently the topology-suffixed `...manifest_rl_new_2_nodes16_world128` root.
+`configs/train_dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml`.
+When the scale-out training wrapper has added a topology suffix, pass that run
+explicitly with `--checkpoint-root PATH`.
 Use `--checkpoint-root PATH` for another run, optionally with
 `--checkpoints N[,N...]`; the older `VLM_EVAL_CHECKPOINT_ROOT` environment
 override remains supported.
@@ -1197,14 +1153,12 @@ declared requirements. The launcher checks those imports and reads the
 pre-populated EasyOCR weights from:
 
 ```text
-/mnt/aigc/xujunxiang/Code/VBVR-Bench/VBVR-EvalKit/easyocr_models
+storage/evalkits/easyocr-shared/model
 ```
 
-The launcher copies those two files into the stable personal
-`storage/evalkits/easyocr-shared/model`, creates a writable `user_network/`,
-and points the revision-specific EvalKit checkout's `easyocr_models` link at
-that personal copy. `EASYOCR_MODULE_PATH` must be the personal parent
-directory, not the shared source directory: EasyOCR appends
-`model/` and may write there. Workers run from the personal checkout so its
+The launcher creates a writable `user_network/` and points the
+revision-specific EvalKit checkout's `easyocr_models` link at that stable
+copy. `EASYOCR_MODULE_PATH` must be the parent directory because EasyOCR
+appends `model/` and may write there. Workers run from the pinned checkout so its
 relative annotations resolve correctly. Keep CUDA hidden during scoring;
 otherwise every worker may instantiate EasyOCR on GPU 0.

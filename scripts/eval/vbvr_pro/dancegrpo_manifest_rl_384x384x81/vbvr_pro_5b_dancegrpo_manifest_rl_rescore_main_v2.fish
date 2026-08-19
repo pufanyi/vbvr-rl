@@ -1,6 +1,6 @@
 #!/usr/bin/env fish
 
-# Re-score already prepared 500-video outputs from the Fujian manifest-RL
+# Re-score already prepared 500-video outputs from the production manifest-RL
 # sweep. This intentionally does not load checkpoints, generate videos, or run
 # video preparation. The native generation dimensions are checked through the
 # recorded generation provenance before EvalKit starts. New score artifacts
@@ -17,11 +17,11 @@ set -g PYTHON .venv/bin/python
 set -g RESCORE_SCRIPT (realpath (status filename))
 
 set -q SOURCE_OUTPUT_BASE[1]
-or set -gx SOURCE_OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_384x384x81_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_evalkit_eb977da6
+or set -gx SOURCE_OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_384x384x81_manifest_rl_eval500_181e2010_manifest_afab352e_evalkit_eb977da6
 set -q OUTPUT_BASE[1]
-or set -gx OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_384x384x81_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_rescore_from_evalkit_eb977da6_to_evalkit_4cc7d028
+or set -gx OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_384x384x81_manifest_rl_eval500_181e2010_manifest_afab352e_rescore_from_evalkit_eb977da6_to_evalkit_4cc7d028
 set -q EVAL_LOG_DIR[1]
-or set -gx EVAL_LOG_DIR storage/eval_logs/vbvr_pro_main_v2_384x384x81_manifest_rl_fujian_rescore_evalkit_4cc7d028
+or set -gx EVAL_LOG_DIR storage/eval_logs/vbvr_pro_main_v2_384x384x81_manifest_rl_rescore_evalkit_4cc7d028
 
 set -q GT_BASE[1]
 or set -gx GT_BASE (realpath storage/datasets/vbvr-pro-eval-500)

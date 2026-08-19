@@ -5,8 +5,10 @@ model_path: storage/models/Wan2.2-TI2V-5B-Diffusers
 # with every manifest bench ID removed from the train IDs.
 # This is intentionally raw-data based: no latent_webdataset_dir is set, so
 # DanceGRPO encodes the prompt/video/image batch online before rollout.
-dataset_json: data/vbvr_pro/vbvr_pro_train_indomain_strict_256x256x161.json
-dataset_size: 250000
+dataset_json: storage/datasets/vbvr-pro-rl-indomain-50k/materialized/dataset.json
+dataset_size: 50000
+shuffle_raw_indices: true
+shuffle_raw_indices_seed: 42
 num_frames: 161
 height: 256
 width: 256
@@ -76,9 +78,9 @@ dancegrpo_timestep_selection_ratio: 0.6
 
 # VBVR-Pro interleave EvalKit rule reward. Raw dataset metadata passes the
 # original GT first/final/video paths through to the scorer.
-vbvr_reward_evalkit_dir: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/evalkits/vbvr-evalkit-interleave-main_v2
+vbvr_reward_evalkit_dir: storage/evalkits/vbvr-evalkit-interleave-main_v2
 vbvr_reward_evalkit_source_sha256: f99edd06fd39b5025a0a46871fc7280f7353d47e8de45b627a0b0711318fd258
-vbvr_reward_easyocr_module_path: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/evalkits/easyocr-shared
+vbvr_reward_easyocr_module_path: storage/evalkits/easyocr-shared
 vbvr_reward_device: cpu
 vbvr_reward_fps: 16
 vbvr_reward_decode_batch_size: 8

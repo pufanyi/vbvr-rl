@@ -1,6 +1,6 @@
 #!/usr/bin/env fish
 
-# Evaluate every complete checkpoint in the Fujian 384x384x81 manifest-RL run
+# Evaluate every complete checkpoint in the production 384x384x81 manifest-RL run
 # at a configurable native inference resolution (384x384 by default). Waves
 # use all eight local GPUs: four two-GPU jobs, two four-GPU jobs, or one
 # eight-GPU job depending on the number of checkpoints left in the final wave.
@@ -13,12 +13,12 @@ function _fail
 end
 
 set -l script_dir (dirname (status filename))
-set -g _fujian_sweep_launcher $script_dir/vbvr_pro_5b_dancegrpo_manifest_rl_fujian_checkpoint_cps0p7_main_v2.fish
-test -f $_fujian_sweep_launcher
-or _fail "launcher does not exist: $_fujian_sweep_launcher"
+set -g _sweep_launcher $script_dir/vbvr_pro_5b_dancegrpo_manifest_rl_checkpoint_cps0p7_main_v2.fish
+test -f $_sweep_launcher
+or _fail "launcher does not exist: $_sweep_launcher"
 
 set -q CHECKPOINT_ROOT[1]
-or set -gx CHECKPOINT_ROOT storage/checkpoints/dancegrpo_vbvr_pro_5b_384x384x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian
+or set -gx CHECKPOINT_ROOT storage/checkpoints/dancegrpo_vbvr_pro_5b_384x384x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_evalkit_e140038f
 set -q GT_BASE[1]
 or set -gx GT_BASE (realpath storage/datasets/vbvr-pro-eval-500)
 set -q SPLIT_MANIFEST[1]
@@ -35,22 +35,22 @@ set -q HEIGHT[1]
 or set -gx HEIGHT 384
 set -q WIDTH[1]
 or set -gx WIDTH 384
-set -g _fujian_native_shape "$HEIGHT"x"$WIDTH"x81
+set -g _native_shape "$HEIGHT"x"$WIDTH"x81
 set -q EVAL_LOG_DIR[1]
-or set -g EVAL_LOG_DIR storage/eval_logs/vbvr_pro_main_v2_$_fujian_native_shape"_manifest_rl_fujian_cps0p7_evalkit_4cc7d028"
+or set -g EVAL_LOG_DIR storage/eval_logs/vbvr_pro_main_v2_$_native_shape"_manifest_rl_cps0p7_evalkit_4cc7d028"
 set -q OUTPUT_BASE[1]
-or set -gx OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_$_fujian_native_shape"_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028"
+or set -gx OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_$_native_shape"_manifest_rl_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028"
 set -q CONVERTED_BASE[1]
 or set -g CONVERTED_BASE storage/models/dcp_converted_5b
 set -q CONVERTED_PREFIX[1]
-or set -g CONVERTED_PREFIX dancegrpo_vbvr_pro_5b_384x384x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian
+or set -g CONVERTED_PREFIX dancegrpo_vbvr_pro_5b_384x384x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_evalkit_e140038f
 
-set -g _fujian_sweep_log_dir $EVAL_LOG_DIR
-set -g _fujian_sweep_output_base $OUTPUT_BASE
-set -g _fujian_sweep_converted_base $CONVERTED_BASE
-set -g _fujian_sweep_converted_prefix $CONVERTED_PREFIX
-mkdir -p $_fujian_sweep_log_dir
-or _fail "could not create log directory: $_fujian_sweep_log_dir"
+set -g _sweep_log_dir $EVAL_LOG_DIR
+set -g _sweep_output_base $OUTPUT_BASE
+set -g _sweep_converted_base $CONVERTED_BASE
+set -g _sweep_converted_prefix $CONVERTED_PREFIX
+mkdir -p $_sweep_log_dir
+or _fail "could not create log directory: $_sweep_log_dir"
 
 test -d $CHECKPOINT_ROOT; or _fail "checkpoint root does not exist: $CHECKPOINT_ROOT"
 test -d $GT_BASE; or _fail "GT_BASE does not exist: $GT_BASE"
@@ -58,9 +58,9 @@ test -f $SPLIT_MANIFEST; or _fail "split manifest does not exist: $SPLIT_MANIFES
 test ! -e $GT_BASE/.cache
 or _fail "move the Hugging Face local-dir .cache outside GT_BASE before provenance fingerprinting: $GT_BASE/.cache"
 
-set -g _fujian_manifest_sha256 (sha256sum $SPLIT_MANIFEST | awk '{print $1}')
-test "$_fujian_manifest_sha256" = afab352e08c590c9f4b480ef314b37f6896eef6430f42ea6c0ce0494f2aa8c4e
-or _fail "unexpected sanitized split manifest fingerprint: $_fujian_manifest_sha256"
+set -g _manifest_sha256 (sha256sum $SPLIT_MANIFEST | awk '{print $1}')
+test "$_manifest_sha256" = afab352e08c590c9f4b480ef314b37f6896eef6430f42ea6c0ce0494f2aa8c4e
+or _fail "unexpected sanitized split manifest fingerprint: $_manifest_sha256"
 set -l checksums_sha256 (sha256sum $GT_BASE/SHA256SUMS | awk '{print $1}')
 test "$checksums_sha256" = a67c534293724ddfc6657af755ab65e9b1354879deb2cfc47de22ede43942861
 or _fail "unexpected dataset checksum-manifest fingerprint: $checksums_sha256"
@@ -86,12 +86,12 @@ or _fail "no complete checkpoints found under $CHECKPOINT_ROOT"
 
 function _converted_model_for_step
     set -l step $argv[1]
-    echo $_fujian_sweep_converted_base/$_fujian_sweep_converted_prefix"_checkpoint-$step"
+    echo $_sweep_converted_base/$_sweep_converted_prefix"_checkpoint-$step"
 end
 
 function _output_root_for_step
     set -l step $argv[1]
-    echo $_fujian_sweep_output_base/dancegrpo_vbvr_pro_5b_checkpoint-$step-cps-noise-0.7
+    echo $_sweep_output_base/dancegrpo_vbvr_pro_5b_checkpoint-$step-cps-noise-0.7
 end
 
 function _checkpoint_complete
@@ -216,7 +216,7 @@ if sum(1 for _ in generated.rglob("*.mp4")) != 500:
     raise SystemExit(1)
 if sum(1 for _ in prepared.rglob("*.mp4")) != 500:
     raise SystemExit(1)
-' $output_root $converted_model $_fujian_manifest_sha256 $EVALKIT_REV $EVALKIT_SOURCE_SHA256 $GT_BASE $HEIGHT $WIDTH
+' $output_root $converted_model $_manifest_sha256 $EVALKIT_REV $EVALKIT_SOURCE_SHA256 $GT_BASE $HEIGHT $WIDTH
 end
 
 function _launch_wave
@@ -245,7 +245,7 @@ function _launch_wave
         set -l num_gpus (count (string split , -- $devices))
         set -l output_root (_output_root_for_step $step)
         set -l converted_model (_converted_model_for_step $step)
-        set -l log_path $_fujian_sweep_log_dir/checkpoint-$step-cps-noise-0.7.log
+        set -l log_path $_sweep_log_dir/checkpoint-$step-cps-noise-0.7.log
 
         if not set -q DRY_RUN[1]; and _checkpoint_complete $step
             echo "[skip] checkpoint-$step is already complete: $output_root"
@@ -273,7 +273,7 @@ function _launch_wave
             PREP_WORKERS=4 \
             SCORE_WORKERS=2 \
             SCORE_THREADS_PER_WORKER=8 \
-            fish $_fujian_sweep_launcher >$log_path 2>&1 &
+            fish $_sweep_launcher >$log_path 2>&1 &
         set -a running_steps $step
         set -a running_pids $last_pid
         set -a running_logs $log_path
@@ -301,9 +301,9 @@ end
 
 echo "[sweep] checkpoints: $checkpoint_steps"
 echo "[sweep] sampler: 30-step Flow-CPS 0.7, CFG 1.0, seed 0"
-echo "[sweep] native media: $_fujian_native_shape at 16 FPS"
+echo "[sweep] native media: $_native_shape at 16 FPS"
 echo "[sweep] GT snapshot: $GT_BASE"
-echo "[sweep] split manifest: $SPLIT_MANIFEST ($_fujian_manifest_sha256)"
+echo "[sweep] split manifest: $SPLIT_MANIFEST ($_manifest_sha256)"
 echo "[sweep] output base: $OUTPUT_BASE"
 
 set -l wave_start 1
@@ -364,4 +364,4 @@ print(f"[done] checkpoint summary: {summary_path}")
     or _fail "could not write checkpoint summary: $OUTPUT_BASE/checkpoint_scores.tsv"
 end
 
-echo "[done] all Fujian $_fujian_native_shape manifest-RL CPS 0.7 checkpoint evaluations completed"
+echo "[done] all production $_native_shape manifest-RL CPS 0.7 checkpoint evaluations completed"

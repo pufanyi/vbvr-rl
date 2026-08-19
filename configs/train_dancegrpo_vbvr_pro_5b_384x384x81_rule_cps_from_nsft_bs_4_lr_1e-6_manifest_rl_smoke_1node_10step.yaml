@@ -1,25 +1,23 @@
 trainer: dancegrpo
+# Single-node validation counterpart of the 64-GPU bs32 manifest-RL run.
+# It keeps the production model, resolution, G=32, T=30, Flow-CPS, full-FT,
+# raw-data encoding, and real VBVR rule reward. Batch 4 on 8 GPUs preserves
+# the production per-rank load: 16 rollouts/rank/optimizer-step.
 model_path: storage/models/diffsynth_converted_5b/wan2.2-TI2V-5B_260715_vbvr_pro_step-35500
 
 dataset_json: storage/datasets/vbvr-pro-rl-indomain-50k/materialized/dataset.json
 dataset_size: 50000
 num_frames: 81
-height: 512
-width: 512
+height: 384
+width: 384
 fps: 16
 shuffle_raw_indices: true
 shuffle_raw_indices_seed: 42
 
-# Single-node validation of the Fujian world128 config. Batch 2 over world8
-# keeps four ranks per prompt and eight G=32 rollouts per rank, matching the
-# production per-rank rollout/replay shape.
-output_dir: /tmp/wan-trainer/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_fa3_compile_local_1node_3step
+output_dir: storage/checkpoints/dancegrpo_vbvr_pro_5b_384x384x81_rule_cps0p7_bs4_lr1e-6_manifest_rl_smoke_1node_10step
 resume_from: null
-reset_dataloader: null
+reset_dataloader: true
 auto_resume: false
-save_final_checkpoint: false
-save_epoch_checkpoints: false
-max_steps: 3
 
 rl_train_node_count: 0
 rl_train_rank_count: 0
@@ -29,26 +27,22 @@ rl_async_rollout: false
 rl_async_rollout_prefetch_steps: 0
 rl_split_debug_logs: false
 
-batch_size: 2
+batch_size: 4
 gradient_accumulation_steps: 1
 num_epochs: 5
-learning_rate: 5.0e-6
+max_steps: 10
+learning_rate: 1.0e-6
 weight_decay: 0.01
 max_grad_norm: 1.0
 warmup_steps: 5
-save_steps: 100
+save_steps: 0
+save_epoch_checkpoints: false
+save_final_checkpoint: false
 log_steps: 1
 seed: 42
 ema_decay: 0.0
 transformer_load_dtype: float32
 gradient_checkpointing: true
-use_liger_kernel: true
-# Pinned FA3 is loaded offline from KERNELS_CACHE by trainer initialization.
-attention_backend: _flash_3_hub
-disable_cudnn_sdp: true
-torch_compile: true
-torch_compile_backend: inductor
-torch_compile_mode: null
 
 num_workers: 2
 prefetch_factor: 2
@@ -56,20 +50,23 @@ persistent_workers: true
 
 fsdp: true
 expert_parallel: false
-hsdp: true
+hsdp: false
 train_experts: both
 lora_rank: 0
 lora_alpha: 32
 
 grpo_shared_prompt_batch: true
-grpo_shared_prompt_microbatch_size: 2
+grpo_shared_prompt_microbatch_size: 4
 grpo_delayed_replay: true
 grpo_delayed_replay_clip_range: 1.0e-2
 grpo_group_size: 32
 grpo_sample_batch_size: 8
-grpo_train_sample_batch_size: 8
+grpo_train_sample_batch_size: 4
+# Full-FT FSDP must reduce-scatter every replay backward instead of retaining
+# full unsharded gradients across chunks. Frozen inference models are offloaded
+# before replay to preserve the same safe path used by production validation.
 grpo_fsdp_sync_each_backward: true
-grpo_offload_inference_models: false
+grpo_offload_inference_models: true
 grpo_num_sampling_steps: 30
 grpo_clip_range: 1.0e-4
 grpo_kl_coeff: 0
@@ -94,11 +91,14 @@ vbvr_reward_prepared_width: 1024
 vbvr_reward_prepared_height: 1024
 vbvr_reward_max_duration_seconds: 5.0625
 vbvr_reward_prepare_crf: 12
+# EvalKit 6fedd9d9 has a known G-16 edge case. Keep long-run continuity while
+# logging scorer failures; valid samples must no longer collapse to zero merely
+# because their dataset paths are relative.
 vbvr_reward_fail_on_error: false
 vbvr_reward_task_specific_only: true
-vbvr_reward_tmp_dir: /tmp/wan-trainer/vbvr_pro_5b_512x512x81_fa3_compile_local_1node_3step
+vbvr_reward_tmp_dir: /tmp/wan-trainer/vbvr_pro_5b_384x384x81_rule_reward_cps0p7_bs4_lr1e-6_local_10step
 vbvr_reward_keep_tmp: false
 vbvr_reward_unsupported_score: 0.0
 
-wandb_project: null
-wandb_run_name: null
+wandb_project: wan-dancegrpo-vbvr-pro-5b
+wandb_run_name: dancegrpo_vbvr_pro_5b_384x384x81_rule_cps0p7_bs4_lr1e-6_manifest_rl_smoke_1node_10step

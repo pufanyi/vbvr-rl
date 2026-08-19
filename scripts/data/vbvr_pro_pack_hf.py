@@ -10,7 +10,7 @@ Example:
         --dataset-json data/vbvr_pro/vbvr_pro_rl_indomain_256x256x161_evalkit_6fedd9d9.json \
         --output-dir storage/hf/vbvr-pro-rl-indomain-50k \
         --repo-id pufanyi/vbvr-pro-rl-indomain-50k \
-        --license-file /mnt/aigc/xujunxiang/Code/VBVR-Pro/LICENSE \
+        --license-file LICENSE \
         --expected-samples 50000
 """
 
@@ -55,7 +55,7 @@ _KNOWN_FIELDS = {
 }
 _TEXT_SUFFIXES = frozenset({".json", ".txt"})
 _AUDIT_PATTERNS = {
-    "internal_mount_path": re.compile(rb"/mnt/(?:umm|aigc)/", re.IGNORECASE),
+    "absolute_host_path": re.compile(rb"/(?:mnt|home|Users)/", re.IGNORECASE),
     "home_path": re.compile(rb"/home/[A-Za-z0-9._-]+/", re.IGNORECASE),
     "internal_username": re.compile(rb"\b(?:pufanyi|xujunxiang)\b", re.IGNORECASE),
     "email_address": re.compile(rb"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE),

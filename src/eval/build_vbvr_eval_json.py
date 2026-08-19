@@ -8,7 +8,7 @@ available for `run_evaluation_video_icml.py` callers.
 
 Usage:
     .venv/bin/python -m src.eval.build_vbvr_eval_json \
-        --gt_base /mnt/umm/users/wangruisi/01-project/mllm/hokin_data/VBVR-Bench \
+        --gt_base storage/datasets/VBVR-Bench \
         --output data/vbvr_eval.json
 """
 
@@ -31,7 +31,7 @@ def parse_args():
     parser.add_argument(
         "--gt_base",
         type=str,
-        default="/mnt/umm/users/wangruisi/01-project/mllm/hokin_data/VBVR-Bench",
+        default="storage/datasets/VBVR-Bench",
         help="Base directory with In-Domain_50 / Out-of-Domain_50",
     )
     parser.add_argument(

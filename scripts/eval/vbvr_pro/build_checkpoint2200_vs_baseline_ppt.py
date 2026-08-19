@@ -27,7 +27,7 @@ from scripts.eval.vbvr_pro import build_rl_demo_ppt as deck
 REPO_ROOT = Path(__file__).resolve().parents[3]
 EVAL_ROOT = (
     REPO_ROOT / "storage/eval_out/"
-    "vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_"
+    "vbvr_pro_main_v2_512x512x81_manifest_rl_e140_lr5e6_eval500_181e2010_"
     "manifest_afab352e_evalkit_4cc7d028"
 )
 BASELINE_NAME = "diffsynth_step35500-baseline-unipc-ode-30steps-cfg1"

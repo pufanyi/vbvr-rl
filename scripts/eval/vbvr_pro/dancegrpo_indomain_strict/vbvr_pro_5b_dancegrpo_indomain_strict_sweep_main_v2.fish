@@ -14,7 +14,7 @@ end
 set -q CHECKPOINT_ROOT[1]
 or set CHECKPOINT_ROOT storage/checkpoints/dancegrpo_vbvr_pro_5b_256x256x161_rule_cps_from_nsft_bs32_lr_1e-6_indomain_strict
 set -q SPLIT_MANIFEST[1]
-or set SPLIT_MANIFEST /mnt/aigc/xujunxiang/Code/VBVR-Pro/scripts/split_manifest.json
+or set SPLIT_MANIFEST storage/datasets/vbvr-pro-eval-500/split_manifest.json
 set -q EVALKIT_REV[1]
 or set EVALKIT_REV e140038f2aee76ca518f464755fa8bc19b783ba5
 set -q EVALKIT_SOURCE_SHA256[1]

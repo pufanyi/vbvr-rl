@@ -10,8 +10,10 @@ model_path: storage/models/diffsynth_converted_5b/wan2.2-TI2V-5B_260715_vbvr_pro
 # (SHA-256: 8eb86bf31b24dc5a21deb03a8294c15d299731db0f6f1ea0ddfcd3fd36619f32).
 # This is intentionally raw-data based: DanceGRPO encodes prompt/video/image
 # online before rollout.
-dataset_json: data/vbvr_pro/vbvr_pro_rl_indomain_256x256x161_evalkit_6fedd9d9.json
+dataset_json: storage/datasets/vbvr-pro-rl-indomain-50k/materialized/dataset.json
 dataset_size: 50000
+shuffle_raw_indices: true
+shuffle_raw_indices_seed: 42
 num_frames: 81
 height: 384
 width: 384
@@ -88,9 +90,9 @@ dancegrpo_timestep_selection_ratio: 0.6
 # Latest pinned GitHub main_v2 revision:
 # 6fedd9d9edb8daafa56aca8e53885aa8ad6f6037. Its contract fingerprint covers
 # the entrypoint, all vbvr_bench Python, bundled annotations, and requirements.
-vbvr_reward_evalkit_dir: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/evalkits/vbvr-evalkit-interleave-main_v2-6fedd9d9
+vbvr_reward_evalkit_dir: storage/evalkits/vbvr-evalkit-interleave-main_v2-6fedd9d9
 vbvr_reward_evalkit_source_sha256: eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c
-vbvr_reward_easyocr_module_path: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/evalkits/easyocr-shared
+vbvr_reward_easyocr_module_path: storage/evalkits/easyocr-shared
 vbvr_reward_device: cpu
 vbvr_reward_fps: 16
 vbvr_reward_decode_batch_size: 8
@@ -116,8 +118,8 @@ vbvr_reward_prepare_crf: 12
 # configured zero score until the evaluator regression is fixed.
 vbvr_reward_fail_on_error: false
 vbvr_reward_task_specific_only: true
-# Reward videos are disposable and extremely metadata-heavy; keep them on the
-# node-local filesystem instead of the shared QuarkFS project mount.
+# Reward videos are disposable and metadata-heavy; keep them on node-local
+# temporary storage instead of a shared project filesystem.
 vbvr_reward_tmp_dir: /tmp/wan-trainer/vbvr_pro_5b_384x384x81_rule_reward_cps0p7_from_diffsynth_step35500_manifest_rl_evalkit_6fedd9d9_reward1024_fps16_no_relay
 vbvr_reward_keep_tmp: false
 vbvr_reward_unsupported_score: 0.0

@@ -12,7 +12,7 @@ MAX_SHARD_SIZE="${MAX_SHARD_SIZE:-10GB}"
 POLL_SECONDS="${POLL_SECONDS:-300}"
 STABLE_POLLS="${STABLE_POLLS:-2}"
 PYTHON="${PYTHON:-.venv/bin/python}"
-LMMS_PY="${LMMS_PY:-/mnt/umm/users/pufanyi/workspace/lmms-eval/.venv/bin/python}"
+LMMS_PY="${LMMS_PY:-}"
 
 if [[ ! -x "$PYTHON" ]]; then
   PYTHON=python

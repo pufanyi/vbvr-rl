@@ -158,11 +158,11 @@ EasyOCR tasks and also prevents evaluator imports from inheriting training-GPU
 state. `vbvr_reward_cpu_workers` counts processes per reward-producing rank;
 keep the node-wide native-thread budget bounded when increasing it. Most 5B
 manifest-RL configs use two processes with eight threads each per rank after
-that layout outperformed one process with 16 threads on a 50-task benchmark;
-the Fujian 512x512x81 world128 config uses four x four to double concurrent
-samples under the same nominal node budget and must be validated through
-matched `reward_drain` measurements before wider adoption. Other standard
-configs may retain one x 16 per rank (or per TP pair). EvalKit errors,
+that layout outperformed one process with 16 threads on a 50-task benchmark.
+The 512x512x81 config uses four x four to increase sample concurrency; size
+this budget for the target host and validate it through matched `reward_drain`
+measurements before increasing either dimension. Other configs may retain one
+x 16 per rank (or per TP pair). EvalKit errors,
 non-finite scores, and scores outside `[0, 1]` stop training by default.
 
 `vbvr_rule` is a bounded producer-consumer pipeline. The training thread
@@ -183,8 +183,7 @@ step must be submitted while the pending step is retained. For the target
 batch-32/G=32 configs this is 32 jobs (about 966 MiB/rank for 161 frames and
 486 MiB/rank for 81 frames) at world size 32, and remains 16 jobs at world
 size 64. Reward videos are disposable and metadata-heavy; put
-`vbvr_reward_tmp_dir` under node-local `/tmp`, not the shared QuarkFS project
-mount.
+`vbvr_reward_tmp_dir` under node-local `/tmp`, not a shared project mount.
 
 On 2026-07-25, an eight-H100 production-shape one-step smoke of the 161-frame
 DiffSynth step-35500 config used shared prompts with local `batch_size: 4`,
@@ -237,11 +236,11 @@ learning rate and run namespaces, while the `_no_relay` config disables
 cross-step delayed replay and isolates its run namespaces. The latter preserves
 the existing filename spelling for compatibility.
 
-### Fujian 5B Kernel, Attention, and Compile Validation
+### 5B Kernel, Attention, and Compile Validation
 
-The Fujian 512x512x81 production config enables Liger 0.8.1,
+The 512x512x81 config enables Liger 0.8.1,
 Diffusers' `_flash_3_hub` attention backend, and in-place Inductor compilation.
-Its `vbvr_rule` reward is pinned to non-public EvalKit `main_v2` revision
+Its `vbvr_rule` reward is pinned to EvalKit `main_v2` revision
 `e140038f2aee76ca518f464755fa8bc19b783ba5`, with scorer-contract SHA-256
 `4cc7d028d4106a28190a63bc179562d5ac9add9263cb71926dd6385c5714bcf8`.
 Checkpoint, W&B, and reward-temp namespaces include `evalkit_e140038f`; never
@@ -255,18 +254,16 @@ that exact snapshot with the `kernels` offline locked loader. This avoids both
 the publisher-trust metadata request and version resolution on compute nodes
 without network access. Keep Triton-generated compiler artifacts node-local;
 they are architecture/job-specific and are rebuilt under `/tmp` when needed.
-The launchers deliberately replace an ambient `KERNELS_CACHE` because cluster
+The launchers deliberately replace an ambient `KERNELS_CACHE` because runtime
 images may inject an ephemeral `/tmp` path; use
 `WAN_TRAINER_KERNELS_CACHE` for an intentional persistent override. Prefetch
 once from a networked login node with
 `.venv/bin/python -m src.cli.prefetch_attention_kernel --backend _flash_3_hub`.
-Root-launched scheduler jobs resolve `~` to `/root`; bake the cache into
-`/root/.cache/wan-trainer/kernels` before saving that image, or set
-`WAN_TRAINER_KERNELS_CACHE` to the shared absolute user-cache path on every
-node.
+Ensure the effective cache path belongs to the runtime user and is available
+on every machine before starting an offline job.
 
 Wan TI2V-5B contains 120 replaceable `torch.nn.RMSNorm` instances, all Q/K
-normalizers. At the production BF16 shape `(8, 5376, 3072)`, Liger's default
+normalizers. At the benchmark BF16 shape `(8, 5376, 3072)`, Liger's default
 Triton RMSNorm reduced median forward-plus-backward time from 0.852 ms to
 0.787 ms (about 8%). Liger's optional cuTile backend was within 0.5% of the
 default and its CuTe DSL backend was slower on this H800, so neither optional
@@ -290,8 +287,8 @@ backward NaNs on H100/PyTorch 2.11. Production therefore keeps
 automatic SDPA fallback.
 
 The runnable single-node validation config is
-`configs/train_dancegrpo_vbvr_pro_5b_512x512x81_rule_cps_from_nsft_bs_2_lr_5e-6_manifest_rl_local_1node_3step_fa3_compile.yaml`.
-Batch 2 over eight H800s preserves the production world-128 layout of four
+`configs/train_dancegrpo_vbvr_pro_5b_512x512x81_rule_cps_from_nsft_bs_2_lr_5e-6_manifest_rl_smoke_1node_3step_fa3_compile.yaml`.
+Batch 2 over eight ranks preserves the world-128 layout of four
 ranks per prompt and eight `G=32` rollouts per rank. It completed three real
 full-FT optimizer steps with 512x512x81 raw data, T5/VAE, `T=30`, 17 replay
 timesteps, Flow-CPS, VBVR rule scoring, delayed replay, Liger, FA3, and
@@ -299,9 +296,8 @@ Inductor. Step rewards were 0.7101, 0.3520, and 0.6046; gradient norms were
 0.0001, 0.0002, and 0.0002; steps two and three used nonzero learning rates;
 peak memory was 48.9/53.6 GiB allocated/reserved. Step times fell from 351.98
 seconds during cold compilation to 243.65 and 194.13 seconds. The job exited
-zero without NaN, OOM, NCCL, or scorer failures. This validates the exact
-per-rank production compute shape and compiler path, but not the first
-16-node HSDP communication launch.
+zero without NaN, OOM, NCCL, or scorer failures. This validates the per-rank
+compute shape and compiler path, but not a multi-machine HSDP launch.
 
 After changing video encoding, preparation, metadata, or scorer code, run
 `scripts/dev/validate_vbvr_reward_alignment.py` on both a normal geometric
@@ -310,13 +306,12 @@ final-generation video paths from the same RGB frames, requires raw and prepared
 decoded frames to be identical, and requires the isolated scorer results to
 match exactly.[^vbvr-alignment-validator]
 
-To keep the same 5B lr=1e-6 DanceGRPO setting while training on the dedicated
-VBVR-Pro RL split with the latest scorer, use
+To keep the same 5B lr=1e-6 DanceGRPO setting while training on the public
+VBVR-Pro RL snapshot, use
 `configs/train_dancegrpo_vbvr_pro_5b_256x256x161_rule_cps_from_nsft_bs_32_lr_1e-6_manifest_rl_evalkit_6fedd9d9.yaml`.
-Its data descriptor selects `split: rl` from `split_manifest_rl.json` and uses
-the explicit `/mnt/umm/users/xujunxiang/VBVR-Pro_10k` root. The verified
-manifest contains 50 In-Domain tasks and 50,000 samples, so the YAML sets
-`dataset_size: 50000`. It fixes the Flow-CPS coefficient at `0.7` (with no
+Its materialized descriptor contains 50 In-Domain tasks and 50,000 samples, so
+the YAML sets `dataset_size: 50000` and deterministically shuffles the restored
+task-grouped index. It fixes the Flow-CPS coefficient at `0.7` (with no
 `grpo_cps_noise_scale_range`) and isolates output, W&B, and reward-temp paths
 with `cps0p7` plus the `_manifest_rl_evalkit_6fedd9d9` suffix. Because the original fp32 DCP
 epoch-1 checkpoint is absent, it initializes model weights from the completed
@@ -547,7 +542,7 @@ fish scripts/train/grpo_vlm_eval_multinode.fish --nproc 8 --config \
 ```
 
 The VLM launcher keeps the standard scheduler environment while starting one
-node-local Qwen endpoint and cleaning it up after training. The cluster wrapper
+node-local Qwen endpoint and cleaning it up after training. The scale-out wrapper
 detects 4/8/16 nodes and defaults each endpoint to DP4 x TP2, whereas the
 generic wrapper keeps standalone DP1 x TP8 unless overridden. See
 [`vlm_judge_reward.md`](vlm_judge_reward.md) for the service topology and why
@@ -576,7 +571,7 @@ After materializing the public 50k raw snapshot documented in
 ```bash
 WANDB_MODE=disabled WAN_TRAINER_DECORD_NUM_THREADS=1 \
   fish scripts/train/grpo.fish --nproc 8 -- \
-  --config configs/train_dancegrpo_vbvr_pro_5b_384x384x81_rule_cps_from_nsft_bs_4_lr_1e-6_manifest_rl_local_1node_10step.yaml
+  --config configs/train_dancegrpo_vbvr_pro_5b_384x384x81_rule_cps_from_nsft_bs_4_lr_1e-6_manifest_rl_smoke_1node_10step.yaml
 ```
 
 This is a real ten-optimizer-step full-FT run: it retains 384x384x81,

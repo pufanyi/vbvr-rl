@@ -1,10 +1,12 @@
 trainer: dancegrpo
 model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
 
-# EvalKit-supported 100-task VBVR-Pro raw dataset. The four DP replicas each
-# receive four prompts, preserving a 16-prompt global optimizer batch.
-dataset_json: data/vbvr_pro/vbvr_pro_train_supported_256x256x161.json
-dataset_size: 500000
+# Public 50-task VBVR-Pro RL snapshot. The four DP replicas each receive four
+# prompts, preserving a 16-prompt global optimizer batch.
+dataset_json: storage/datasets/vbvr-pro-rl-indomain-50k/materialized/dataset.json
+dataset_size: 50000
+shuffle_raw_indices: true
+shuffle_raw_indices_seed: 42
 num_frames: 161
 height: 256
 width: 256
@@ -92,9 +94,9 @@ grpo_cfg_scale: 1.0
 dancegrpo_share_group_init_noise: true
 dancegrpo_timestep_selection_ratio: 0.6
 
-vbvr_reward_evalkit_dir: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/evalkits/vbvr-evalkit-interleave-main_v2
+vbvr_reward_evalkit_dir: storage/evalkits/vbvr-evalkit-interleave-main_v2
 vbvr_reward_evalkit_source_sha256: f99edd06fd39b5025a0a46871fc7280f7353d47e8de45b627a0b0711318fd258
-vbvr_reward_easyocr_module_path: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/evalkits/easyocr-shared
+vbvr_reward_easyocr_module_path: storage/evalkits/easyocr-shared
 vbvr_reward_device: cpu
 vbvr_reward_fps: 16
 vbvr_reward_decode_batch_size: 8

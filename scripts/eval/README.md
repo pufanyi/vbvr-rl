@@ -15,7 +15,7 @@ The VBVR-Pro DanceGRPO wrappers are further separated by training run:
   every checkpoint has UniPC ODE, deterministic FlowMatch Euler ODE, CPS 0.3,
   and CPS 0.7 entrypoints.
 - `vbvr_pro/dancegrpo_indomain_strict/`: the strict In-Domain checkpoint series.
-- `vbvr_pro/dancegrpo_manifest_rl_384x384x81_fujian/`: the Fujian manifest-RL
+- `vbvr_pro/dancegrpo_manifest_rl_384x384x81/`: the 384x384x81 manifest-RL
   checkpoint sweep plus two provenance-locked scorer-only migrations. Use the
   fixed `...rescore_512x512_main_v2.fish` wrapper for the formal native-512 to
   1024x1024/e140 evaluation; the unsuffixed `...rescore_main_v2.fish` requires
@@ -24,10 +24,8 @@ The VBVR-Pro DanceGRPO wrappers are further separated by training run:
   prepare video.
 - `vbvr_pro/dancegrpo_manifest_rl_512x512x81/`: the 512x512x81 manifest-RL
   checkpoint series evaluated with the matching 30-step CPS 0.7 rollout policy.
-  The original fixed sweep evaluates checkpoints 100--500; the
-  `...fujian_new_e140...` wrapper discovers every complete checkpoint in the
-  native-512/e140-reward Fujian run, isolates its converted models and outputs,
-  and fills all eight local GPUs in each wave. The
+  The sweep discovers every complete checkpoint in the native-512/e140-reward
+  run and isolates its converted models and outputs. The
   `...diffsynth_step35500_baseline_cps0p7...` entry point evaluates that run's
   pre-RL initialization with the exact same sampler, media, dataset, and scorer
   contract so it can serve as a valid step-0 baseline.

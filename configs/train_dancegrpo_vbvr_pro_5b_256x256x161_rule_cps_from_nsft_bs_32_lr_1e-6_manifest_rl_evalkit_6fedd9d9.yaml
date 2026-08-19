@@ -5,8 +5,10 @@ model_path: storage/models/dcp_converted_5b/sft_vbvr_5b_256x256x161_full_lr_1e-5
 
 # Dedicated 50-task In-Domain RL split: 50,000 samples, manifest SHA-256
 # 8eb86bf31b24dc5a21deb03a8294c15d299731db0f6f1ea0ddfcd3fd36619f32.
-dataset_json: data/vbvr_pro/vbvr_pro_rl_indomain_256x256x161_evalkit_6fedd9d9.json
+dataset_json: storage/datasets/vbvr-pro-rl-indomain-50k/materialized/dataset.json
 dataset_size: 50000
+shuffle_raw_indices: true
+shuffle_raw_indices_seed: 42
 num_frames: 161
 height: 256
 width: 256
@@ -67,9 +69,9 @@ dancegrpo_timestep_selection_ratio: 0.6
 # GitHub main_v2 revision 6fedd9d9edb8daafa56aca8e53885aa8ad6f6037.
 # The fingerprint covers run_evaluation.py, vbvr_bench Python, bundled
 # annotations, and requirements.txt.
-vbvr_reward_evalkit_dir: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/evalkits/vbvr-evalkit-interleave-main_v2-6fedd9d9
+vbvr_reward_evalkit_dir: storage/evalkits/vbvr-evalkit-interleave-main_v2-6fedd9d9
 vbvr_reward_evalkit_source_sha256: eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c
-vbvr_reward_easyocr_module_path: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/evalkits/easyocr-shared
+vbvr_reward_easyocr_module_path: storage/evalkits/easyocr-shared
 vbvr_reward_device: cpu
 vbvr_reward_fps: 16
 vbvr_reward_decode_batch_size: 8

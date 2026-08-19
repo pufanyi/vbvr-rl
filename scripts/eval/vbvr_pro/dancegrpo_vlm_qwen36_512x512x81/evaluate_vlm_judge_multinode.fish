@@ -31,7 +31,7 @@ set -l project_root (realpath $script_dir/../../../..)
 cd $project_root; or _fail "could not enter project root: $project_root"
 
 set -l default_input \
-    storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028
+    storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028
 set -l mode score
 set -l input_root $default_input
 set -l output_root
@@ -131,7 +131,7 @@ set -q WAN_TRAINER_VLM_MAX_NUM_SEQS; or set -gx WAN_TRAINER_VLM_MAX_NUM_SEQS 32
 set -q WAN_TRAINER_VLM_MAX_IMAGES_PER_PROMPT; or set -gx WAN_TRAINER_VLM_MAX_IMAGES_PER_PROMPT 2
 set -q WAN_TRAINER_VLM_MAX_VIDEOS_PER_PROMPT; or set -gx WAN_TRAINER_VLM_MAX_VIDEOS_PER_PROMPT 1
 set -q WAN_TRAINER_VLM_LOG_DIR; or set -gx WAN_TRAINER_VLM_LOG_DIR /tmp/wan-trainer-vllm-offline-judge
-# Four replicas cold-reading 51.75 GiB each from QuarkFS can exceed the
+# Four replicas cold-reading 51.75 GiB each from shared filesystem can exceed the
 # co-hosted training launcher's 900-second timeout even when startup is healthy.
 set -q WAN_TRAINER_VLM_STARTUP_TIMEOUT_SECONDS; or set -gx WAN_TRAINER_VLM_STARTUP_TIMEOUT_SECONDS 1800
 set -q WAN_TRAINER_VLM_BASE_URL; or set -gx WAN_TRAINER_VLM_BASE_URL "http://127.0.0.1:$WAN_TRAINER_VLM_PORT/v1"

@@ -1,6 +1,6 @@
 #!/usr/bin/env fish
-cd /mnt/umm/users/pufanyi/projects/Wan-Trainer
-or exit 1
+
+source (dirname (status filename))/../lib/env.fish
 
 # Require the experiment YAML explicitly so the submitted command records the
 # exact training contract. Other arguments are forwarded as CLI overrides.
@@ -38,7 +38,7 @@ end
 
 if test -z "$config"
     echo "ERROR: missing required --yaml=<path>" >&2
-    echo "Usage: fish scripts/train/grpo_vlm_eval_cluster.fish --yaml=configs/experiment.yaml [training overrides...]" >&2
+    echo "Usage: fish scripts/train/grpo_vlm_eval_scaleout.fish --yaml=configs/experiment.yaml [training overrides...]" >&2
     exit 1
 end
 if not test -f "$config"
@@ -77,7 +77,7 @@ set -q WAN_TRAINER_VLM_DATA_PARALLEL_BACKEND; or set -gx WAN_TRAINER_VLM_DATA_PA
 set -q WAN_TRAINER_VLM_DISTRIBUTED_EXECUTOR_BACKEND; or set -gx WAN_TRAINER_VLM_DISTRIBUTED_EXECUTOR_BACKEND mp
 set -q WAN_TRAINER_VLM_GPU_MEMORY_UTILIZATION; or set -gx WAN_TRAINER_VLM_GPU_MEMORY_UTILIZATION 0.50
 set -q WAN_TRAINER_VLM_LOG_DIR; or set -gx WAN_TRAINER_VLM_LOG_DIR "/tmp/wan-trainer-vllm-world$global_world_size"
-set -q WAN_TRAINER_KERNELS_CACHE; or set -gx WAN_TRAINER_KERNELS_CACHE /mnt/umm/users/pufanyi/.cache/wan-trainer/kernels
+set -q WAN_TRAINER_KERNELS_CACHE; or set -gx WAN_TRAINER_KERNELS_CACHE ~/.cache/wan-trainer/kernels
 
 if not test -d "$WAN_TRAINER_KERNELS_CACHE"
     echo "ERROR: pinned FA3 cache is missing: $WAN_TRAINER_KERNELS_CACHE" >&2

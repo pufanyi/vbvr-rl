@@ -1,6 +1,6 @@
 #!/usr/bin/env fish
 
-# Evaluate one checkpoint from the Fujian manifest-RL run on the complete
+# Evaluate one checkpoint from the production manifest-RL run on the complete
 # 500-sample VBVR-Pro bench. The default remains the training rollout policy
 # (30-step Flow-CPS 0.7, CFG 1.0, seed 0), while callers may select another
 # CPS coefficient or a matched 30-step Euler/UniPC ODE through environment
@@ -19,13 +19,13 @@ string match -rq '^[0-9]+$' -- $CHECKPOINT_STEP
 or _fail "CHECKPOINT_STEP must be a positive integer: $CHECKPOINT_STEP"
 
 set -q CHECKPOINT_ROOT[1]
-or set -lx CHECKPOINT_ROOT storage/checkpoints/dancegrpo_vbvr_pro_5b_384x384x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian
+or set -lx CHECKPOINT_ROOT storage/checkpoints/dancegrpo_vbvr_pro_5b_384x384x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_evalkit_e140038f
 set -lx CHECKPOINT $CHECKPOINT_ROOT/checkpoint-$CHECKPOINT_STEP
 test -f $CHECKPOINT/high/.metadata
 or _fail "checkpoint is missing high/.metadata: $CHECKPOINT"
 
 set -q CONVERTED_MODEL[1]
-or set -lx CONVERTED_MODEL storage/models/dcp_converted_5b/dancegrpo_vbvr_pro_5b_384x384x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian_checkpoint-$CHECKPOINT_STEP
+or set -lx CONVERTED_MODEL storage/models/dcp_converted_5b/dancegrpo_vbvr_pro_5b_384x384x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_evalkit_e140038f_checkpoint-$CHECKPOINT_STEP
 
 set -q GT_BASE[1]
 or set -lx GT_BASE (realpath storage/datasets/vbvr-pro-eval-500)
@@ -109,7 +109,7 @@ else
 end
 
 set -q OUTPUT_BASE[1]
-or set -l OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_$native_shape"_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028"
+or set -l OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_$native_shape"_manifest_rl_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028"
 set -q OUTPUT_ROOT[1]
 or set -lx OUTPUT_ROOT $OUTPUT_BASE/dancegrpo_vbvr_pro_5b_checkpoint-$CHECKPOINT_STEP-$sampler_label
 set -q GENERATED_DIR[1]

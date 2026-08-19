@@ -10,7 +10,7 @@ existing asynchronous reward submission/resolve ordering.
 
 ## Pinned Runtime and Model
 
-The local model snapshot is:
+The pinned model snapshot is:
 
 - repository: `Qwen/Qwen3.6-27B`;
 - revision: `6a9e13bd6fc8f0983b9b99948120bc37f49c13e9`;
@@ -19,22 +19,19 @@ The local model snapshot is:
 - runtime: isolated `storage/host_vllm/.venv`, with vLLM 0.26.0, Ray
   2.56.1, PyTorch 2.11.0+cu130, Transformers 5.14.1, and NumPy 2.3.5.
 
-The model and runtime are ignored local artifacts. Recreate them with:
+The model and runtime are ignored artifacts. Recreate them with:
 
 ```fish
 fish scripts/dev/setup_host_vllm.fish
 fish scripts/download/qwen36_27b_hf_mirror.fish
 ```
 
-The setup helper uses a node-local uv cache and the Tsinghua PyPI mirror by
-default because unpacking the CUDA runtime directly under shared QuarkFS is
-metadata-bound. It writes the resolved environment to the ignored
-`storage/host_vllm/requirements.freeze.txt`. The download helper pins the model
-commit, disables the credentialed workstation proxy, uses
-`https://hf-mirror.com` with 16 workers, disables Xet for the mirror path, and
-finishes with a full remote-file/LFS checksum verification.
-Override `WAN_TRAINER_HF_DOWNLOAD_WORKERS` when the shared filesystem or mirror
-should receive less concurrency.
+The setup helper uses a node-local uv cache so large CUDA wheels do not unpack
+through a metadata-bound shared filesystem. It writes the resolved environment
+to the ignored `storage/host_vllm/requirements.freeze.txt`. The download helper
+pins the model commit and finishes with a full remote-file/LFS checksum
+verification. Override `WAN_TRAINER_HF_DOWNLOAD_WORKERS` when the backing
+filesystem or download endpoint should receive less concurrency.
 
 ## Standalone Single-Node Service
 
@@ -74,7 +71,7 @@ Important service controls are environment variables:
 | `WAN_TRAINER_VLM_MAX_VIDEOS_PER_PROMPT` | `1` | One generated MP4 per request |
 | `WAN_TRAINER_VLM_RENDERER_NUM_WORKERS` | `1` | Keeps vLLM's multimodal processor cache enabled |
 | `WAN_TRAINER_VLM_ENFORCE_EAGER` | `1` | Avoid CUDA-graph memory in the co-hosted smoke |
-| `WAN_TRAINER_VLM_GDN_PREFILL_BACKEND` | `triton` | Avoid FlashInfer GDN JIT on the workstation's CUDA 11.1 toolkit |
+| `WAN_TRAINER_VLM_GDN_PREFILL_BACKEND` | `triton` | Avoid host-toolkit-dependent FlashInfer GDN JIT |
 | `WAN_TRAINER_VLM_USE_FLASHINFER_SAMPLER` | `0` | Use vLLM's native sampler instead of FlashInfer sampling JIT |
 | `WAN_TRAINER_VLM_TRITON_CACHE_DIR` | `/tmp/wan-trainer-vllm-triton-cache` | Node-local Triton cache |
 | `WAN_TRAINER_VLM_INDUCTOR_CACHE_DIR` | `/tmp/wan-trainer-vllm-inductor-cache` | Node-local Inductor cache |
@@ -83,14 +80,10 @@ The API binds to loopback by default. Keep an API exposed across hosts on a
 trusted private network and configure authentication; vLLM's distributed
 control plane is not intended for an untrusted network.
 
-The host CUDA compiler is 11.1, while the isolated vLLM wheel carries a newer
-CUDA runtime. FlashInfer 0.6.14's fallback source build passes an unsupported
-`nvcc --threads=1` option on this host, so the launcher defaults to Triton GDN
-prefill and the native vLLM sampler. It also keeps all compilation caches under
-node-local `/tmp`: eight simultaneous Triton warmups against `~/.triton` on
-QuarkFS otherwise spend minutes blocked in shared-filesystem rename/remove
-operations. The first local warmup generated about 62 MiB of cache; later
-starts reused it.
+The launcher defaults to Triton GDN prefill and the native vLLM sampler so the
+runtime does not depend on a compatible host `nvcc` for FlashInfer source JIT.
+It also keeps compilation caches under node-local `/tmp`; simultaneous Triton
+warmups against a shared `~/.triton` can otherwise become metadata-bound.
 
 ## Reward Contract
 
@@ -208,7 +201,7 @@ For one machine, omit scheduler variables:
 ```fish
 fish scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_vlm_judge_multinode.fish \
   score \
-  --input-root storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028 \
+  --input-root storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028 \
   --concurrency 16
 ```
 
@@ -223,7 +216,7 @@ their cell sets disjoint; never let two clients own the same cell.
 
 The wrapper starts the same node-local DP4 x TP2 Qwen service and 50% memory
 budget as the production training launcher. It uses a 1,800-second startup
-timeout because four replicas cold-reading the 51.75-GiB snapshot from QuarkFS
+timeout because four replicas cold-reading the 51.75-GiB snapshot from a shared filesystem
 can exceed the co-hosted training timeout. Set `VLM_JUDGE_START_SERVICE=0` to
 reuse an already-managed endpoint through `WAN_TRAINER_VLM_BASE_URL`.
 
@@ -288,12 +281,12 @@ fish scripts/train/grpo_vlm_eval_multinode.fish --nproc 8 \
   --config configs/train_dancegrpo_vbvr_pro_5b_384x384x81_vlm_qwen36_smoke_1node_3step.yaml
 ```
 
-The generic wrapper starts one DP1 x TP8 Qwen endpoint inside each node/pod,
+The generic wrapper starts one DP1 x TP8 Qwen endpoint inside each machine,
 runs both a real image/JSON probe and an exact task-rubric/video/regex probe,
 delegates training to the standard multi-node GRPO launcher, and terminates the
 whole vLLM process group on normal exit or signals. Every node uses the same
 loopback URL, so no scheduler-specific service discovery is needed. The
-cluster launcher overrides this generic topology to DP4 x TP2 on every node.
+scale-out launcher overrides this generic topology to DP4 x TP2 on every machine.
 
 `--gpu-memory-utilization 0.50` is not a hard CUDA partition. It budgets vLLM's
 weights, KV cache, and engine workspace against total device memory; PyTorch
@@ -345,7 +338,7 @@ This establishes feasibility for the bounded 5B shape, not for G=32/T=30,
 optimizer step. Repeat the monitored smoke at the intended production shape;
 the remaining memory margin is capacity evidence, not a fixed 60% reservation.
 
-### Measured local DP scale-out
+### Measured Intra-Node DP Scale-Out
 
 The judge workload is heterogeneous: the 100 rubrics have different output
 fields and generated lengths. A single TP8 engine therefore has head-of-line
@@ -400,7 +393,7 @@ decoded as 512x512, 81 frames, 16 FPS. The single G-21 group received identical
 feasibility rather than a nonzero update. Production G32/T30 still requires a
 monitored one-step launch.
 
-### 4/8/16-node candidate
+### Scale-out candidate
 
 The production-style candidate is
 [`train_dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml`](../configs/train_dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml).
@@ -411,12 +404,12 @@ Run the same command on every node with scheduler-provided `WORLD_SIZE=4`, `8`,
 or `16`, `RANK=0..WORLD_SIZE-1`, and a shared `MASTER_ADDR`:
 
 ```fish
-fish scripts/train/grpo_vlm_eval_cluster.fish \
+fish scripts/train/grpo_vlm_eval_scaleout.fish \
   --yaml=configs/train_dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml
 ```
 
-The cluster wrapper starts with the Fujian project path, requires an explicit
-`--yaml=<path>`, detects the three supported node counts, pins the shared FA3
+The scale-out wrapper resolves the repository root, requires an explicit
+`--yaml=<path>`, detects the supported node counts, pins the shared FA3
 cache, and translates the YAML to the trainer's internal `--config` argument.
 It starts four TP2 replicas behind one node-local vLLM DP endpoint using a 50%
 per-card budget. It automatically suffixes checkpoint and W&B names with
@@ -425,7 +418,7 @@ overrides still win. `WAN_TRAINER_VLM_LAUNCH_DRY_RUN=1` resolves and prints the
 topology without starting a service. The old `grpo_vlm_eval_4node.fish` path is
 only a compatibility delegate to this launcher.
 
-It retains the Fujian optimizer, bs32/G32/T30 Flow-CPS schedule, Liger, pinned
+It retains the configured optimizer, bs32/G32/T30 Flow-CPS schedule, Liger, pinned
 FA3, Inductor, delayed replay, and full fine-tuning. At world32/64/128 it uses
 4/8/16 HSDP replicas x eight shards and two 16-prompt waves. Ranks per prompt
 are 2/4/8, so each rank owns 16/8/4 rollouts per wave. The candidate caps
@@ -440,7 +433,7 @@ than changing the reward or optimizer at the same time.
 
 ## Multi-Node DP and Tail Latency
 
-The first multi-node run should use the validated local design: four TP2 Qwen
+The first multi-node run should use the validated intra-node design: four TP2 Qwen
 replicas per node, vLLM multiprocessing DP inside the node, and one loopback
 endpoint per node. This keeps TP collectives on NVLink, removes most of the
 single-engine queue tail, and avoids sending base64 image payloads across the

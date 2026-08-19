@@ -24,7 +24,7 @@ under `storage/`, `data/`, or `docs/assets/`.
 fish scripts/train/i2v.fish --config configs/train_i2v.yaml
 fish scripts/train/grpo.fish --config configs/train_grpo_maze.yaml
 fish scripts/train/grpo_vlm_eval_multinode.fish --config configs/train_dancegrpo_vbvr_pro_5b_384x384x81_vlm_qwen36_smoke_1node_3step.yaml
-fish scripts/train/grpo_vlm_eval_cluster.fish --yaml=configs/train_dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml
+fish scripts/train/grpo_vlm_eval_scaleout.fish --yaml=configs/train_dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml
 fish scripts/inference/i2v.fish --image path/to/image.jpg --prompt "..."
 fish scripts/precompute/vbvr_384_webdataset_single_node.fish
 fish scripts/precompute/maze_webdataset.fish --num_samples 20000

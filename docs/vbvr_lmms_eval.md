@@ -93,8 +93,8 @@ conversion with normal CUDA access.
 
 ## lmms-eval VBVR Run
 
-`scripts/eval/lmms/lmms_eval.fish` changes directory to
-`/mnt/umm/users/pufanyi/workspace/lmms-eval` and executes:
+`scripts/eval/lmms/lmms_eval.fish` uses the checkout selected by
+`LMMS_EVAL_ROOT` (default: a sibling `lmms-eval` directory) and executes:
 
 ```bash
 .venv/bin/python -m lmms_eval eval \
@@ -111,10 +111,10 @@ The script requires `MODEL_DIR`. Generated videos are written under:
 $OUTPUT_DIR/generated_videos/<basename MODEL_DIR>/
 ```
 
-For local VBVR assets, it sets:
+By default, VBVR assets are read from:
 
 ```text
-VBVR_GT_PATH=/mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/datasets/VBVR-Bench
+VBVR_GT_PATH=storage/datasets/VBVR-Bench
 ```
 
 Default generation settings:
@@ -133,14 +133,15 @@ Default generation settings:
 On a 4 GPU machine, override `DATA_PARALLEL`:
 
 ```bash
-MODEL_DIR=/mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/models/dcp_converted/sft_vbvr_fixed_1e-6_checkpoint-4000 \
+MODEL_DIR=storage/models/dcp_converted/sft_vbvr_fixed_1e-6_checkpoint-4000 \
 DATA_PARALLEL=4 \
-OUTPUT_DIR=/mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/lmms_eval \
+OUTPUT_DIR=storage/lmms_eval \
 fish scripts/eval/lmms/lmms_eval.fish
 ```
 
 Keep `DATA_PARALLEL * NUM_GPUS` less than or equal to the number of visible GPUs.
-The script defaults to 8-way data parallelism because it was written for 8x H100.
+The script defaults to eight-way data parallelism; override it for smaller
+allocations.
 
 ## Output Layout
 
@@ -164,50 +165,12 @@ The full `vbvr` task has 500 samples:
 - 250 Out-of-Domain samples
 - 100 tasks with 5 instances each
 
-## 2026-04-29 Partial Run
-
-The run was started with:
-
-```bash
-MODEL_DIR=/mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/models/dcp_converted/sft_vbvr_fixed_1e-6_checkpoint-4000 \
-DATA_PARALLEL=4 \
-OUTPUT_DIR=/mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/lmms_eval \
-fish scripts/eval/lmms/lmms_eval.fish
-```
-
-It was stopped by request before completion. No final VBVR metrics were
-produced.
-
-Observed behavior:
-
-- FastVideo spawned 4 workers on GPU groups `0`, `1`, `2`, and `3`.
-- The converted model loaded successfully in all workers.
-- lmms-eval linked the local cached `Video-Reason/VBVR-Bench-Data` snapshot and
-  built 500 VBVR requests.
-- Hugging Face network HEAD checks emitted warnings when the network was
-  unreachable, but the local cached dataset still loaded.
-- Actual sample settings in FastVideo logs were 384x384, 81 frames, 50 inference
-  steps, fps 16, seed 42.
-- The first batch of 4 videos took about 121 to 122 seconds per worker, including
-  first-use overhead.
-- 8 partial videos were generated before termination.
-- GPU memory reached about 67 GB per H100 during generation.
-
-The generated partial videos remain under:
-
-```text
-storage/lmms_eval/generated_videos/sft_vbvr_fixed_1e-6_checkpoint-4000/
-```
-
-The lmms-eval and FastVideo processes were terminated with `SIGTERM`, and GPUs
-were confirmed idle afterward.
-
 ## Practical Tips
 
 - Always convert DCP checkpoints to Diffusers before using `scripts/eval/lmms/lmms_eval.fish`;
   FastVideo expects a regular model directory with `model_index.json`.
-- Use `DATA_PARALLEL=4` on the current 4 GPU setup. Leave the default only on an
-  8 GPU setup.
+- Set `DATA_PARALLEL` from the number of visible GPUs instead of assuming the
+  default matches the allocation.
 - Do not assume a final score exists unless `lmms-eval` exits normally. Partial
   generated videos are not enough for aggregate metrics.
 - If a run is interrupted, check for remaining `lmms_eval` or `fastvideo`

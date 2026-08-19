@@ -8,8 +8,8 @@ source (dirname (status filename))/../../../lib/env.fish
 
 set -lx HEIGHT 512
 set -lx WIDTH 512
-set -lx OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028
+set -lx OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028
 
 set -l script_dir (dirname (status filename))
-fish $script_dir/vbvr_pro_5b_dancegrpo_manifest_rl_fujian_initial_unipc_main_v2.fish $argv
+fish $script_dir/vbvr_pro_5b_dancegrpo_manifest_rl_initial_unipc_main_v2.fish $argv
 exit $status

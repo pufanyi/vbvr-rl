@@ -82,8 +82,8 @@ if test "$enforce_eager" = 1
     set -a execution_args --enforce-eager
 end
 
-# The model is fully local. Do not route loopback/API traffic or model startup
-# checks through the workstation proxy inherited from a login shell.
+# The model files are already available. Do not route loopback/API traffic or
+# model startup checks through an inherited proxy.
 exec env \
     -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
     -u MASTER_ADDR -u MASTER_PORT -u WORLD_SIZE -u RANK -u LOCAL_RANK -u LOCAL_WORLD_SIZE \

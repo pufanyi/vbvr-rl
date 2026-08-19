@@ -1,11 +1,12 @@
 trainer: dancegrpo
 model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
 
-# Same 100-task, 500k-sample EvalKit-supported VBVR-Pro raw dataset as the
-# corresponding 5B bs32/lr=1e-6 run. Prompt/video/image tensors are encoded
-# online because no latent_webdataset_dir is configured.
-dataset_json: data/vbvr_pro/vbvr_pro_train_supported_256x256x161.json
-dataset_size: 500000
+# Public 50-task, 50k-sample VBVR-Pro RL snapshot. Prompt/video/image tensors
+# are encoded online because no latent_webdataset_dir is configured.
+dataset_json: storage/datasets/vbvr-pro-rl-indomain-50k/materialized/dataset.json
+dataset_size: 50000
+shuffle_raw_indices: true
+shuffle_raw_indices_seed: 42
 num_frames: 161
 height: 256
 width: 256
@@ -50,7 +51,7 @@ prefetch_factor: 2
 persistent_workers: true
 
 # DanceGRPO does not support expert parallel. HSDP shards both A14B experts
-# over the 8 local GPUs and replicates those shards across the 8 nodes.
+# within each eight-rank group and replicates those shards across groups.
 fsdp: true
 expert_parallel: false
 hsdp: true
@@ -84,9 +85,9 @@ dancegrpo_timestep_selection_ratio: 0.6
 
 # VBVR-Pro interleave EvalKit rule reward. Raw dataset metadata passes the
 # original GT first/final/video paths through to the scorer.
-vbvr_reward_evalkit_dir: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/evalkits/vbvr-evalkit-interleave-main_v2
+vbvr_reward_evalkit_dir: storage/evalkits/vbvr-evalkit-interleave-main_v2
 vbvr_reward_evalkit_source_sha256: f99edd06fd39b5025a0a46871fc7280f7353d47e8de45b627a0b0711318fd258
-vbvr_reward_easyocr_module_path: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/evalkits/easyocr-shared
+vbvr_reward_easyocr_module_path: storage/evalkits/easyocr-shared
 vbvr_reward_device: cpu
 vbvr_reward_fps: 16
 vbvr_reward_decode_batch_size: 8

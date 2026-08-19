@@ -9,7 +9,7 @@ source (dirname (status filename))/../../lib/env.fish
 
 set -lx PRECONVERTED_MODEL 1
 set -q CHECKPOINT[1]
-or set -lx CHECKPOINT /mnt/umm/users/wangruisi/01-project/mllm/DiffSynth-Studio/wan2.2-TI2V-5B_260715_vbvr_pro/step-35500.safetensors
+or set -lx CHECKPOINT storage/models/diffsynth/wan2.2-TI2V-5B_260715_vbvr_pro/step-35500.safetensors
 set -q BASE_MODEL[1]
 or set -lx BASE_MODEL storage/models/Wan2.2-TI2V-5B-Diffusers
 set -q CONVERTED_MODEL[1]

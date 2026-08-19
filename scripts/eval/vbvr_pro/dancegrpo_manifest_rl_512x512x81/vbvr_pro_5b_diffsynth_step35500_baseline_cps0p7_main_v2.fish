@@ -1,6 +1,6 @@
 #!/usr/bin/env fish
 
-# Sampler-matched baseline for the native-512/e140 Fujian checkpoint curve.
+# Sampler-matched baseline for the native-512/e140 production checkpoint curve.
 # The default is Flow-CPS 0.7; callers may select another CPS coefficient or
 # matched Euler/UniPC ODE while retaining the same 30-step/CFG/seed/media and
 # pinned-e140 scoring contract.
@@ -54,10 +54,10 @@ else
     set sampler_label $ODE_SOLVER-ode-30steps-cfg1
 end
 
-set -l default_output_root storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028/diffsynth_step35500-baseline-$sampler_label
+set -l default_output_root storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028/diffsynth_step35500-baseline-$sampler_label
 if test "$GENERATION_MODE" = cps; and test "$CPS_NOISE_LEVEL" = 0.7
     # Keep the already-audited historical path reusable.
-    set default_output_root storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028/diffsynth_step35500-baseline-cps0p7-30steps-cfg1
+    set default_output_root storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028/diffsynth_step35500-baseline-cps0p7-30steps-cfg1
 end
 
 set -q OUTPUT_ROOT[1]

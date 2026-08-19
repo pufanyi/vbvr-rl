@@ -8,7 +8,7 @@
 source (dirname (status filename))/../lib/env.fish
 
 # ── Configuration ────────────────────────────────────────────────────
-set GT_BASE        /mnt/umm/users/pufanyi/workspace/Wan-Trainer/data/vbvr/VBVR-Bench
+set GT_BASE        storage/datasets/VBVR-Bench
 set MODEL_PATH     storage/models/Wan2.2-I2V-A14B-Diffusers
 set OUTPUT_DIR     data/vbvr/VBVR-Bench-wds
 set NUM_GPUS       8

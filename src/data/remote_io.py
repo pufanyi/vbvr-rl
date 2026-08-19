@@ -7,12 +7,13 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import socket
+import subprocess
 import threading
 import time
 from contextlib import suppress
-from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -39,12 +40,11 @@ def resolve_media_path(path: str, root: str | Path | None = None) -> str:
 def localize_media_path(path: str) -> str:
     """Return a local path for media decoders.
 
-    Local paths are returned unchanged. S3 paths are downloaded with AOSS into a
-    cache directory. Configuration is intentionally environment-driven so data
-    credentials stay out of training configs:
+    Local paths are returned unchanged. S3 paths are downloaded into a cache
+    directory through an operator-provided command. Configuration is
+    environment-driven so credentials stay out of training configs:
 
-    - WAN_TRAINER_AOSS_CONF_RULES: JSON list of {"pattern", "conf_path"}
-    - WAN_TRAINER_AOSS_CONF_PATH: fallback conf path
+    - WAN_TRAINER_REMOTE_DOWNLOADER: command invoked with URI and destination
     - WAN_TRAINER_REMOTE_CACHE_DIR: download cache root
     """
     if not is_remote_path(path):
@@ -65,7 +65,7 @@ def _env_seconds(name: str, default: float) -> float:
 
 
 def _remote_cache_path(uri: str) -> Path:
-    cache_dir = Path(os.environ.get("WAN_TRAINER_REMOTE_CACHE_DIR", "storage/aoss_cache"))
+    cache_dir = Path(os.environ.get("WAN_TRAINER_REMOTE_CACHE_DIR", "storage/remote_cache"))
     parsed = urlparse(uri)
     suffix = Path(parsed.path).suffix or ".bin"
     digest = hashlib.sha256(uri.encode("utf-8")).hexdigest()
@@ -181,15 +181,14 @@ def _download_s3_to_cache(uri: str) -> Path:
         tmp_path = _tmp_download_path(local_path)
         if tmp_path.exists():
             tmp_path.unlink()
-        client = _get_aoss_client(uri)
         started = time.monotonic()
-        client.download_file(uri, str(tmp_path))
+        _run_remote_downloader(uri, tmp_path)
         elapsed = time.monotonic() - started
         warn_seconds = _env_seconds("WAN_TRAINER_REMOTE_DOWNLOAD_WARN_SECONDS", 60.0)
         if warn_seconds > 0 and elapsed >= warn_seconds:
             logger.warning("Downloaded remote media in %.1fs: %s -> %s", elapsed, uri, local_path)
         if not tmp_path.exists() or tmp_path.stat().st_size == 0:
-            raise RuntimeError(f"AOSS download produced an empty file for {uri}")
+            raise RuntimeError(f"Remote downloader produced an empty file for {uri}")
         tmp_path.replace(local_path)
         return local_path
     finally:
@@ -197,29 +196,22 @@ def _download_s3_to_cache(uri: str) -> Path:
             shutil.rmtree(lock_dir)
 
 
-def _get_aoss_client(uri: str):
-    conf_path = _select_aoss_conf(uri)
-    if conf_path is None:
+def _run_remote_downloader(uri: str, destination: Path) -> None:
+    command_raw = os.environ.get("WAN_TRAINER_REMOTE_DOWNLOADER", "").strip()
+    if not command_raw:
         raise RuntimeError(
-            "S3 media requires WAN_TRAINER_AOSS_CONF_PATH or WAN_TRAINER_AOSS_CONF_RULES to select an AOSS config"
+            "S3 media requires WAN_TRAINER_REMOTE_DOWNLOADER; the command is invoked as "
+            "'<command> <s3-uri> <destination>'"
         )
-    return _get_aoss_client_for_conf(conf_path)
-
-
-@lru_cache(maxsize=16)
-def _get_aoss_client_for_conf(conf_path: str):
-    from aoss_client.client import Client
-
-    return Client(conf_path=conf_path)
-
-
-def _select_aoss_conf(uri: str) -> str | None:
-    rules_raw = os.environ.get("WAN_TRAINER_AOSS_CONF_RULES")
-    if rules_raw:
-        rules = json.loads(rules_raw)
-        for rule in rules:
-            pattern = rule.get("pattern")
-            conf_path = rule.get("conf_path")
-            if pattern and conf_path and re.search(pattern, uri):
-                return str(conf_path)
-    return os.environ.get("WAN_TRAINER_AOSS_CONF_PATH")
+    try:
+        command = shlex.split(command_raw)
+    except ValueError as exc:
+        raise RuntimeError("WAN_TRAINER_REMOTE_DOWNLOADER is not valid shell-style argv") from exc
+    if not command:
+        raise RuntimeError("WAN_TRAINER_REMOTE_DOWNLOADER must contain an executable")
+    try:
+        subprocess.run([*command, uri, str(destination)], check=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError("Remote downloader executable was not found") from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"Remote downloader exited with status {exc.returncode} for {uri}") from exc

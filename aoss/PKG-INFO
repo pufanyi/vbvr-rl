@@ -1,6 +1,0 @@
-Metadata-Version: 2.1
-Name: aoss-python-sdk
-Version: 2.2.6
-Summary: Aoss S3 storage API for Pytorch, Parrots
-Home-page: https://gitlab.bj.sensetime.com/elementary/quark/quarkoss-python-sdk
-Requires-Python: >=3.6

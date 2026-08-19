@@ -4,8 +4,10 @@ model_path: storage/models/Wan2.2-TI2V-5B-Diffusers
 # VBVR-Pro train split, filtered to tasks supported by the interleave EvalKit.
 # This is intentionally raw-data based: no latent_webdataset_dir is set, so
 # DanceGRPO encodes the prompt/video/image batch online before rollout.
-dataset_json: data/vbvr_pro/vbvr_pro_train_supported_256x256x161.json
-dataset_size: 500000
+dataset_json: storage/datasets/vbvr-pro-rl-indomain-50k/materialized/dataset.json
+dataset_size: 50000
+shuffle_raw_indices: true
+shuffle_raw_indices_seed: 42
 num_frames: 161
 height: 256
 width: 256

@@ -1,7 +1,7 @@
 #!/usr/bin/env fish
 
 # Matched native-512 VBVR-Pro sampler matrix:
-#   baseline + every complete Fujian checkpoint
+#   baseline + every complete production checkpoint
 #   Flow-CPS {0.1, 0.3, 0.7, 0.9}, Euler ODE, UniPC ODE
 # All runs use 30 steps, CFG 1, seed 0, 512x512x81 at exact 16 FPS and the
 # pinned e140 main_v2 scorer. Four two-GPU jobs fill one eight-H800 wave.
@@ -14,21 +14,21 @@ function _fail
 end
 
 set -l script_dir (dirname (status filename))
-set -g _matrix_checkpoint_launcher $script_dir/../dancegrpo_manifest_rl_384x384x81_fujian/vbvr_pro_5b_dancegrpo_manifest_rl_fujian_checkpoint_cps0p7_main_v2.fish
+set -g _matrix_checkpoint_launcher $script_dir/../dancegrpo_manifest_rl_384x384x81/vbvr_pro_5b_dancegrpo_manifest_rl_checkpoint_cps0p7_main_v2.fish
 set -g _matrix_baseline_launcher $script_dir/vbvr_pro_5b_diffsynth_step35500_baseline_cps0p7_main_v2.fish
 test -f $_matrix_checkpoint_launcher; or _fail "checkpoint launcher missing: $_matrix_checkpoint_launcher"
 test -f $_matrix_baseline_launcher; or _fail "baseline launcher missing: $_matrix_baseline_launcher"
 
 set -q CHECKPOINT_ROOT[1]
-or set -gx CHECKPOINT_ROOT storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian_new_evalkit_e140038f
+or set -gx CHECKPOINT_ROOT storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_evalkit_e140038f
 set -q CONVERTED_BASE[1]
 or set -g CONVERTED_BASE storage/models/dcp_converted_5b
 set -q CONVERTED_PREFIX[1]
-or set -g CONVERTED_PREFIX dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian_new_evalkit_e140038f
+or set -g CONVERTED_PREFIX dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_evalkit_e140038f
 set -q BASELINE_MODEL[1]
 or set -g BASELINE_MODEL storage/models/diffsynth_converted_5b/wan2.2-TI2V-5B_260715_vbvr_pro_step-35500
 set -q OUTPUT_BASE[1]
-or set -gx OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_fujian_new_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028
+or set -gx OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_512x512x81_manifest_rl_e140_lr5e6_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028
 set -q EVAL_LOG_DIR[1]
 or set -g EVAL_LOG_DIR storage/eval_logs/vbvr_pro_sampler_matrix_30steps_native512_e140
 set -q GT_BASE[1]

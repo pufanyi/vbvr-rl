@@ -28,9 +28,9 @@ set NUM_SAMPLES 5         # leave empty to use all samples
 set NUM_RENDER_STEPS     # leave empty to render all steps
 set SCHEDULER           # leave empty for default; options: euler, euler_ancestral, ddim, dpm_solver, unipc, flow_match_euler
 set EVAL_JSONS \
-    /mnt/umm/users/pufanyi/workspace/maze/test_data/test.json \
-    /mnt/umm/users/pufanyi/workspace/maze/test_data_easy/test.json \
-    /mnt/umm/users/pufanyi/workspace/maze/test_data_medium/test.json
+    storage/datasets/maze/test_data/test.json \
+    storage/datasets/maze/test_data_easy/test.json \
+    storage/datasets/maze/test_data_medium/test.json
 # ─────────────────────────────────────────────────────────────────────
 
 # Derive output dir: single checkpoint gets a specific name, multiple uses a generic base

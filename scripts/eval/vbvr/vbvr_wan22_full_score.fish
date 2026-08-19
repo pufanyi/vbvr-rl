@@ -18,7 +18,7 @@ source (dirname (status filename))/../../lib/env.fish
 set MODEL_OUTPUTS \
     storage/eval_out/vbvr_wan22_full/videos
 
-set GT_BASE      /mnt/umm/users/pufanyi/workspace/Wan-Trainer/data/vbvr/VBVR-Bench
+set GT_BASE      storage/datasets/VBVR-Bench
 set EVALKIT_DIR  third_party/VBVR-EvalKit
 set DEVICE       cuda
 set NUM_WORKERS  32

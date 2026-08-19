@@ -75,19 +75,15 @@ end
 source (dirname (status filename))/../lib/env.fish
 
 set -q MASTER_PORT; or set -gx MASTER_PORT 29500
-set -q WAN_TRAINER_AOSS_CONF_RULES; or set -gx WAN_TRAINER_AOSS_CONF_RULES '[{"pattern":"^s3://multimodal","conf_path":"/mnt/aigc/users/pufanyi/aoss.conf"}]'
-set -q WAN_TRAINER_AOSS_CONF_PATH; or set -gx WAN_TRAINER_AOSS_CONF_PATH /mnt/aigc/caizhongang/aoss.conf
-set -q WAN_TRAINER_REMOTE_CACHE_DIR; or set -gx WAN_TRAINER_REMOTE_CACHE_DIR storage/aoss_cache
+# S3-backed datasets require WAN_TRAINER_REMOTE_DOWNLOADER to be supplied by
+# the runtime environment. It is invoked with the URI and destination path.
+set -q WAN_TRAINER_REMOTE_CACHE_DIR; or set -gx WAN_TRAINER_REMOTE_CACHE_DIR storage/remote_cache
 set -q WAN_TRAINER_REMOTE_LOCK_TIMEOUT_SECONDS; or set -gx WAN_TRAINER_REMOTE_LOCK_TIMEOUT_SECONDS 120
 set -q WAN_TRAINER_REMOTE_LOCK_STALE_SECONDS; or set -gx WAN_TRAINER_REMOTE_LOCK_STALE_SECONDS 900
 set -q WAN_TRAINER_REMOTE_DOWNLOAD_WARN_SECONDS; or set -gx WAN_TRAINER_REMOTE_DOWNLOAD_WARN_SECONDS 60
 set -q WAN_TRAINER_DECORD_NUM_THREADS; or set -gx WAN_TRAINER_DECORD_NUM_THREADS 1
 set -q PYTORCH_CUDA_ALLOC_CONF; or set -gx PYTORCH_CUDA_ALLOC_CONF expandable_segments:True
 set -q LOGURU_LEVEL; or set -gx LOGURU_LEVEL INFO
-
-if test -d $WAN_TRAINER_ROOT/aoss
-    set -gx PYTHONPATH $WAN_TRAINER_ROOT $WAN_TRAINER_ROOT/aoss $PYTHONPATH
-end
 
 set -q NCCL_DEBUG; or set -gx NCCL_DEBUG WARN
 
@@ -102,8 +98,13 @@ end
 
 echo "Launching DiffSynth mix I2V raw training: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$MASTER_PORT"
 echo "Training args: "(string join -- " " $train_args)
-echo "AOSS/cache:"
-for key in WAN_TRAINER_AOSS_CONF_RULES WAN_TRAINER_AOSS_CONF_PATH WAN_TRAINER_REMOTE_CACHE_DIR WAN_TRAINER_REMOTE_LOCK_TIMEOUT_SECONDS WAN_TRAINER_REMOTE_LOCK_STALE_SECONDS WAN_TRAINER_REMOTE_DOWNLOAD_WARN_SECONDS WAN_TRAINER_DECORD_NUM_THREADS PYTORCH_CUDA_ALLOC_CONF
+echo "Remote media/cache:"
+if set -q WAN_TRAINER_REMOTE_DOWNLOADER[1]
+    echo "  WAN_TRAINER_REMOTE_DOWNLOADER=<configured>"
+else
+    echo "  WAN_TRAINER_REMOTE_DOWNLOADER=<unset>"
+end
+for key in WAN_TRAINER_REMOTE_CACHE_DIR WAN_TRAINER_REMOTE_LOCK_TIMEOUT_SECONDS WAN_TRAINER_REMOTE_LOCK_STALE_SECONDS WAN_TRAINER_REMOTE_DOWNLOAD_WARN_SECONDS WAN_TRAINER_DECORD_NUM_THREADS PYTORCH_CUDA_ALLOC_CONF
     __log_env_var $key
 end
 echo "NCCL/IB diagnostics before torchrun:"

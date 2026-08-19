@@ -1,6 +1,6 @@
 #!/usr/bin/env fish
 
-# Evaluate the DiffSynth step-35500 initialization of the Fujian manifest-RL
+# Evaluate the DiffSynth step-35500 initialization of the production manifest-RL
 # run on the exact public 500-sample snapshot. This baseline intentionally uses
 # the model's standard 50-step UniPC ODE recipe rather than the RL checkpoints'
 # 30-step Flow-CPS rollout recipe. Native 384 and 512 square inference are
@@ -76,7 +76,7 @@ set -l native_resolution "$HEIGHT"x"$WIDTH"
 set -l native_shape $native_resolution"x81"
 
 set -q OUTPUT_BASE[1]
-or set -l OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_$native_shape"_manifest_rl_fujian_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028"
+or set -l OUTPUT_BASE storage/eval_out/vbvr_pro_main_v2_$native_shape"_manifest_rl_eval500_181e2010_manifest_afab352e_evalkit_4cc7d028"
 set -q OUTPUT_ROOT[1]
 or set -lx OUTPUT_ROOT $OUTPUT_BASE/diffsynth_step35500-initial-unipc-50steps-cfg5
 set -q GENERATED_DIR[1]

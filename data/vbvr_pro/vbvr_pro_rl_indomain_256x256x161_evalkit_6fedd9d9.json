@@ -1,15 +1,15 @@
 [
   {
     "format": "vbvr_pro",
-    "split_manifest": "/mnt/aigc/xujunxiang/Code/VBVR-Pro/scripts/split_manifest_rl.json",
+    "split_manifest": "storage/datasets/vbvr-pro-source/split_manifest_rl.json",
     "data_roots": [
-      "/mnt/umm/users/xujunxiang/VBVR-Pro_10k"
+      "storage/datasets/vbvr-pro-source/raw"
     ],
     "split": "rl",
     "allowed_task_splits": [
       "In-Domain_50"
     ],
-    "allowed_task_names_from_evalkit": "/mnt/umm/users/pufanyi/workspace/Wan-Trainer/storage/evalkits/vbvr-evalkit-interleave-main_v2-6fedd9d9",
+    "allowed_task_names_from_evalkit": "storage/evalkits/vbvr-evalkit-interleave-main_v2-6fedd9d9",
     "check_files": false,
     "num_frames": 161,
     "height": 256,

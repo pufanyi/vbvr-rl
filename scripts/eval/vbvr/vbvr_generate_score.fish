@@ -25,7 +25,7 @@ set CHECKPOINTS \
     # storage/checkpoints/cos_maze/checkpoint-4000
 
 set NUM_GPUS 8
-set GT_BASE /mnt/umm/users/pufanyi/workspace/Wan-Trainer/data/vbvr/VBVR-Bench
+set GT_BASE storage/datasets/VBVR-Bench
 set EVALKIT_DIR third_party/VBVR-EvalKit
 set EVAL_JSON storage/eval_out/vbvr/vbvr_eval.json
 set SPLIT Open_60                          # generation directory label; rule scoring is split-agnostic after restructure

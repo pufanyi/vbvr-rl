@@ -1,6 +1,6 @@
 trainer: cos
 model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
-dataset_json: /mnt/umm/users/pufanyi/workspace/Wan-Trainer/data/train_maze_bfs_3steps.json
+dataset_json: data/train_maze_bfs_3steps.json
 output_dir: storage/checkpoints/cos_maze_cos_path_all_bfs_3steps
 
 num_frames: 81

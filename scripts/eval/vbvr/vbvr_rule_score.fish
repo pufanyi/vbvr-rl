@@ -41,7 +41,7 @@ if not set -q MODEL_OUTPUTS[1]
 end
 
 set -q NUM_GPUS[1]; or set NUM_GPUS 8
-set -q GT_BASE[1]; or set GT_BASE /mnt/umm/users/pufanyi/workspace/Wan-Trainer/data/vbvr/VBVR-Bench
+set -q GT_BASE[1]; or set GT_BASE storage/datasets/VBVR-Bench
 set -q EVALKIT_DIR[1]; or set EVALKIT_DIR third_party/VBVR-EvalKit
 set -q EVAL_JSON[1]; or set EVAL_JSON storage/eval_out/vbvr/vbvr_eval.json
 set -q SPLIT[1]; or set SPLIT Open_60

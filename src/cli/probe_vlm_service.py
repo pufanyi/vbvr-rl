@@ -339,7 +339,7 @@ def main(argv: list[str] | None = None) -> int:
         print("[error] benchmark requests/warmup must be >= 0 and concurrency must be > 0", file=sys.stderr)
         return 2
 
-    # Bypass workstation/login proxies for loopback and cluster-internal APIs.
+    # Bypass inherited proxies for loopback and private service endpoints.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline = time.monotonic() + args.wait_seconds
     last_error: Exception | None = None

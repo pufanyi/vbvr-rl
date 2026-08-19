@@ -40,7 +40,7 @@ for step in $requested_steps
 end
 test (count $steps) -gt 0; or _fail "NEW_CHECKPOINT_STEPS must not be empty"
 
-set -l checkpoint_root storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_fujian_new_evalkit_e140038f
+set -l checkpoint_root storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_rule_cps0p7_from_diffsynth_step35500_bs32_lr_5e-6_manifest_rl_evalkit_e140038f
 for step in $steps
     test -f $checkpoint_root/checkpoint-$step/high/.metadata
     or _fail "checkpoint-$step is missing or incomplete under $checkpoint_root"

@@ -16,7 +16,7 @@ The lockfile selects the official PyTorch 2.11 CUDA 12.6 wheels. The Python
 media stack uses `decord2`, headless OpenCV, and a bundled FFmpeg/ffprobe
 fallback, so a system FFmpeg installation is optional.
 
-Expected local layout:
+Expected repository layout:
 
 ```text
 storage/models/Wan2.2-I2V-A14B-Diffusers/
@@ -27,93 +27,19 @@ storage/eval_out/
 
 Most launchers source `scripts/lib/env.fish`, activate `.venv`, set `PYTHONPATH`, and run from the repository root.
 
-## Cluster Profiles and Operational Notes
+## Runtime and Data Setup
 
-This repository currently runs on two cluster profiles. The labels below are
-the aliases used by existing logs and configs; select a profile from its
-observed hardware, mounts, and data source rather than assuming paths are
-portable between clusters.
+The checked-in configs use repository-relative paths. Keep models, datasets,
+checkpoints, evaluator checkouts, and generated outputs beneath the ignored
+`storage/` tree; use `/tmp` only for disposable per-process artifacts. Supply
+object-store credentials and proxy settings through the runtime environment,
+never through committed files.
 
-| Property | ACP / H100 private-mount profile | Fujian / H800 materialized-snapshot profile |
-| --- | --- | --- |
-| Typical node | 8 x 80-GiB H100 | 8 x 80-GiB H800 |
-| Repository path seen in jobs | `/mnt/umm/users/pufanyi/workspace/Wan-Trainer` | `/mnt/umm/users/pufanyi/projects/Wan-Trainer` |
-| VBVR-Pro data | Read-only private manifest and raw trees under `/mnt/aigc/...` and `/mnt/umm/users/xujunxiang/...` | Public `pufanyi/vbvr-pro-rl-indomain-50k` snapshot restored under `storage/datasets/vbvr-pro-rl-indomain-50k/materialized` |
-| Production config | `configs/train_dancegrpo_vbvr_pro_5b_384x384x81_rule_cps_from_nsft_bs_32_lr_1e-6_manifest_rl.yaml` | `configs/train_dancegrpo_vbvr_pro_5b_512x512x81_rule_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_fujian.yaml` |
-| Multi-node topology | Scheduler-driven HSDP; node count varies by job | Current production job is 16 nodes x 8 GPUs, world size 128 |
-| Local validation | Eight-H100 production-shape runs recorded in `docs/training.md` | `configs/train_dancegrpo_vbvr_pro_5b_384x384x81_rule_cps_from_nsft_bs_4_lr_1e-6_manifest_rl_local_1node_10step.yaml` |
-| Shared/local storage | `/mnt/umm` is shared; use node-local `/tmp` for disposable work | `/mnt/umm` is QuarkFS; `/tmp` is node-local container storage |
+### Public VBVR-Pro Data
 
-### Invariants Across Both Clusters
-
-- Run the same Git commit on every node. Use `uv sync --frozen` followed by
-  `uv sync --frozen --check`; do not let one node silently resolve a different
-  package set.
-- Keep the locked Python 3.12, PyTorch 2.11 CUDA 12.6, OpenCV, EasyOCR, NumPy,
-  SciPy, and scikit-image versions identical even when the host driver reports
-  a newer maximum CUDA version.
-- Prefer repository-relative model, EvalKit, and EasyOCR paths. Dataset
-  descriptors are the intentional cluster-specific exception.
-- Run the VBVR runtime preflight on every node before loading the model. The
-  imported `cv2` version, `HoughLinesP` behavior, scorer-source hash, and
-  runtime fingerprint must match.
-- Never put credentials or the workstation proxy URL in a config, log, or
-  commit. AOSS and proxy credentials remain environment/user-config driven.
-
-The multi-node launcher expects scheduler variables on every node:
-
-```bash
-# WORLD_SIZE is the number of nodes, not the number of GPUs.
-# RANK is the zero-based node rank; all nodes share MASTER_ADDR/MASTER_PORT.
-MASTER_ADDR=<rank-0-host> MASTER_PORT=29500 \
-WORLD_SIZE=<nodes> RANK=<node-rank> \
-fish scripts/train/grpo_multinode.fish --nproc 8 -- \
-  --config <cluster-config.yaml>
-```
-
-Before a new image or a newly scaled topology runs training, submit an
-all-node preflight with the same scheduler variables:
-
-```bash
-WAN_TRAINER_TRITON_PREFLIGHT_ONLY=1 \
-fish scripts/train/grpo_multinode.fish --nproc 8 -- \
-  --config <cluster-config.yaml>
-```
-
-Remove `WAN_TRAINER_TRITON_PREFLIGHT_ONLY` only after every node passes.
-Runtime-only images often omit `Python.h`; provision the ignored shared
-toolchain once with
-`fish scripts/dev/bootstrap_triton_python_headers.fish`, or preferably install
-the matching `python3.12-dev` package in the image. Triton cache defaults to
-node-local `/tmp/wan-trainer-triton-cache`. Hub attention binaries are
-different: the GRPO launchers keep them across scheduler jobs under
-`~/.cache/wan-trainer/kernels`. The Fujian FA3 path is pinned to revision
-`43f0bd269777115d94ff826e0d113ce9c1c9087b` and loads that snapshot through
-the offline locked-kernel API, so compute nodes do not need Hub or proxy
-access after the one-time prefetch. Run the download once on a networked login
-node before submitting training:
-
-```bash
-.venv/bin/python -m src.cli.prefetch_attention_kernel --backend _flash_3_hub
-```
-
-The launchers intentionally replace any ambient `KERNELS_CACHE`, because
-scheduler images may inject an ephemeral `/tmp` value. Set
-`WAN_TRAINER_KERNELS_CACHE` only when an explicit persistent override is
-required; the effective absolute path is printed before runtime preflight.
-Remember that `~` follows the runtime user: root-launched jobs default to
-`/root/.cache/wan-trainer/kernels`. Either bake the prefetched cache into that
-path before saving the image, or point `WAN_TRAINER_KERNELS_CACHE` at a shared
-absolute cache such as `/mnt/umm/users/pufanyi/.cache/wan-trainer/kernels`.
-
-### Cluster-Specific Data Rules
-
-On the ACP/H100 profile, source trees owned by other users are read-only.
-Write checkpoints, conversions, caches, and scorer output only beneath this
-repository's `storage/` tree or node-local `/tmp`. The production descriptor
-contains absolute private paths, so it is not expected to run on Fujian.
-
-On the Fujian/H800 profile, restore the public raw snapshot before training:
+The runnable manifest-RL configs use the public
+`pufanyi/vbvr-pro-rl-indomain-50k` snapshot. After downloading it beneath
+`storage/datasets/vbvr-pro-rl-indomain-50k`, materialize the raw training tree:
 
 ```bash
 .venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
@@ -122,12 +48,12 @@ On the Fujian/H800 profile, restore the public raw snapshot before training:
   --expected-samples 50000 --workers 8
 ```
 
-The 59 downloaded shards are publication assets, not latent WebDataset input.
-Restoring the training/reward-critical fields creates a standard 50,000-sample
-small-file tree and duplicates roughly 56.2 GiB. Its manifest is task-grouped,
-so Fujian configs use `shuffle_raw_indices: true` with a fixed seed.
+The downloaded shards are publication assets, not latent WebDataset input.
+Restoring the training/reward-critical fields creates the standard 50,000-sample
+small-file tree consumed by the configs. Its manifest is task-grouped, so the
+configs apply a deterministic raw-index shuffle.
 
-Do not use a cluster-specific absolute repository path for scorer inputs.
+Do not use host-specific absolute paths for scorer inputs.
 Spawned VBVR workers change their working directory to the pinned EvalKit
 checkout. `VBVRRuleReward` therefore resolves GT video, first/final frame,
 metadata, and source-directory paths before crossing the process boundary.
@@ -135,20 +61,73 @@ Without that normalization, repo-relative data works in the trainer but becomes
 missing in the worker; EvalKit can then return a valid-looking reward of
 exactly zero without raising an exception.
 
+### Optional Remote Media
+
+The public configs use local files and require no object-store client. Custom
+raw-data descriptors may still reference `s3://` media. To enable those paths,
+set `WAN_TRAINER_REMOTE_DOWNLOADER` to an external command prefix; the loader
+appends the source URI and local destination as two arguments and invokes the
+command without a shell. For example:
+
+```bash
+export WAN_TRAINER_REMOTE_DOWNLOADER='/path/to/downloader --profile training'
+export WAN_TRAINER_REMOTE_CACHE_DIR=storage/remote_cache
+```
+
+Install and authenticate that downloader outside the repository. Do not put
+credentials in the command itself because process listings may expose its
+arguments.
+
+### Distributed Runtime
+
+Run the same Git commit and locked environment on every machine. The launcher
+expects `MASTER_ADDR`, `MASTER_PORT`, `WORLD_SIZE` (machine count), and `RANK`
+(zero-based machine rank):
+
+```bash
+MASTER_ADDR=<rank-0-host> MASTER_PORT=29500 \
+WORLD_SIZE=<machines> RANK=<machine-rank> \
+fish scripts/train/grpo_multinode.fish --nproc 8 -- \
+  --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_rule_cps_from_nsft_bs_32_lr_5e-6_manifest_rl.yaml
+```
+
+Before a new image or topology runs training, execute the all-machine compiler
+and runtime preflight with the same scheduler variables:
+
+```bash
+WAN_TRAINER_TRITON_PREFLIGHT_ONLY=1 \
+fish scripts/train/grpo_multinode.fish --nproc 8 -- \
+  --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_rule_cps_from_nsft_bs_32_lr_5e-6_manifest_rl.yaml
+```
+
+Use `uv sync --frozen --check` to verify dependency parity. Run
+`.venv/bin/python -m src.cli.validate_grpo_runtime --grpo_reward_fn vbvr_rule`
+on every machine before loading model weights. Runtime-only images also need
+matching Python development headers for fresh Triton builds; install the
+matching `python3.12-dev` package or run
+`fish scripts/dev/bootstrap_triton_python_headers.fish` once.
+
+The Triton cache defaults to node-local `/tmp/wan-trainer-triton-cache`.
+Downloaded attention kernels persist under `~/.cache/wan-trainer/kernels` or
+the path supplied by `WAN_TRAINER_KERNELS_CACHE`. Prefetch the pinned FA3
+artifact before submitting an offline job:
+
+```bash
+.venv/bin/python -m src.cli.prefetch_attention_kernel --backend _flash_3_hub
+```
+
 ### Topology and Memory Rules
 
-- Production multi-node jobs use `hsdp: true`; bounded one-node validation uses
+- Multi-node full fine-tuning uses `hsdp: true`; bounded one-node validation uses
   `hsdp: false` and plain FSDP.
 - Keep `grpo_fsdp_sync_each_backward: true` for full fine-tuning. Suppressing
   FSDP gradient synchronization retains full unsharded gradients and is an OOM
   trap, especially for A14B's two experts.
 - Keep `grpo_offload_inference_models: true` when memory headroom matters; T5
   and VAE are restored for raw encoding/reward and offloaded before replay.
-- `batch_size` is the global prompt count in shared-prompt GRPO. At world size
-  64, `batch_size=32` and `G=32` produce 16 rollouts per rank. The equivalent
-  eight-GPU validation uses `batch_size=4`, still 16 rollouts per rank. Running
-  batch 32 on one node creates 128 rollouts per rank and is not a
-  production-equivalent test.
+- `batch_size` is the global prompt count in shared-prompt GRPO. The checked-in
+  `batch_size=32`, `G=32`, and prompt-wave settings target world size 128.
+  Adjust all three together when scaling to a different world size.
 - `grpo_shared_prompt_microbatch_size` must divide both the global prompt batch
   and the data-parallel world. `G` must divide the ranks assigned to each
   prompt.
@@ -156,15 +135,10 @@ exactly zero without raising an exception.
   enforce a smaller `grpo_train_sample_batch_size`. Size memory from
   `grpo_sample_batch_size` until replay rechunking is implemented.
 
-For VBVR reward work, keep generated/prepared temporary videos and Triton
-artifacts under `/tmp`, not QuarkFS. `vbvr_reward_cpu_workers` is per
-reward-producing rank, so multiply it by eight to estimate the node-wide
-process/thread budget. Most 5B manifest configs use two workers x eight native
-threads per rank. The Fujian 512x512x81 world128 config instead uses four x
-four, doubling concurrent samples while preserving the same 128-thread nominal
-node budget; validate `reward_drain` before propagating that tuning. Point
-`WANDB_DIR` at a writable run-local directory when the shared repository's
-`wandb/` ownership is unsuitable.
+For VBVR reward work, keep generated/prepared temporary videos under `/tmp`.
+`vbvr_reward_cpu_workers` is per reward-producing rank, so size the aggregate
+process/thread budget for the host and validate `reward_drain` before raising
+worker or native-thread counts. Point `WANDB_DIR` at a writable run directory.
 
 ### Reward-Zero Triage and Validated Boundaries
 
@@ -183,27 +157,12 @@ An all-zero hard-rule reward is not normal. Before blaming the model:
    from the last clean checkpoint; repairing packages on disk does not replace
    modules already imported by scorer workers.
 
-The path-boundary bug was isolated with a G-21 rollout: training initially
-reported zero, while the preserved online `generated_raw.mp4` independently
-scored `0.99115`. After the fix, the real eight-H800 production-scaled config
-completed 10 full-FT optimizer steps at 384x384x81, `G=32`, `T=30`, and
-Flow-CPS with nonzero reward at every step (`0.4437` to `0.6467`, mean
-`0.5589`), gradient norms `0.0001` to `0.0002`, and a 25.7/28.4-GiB
-allocated/reserved peak.
-
-The same fix was also active in the earlier Fujian world-64 384x384 job. As of 2026-07-30, its
-first 19 optimizer steps all had nonzero reward (`0.5102` to `0.6924`) with a
-53.3/58.2-GiB allocated/reserved peak. This is strong early-run evidence, not a
-claim about the current world-128 512x512 job. A new multi-node topology should
-still be monitored through its first optimizer step before committing to a long
-run.
-
-Resume semantics also matter across clusters. `auto_resume: true` combined with
+Resume semantics also matter across experiments. `auto_resume: true` combined with
 `reset_dataloader: true` loads the latest checkpoint as weight-only
 initialization and restarts optimizer/step/epoch/dataloader state. It therefore
 repeats the epoch-0 sample permutation. Use isolated output/W&B/tmp namespaces
-for different clusters, resolutions, scorer revisions, learning rates, and
-delayed-replay modes; never allow one profile to auto-resume the other's run.
+for different resolutions, scorer revisions, learning rates, and delayed-replay
+modes; never auto-resume an incompatible run.
 
 ## Main Workflows
 
@@ -227,13 +186,13 @@ fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8
 fish scripts/train/grpo_vlm_eval_multinode.fish --nproc 8 --config \
   configs/train_dancegrpo_vbvr_pro_5b_384x384x81_vlm_qwen36_smoke_1node_3step.yaml
 
-# WORLD_SIZE=4/8/16: four local TP2 judge replicas per node.
-fish scripts/train/grpo_vlm_eval_cluster.fish \
+# WORLD_SIZE=4/8/16: four TP2 judge replicas per machine.
+fish scripts/train/grpo_vlm_eval_scaleout.fish \
   --yaml=configs/train_dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml \
   --max_steps 1 --save_steps 0 --no-save_final_checkpoint --no-auto_resume
 
 # Lower-pressure native-384 variant.
-fish scripts/train/grpo_vlm_eval_cluster.fish \
+fish scripts/train/grpo_vlm_eval_scaleout.fish \
   --yaml=configs/train_dancegrpo_vbvr_pro_5b_384x384x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml \
   --max_steps 1 --save_steps 0 --no-save_final_checkpoint --no-auto_resume
 

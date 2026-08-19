@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-LMMS_MAZE_ROOT="${LMMS_MAZE_ROOT:-/mnt/umm/users/pufanyi/workspace/lmms-eval-maze}"
-LMMS_PYTHON="${LMMS_PYTHON:-/mnt/umm/users/pufanyi/workspace/lmms-eval/.venv/bin/python}"
+LMMS_MAZE_ROOT="${LMMS_MAZE_ROOT:-$ROOT/../lmms-eval-maze}"
+LMMS_PYTHON="${LMMS_PYTHON:-$ROOT/../lmms-eval/.venv/bin/python}"
 WAN_PYTHON="${WAN_PYTHON:-$ROOT/.venv/bin/python}"
 
 DATA_PARALLEL="${DATA_PARALLEL:-8}"
