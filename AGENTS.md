@@ -84,16 +84,17 @@
 
 ## Public VBVR-Pro RL Snapshot
 
-- `pufanyi/vbvr-pro-rl-indomain-50k` revision
-  `b446d4bfd3db2c9a808f888e54164fe804361059` contains the exact
-  50-task/50,000-sample manifest-RL split in 59 checksum-covered raw
-  WebDataset shards.
-- Its `.gt.mp4`, `.first.png`, `.final.png`, `.metadata.json.bin`, prompt, and
-  extra fields are publication assets, not the latent tensors accepted by
-  `latent_webdataset_dir`. Never configure the raw snapshot as a latent source.
-- Restore it with `scripts/data/vbvr_pro_unpack_hf.py`. The resumable command
-  verifies fields against `samples.jsonl` and writes
-  `materialized/dataset.json`, which raw manifest configs consume.
+- The official public source is `Video-Reason/VBVR-Pro-RL`. Release commands
+  pin revision `ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1`, which contains 50
+  image and 50 video task archives for 50,000 RL samples.
+- Each `VBVR-Pro-RL-Video` archive already contains `first_frame.png`,
+  `metadata.json`, `video/final_frame.png`, `video/ground_truth.mp4`, and
+  `video/prompt.txt`; downloading the image archives is unnecessary for I2V
+  training. The archives are raw assets, not latent WebDataset tensors.
+- Restore the video archives with `scripts/data/vbvr_pro_unpack_hf.py`. The
+  resumable command validates safe member layout and complete five-field
+  samples, then writes `materialized/dataset.json`, a split manifest, and
+  source provenance. `--verify-existing` byte-compares restored files.
 - The raw materialized manifest is task-grouped. Shared-prompt RL applies a
   deterministic sampler permutation; inspect both sampler shuffle and
   `shuffle_raw_indices` before assuming input order.

@@ -5,7 +5,7 @@ model_path: storage/models/dcp_converted_5b/sft_vbvr_5b_256x256x161_full_lr_1e-5
 
 # Dedicated 50-task In-Domain RL split: 50,000 samples, manifest SHA-256
 # 8eb86bf31b24dc5a21deb03a8294c15d299731db0f6f1ea0ddfcd3fd36619f32.
-dataset_json: storage/datasets/vbvr-pro-rl-indomain-50k/materialized/dataset.json
+dataset_json: storage/datasets/VBVR-Pro-RL/materialized/dataset.json
 dataset_size: 50000
 shuffle_raw_indices: true
 shuffle_raw_indices_seed: 42

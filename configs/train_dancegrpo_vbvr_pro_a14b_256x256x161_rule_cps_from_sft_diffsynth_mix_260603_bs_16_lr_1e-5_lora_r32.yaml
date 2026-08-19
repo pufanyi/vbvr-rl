@@ -3,7 +3,7 @@ model_path: storage/models/Wan2.2-I2V-A14B-Diffusers
 
 # Public 50-task, 50k-sample VBVR-Pro RL snapshot. Prompt/video/image tensors
 # are encoded online because no latent_webdataset_dir is configured.
-dataset_json: storage/datasets/vbvr-pro-rl-indomain-50k/materialized/dataset.json
+dataset_json: storage/datasets/VBVR-Pro-RL/materialized/dataset.json
 dataset_size: 50000
 shuffle_raw_indices: true
 shuffle_raw_indices_seed: 42

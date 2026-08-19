@@ -6,10 +6,11 @@ model_path: storage/models/diffsynth_converted_5b/wan2.2-TI2V-5B_260715_vbvr_pro
 
 # Materialize the already-downloaded public raw snapshot once with:
 # .venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
-#   --dataset-root storage/datasets/vbvr-pro-rl-indomain-50k \
-#   --output-dir storage/datasets/vbvr-pro-rl-indomain-50k/materialized \
-#   --expected-samples 50000 --workers 8
-dataset_json: storage/datasets/vbvr-pro-rl-indomain-50k/materialized/dataset.json
+#   --dataset-root storage/datasets/VBVR-Pro-RL \
+#   --output-dir storage/datasets/VBVR-Pro-RL/materialized \
+#   --source-revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \
+#   --expected-tasks 50 --expected-samples 50000 --workers 8
+dataset_json: storage/datasets/VBVR-Pro-RL/materialized/dataset.json
 dataset_size: 50000
 num_frames: 81
 height: 512

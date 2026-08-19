@@ -130,46 +130,62 @@ The VBVR precompute code has separate VAE and text paths:
 
 ## Published VBVR-Pro RL Snapshot
 
-The manifest-selected In-Domain RL view is published as the public Hugging Face
-Dataset [`pufanyi/vbvr-pro-rl-indomain-50k`](https://huggingface.co/datasets/pufanyi/vbvr-pro-rl-indomain-50k).
-It contains 50,000 samples from 50 tasks in 59 lossless WebDataset shards
-(62,060,892,160 archive bytes). The source descriptor SHA-256 is
-`1d397525869794cd3b608223f35bbb550b217e113be00bd1e913124c27507ac4`;
-the selected split manifest SHA-256 is
-`8eb86bf31b24dc5a21deb03a8294c15d299731db0f6f1ea0ddfcd3fd36619f32`.
+The official public source is the Hugging Face Dataset
+[`Video-Reason/VBVR-Pro-RL`](https://huggingface.co/datasets/Video-Reason/VBVR-Pro-RL).
+Release commands pin revision
+`ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1` instead of relying on a mutable
+branch name.
 
-Each sample exposes `json`, `first.png`, `image_prompt.txt`,
-`metadata.json.bin`, `final.png`, `gt.mp4`, `video_prompt.txt`, and
-`extras.zip.bin`. The ZIP retains the original image sequence and any
-unrecognized source files, so the archive is a lossless packaging of the
-selected source directories. Use
-[`scripts/data/vbvr_pro_pack_hf.py`](../scripts/data/vbvr_pro_pack_hf.py) to
-rebuild it; the generated `SHA256SUMS`, `samples.jsonl`,
-`source_manifest.json`, `dataset_config.json`, and `audit.json` provide the
-integrity and publication audit trail.
+That revision contains 50 task archives under `VBVR-Pro-RL-Image` and the
+matching 50 under `VBVR-Pro-RL-Video`, about 11.7 GB in total. The video half
+is about 10.4 GB and already contains all five raw-training fields for 50,000
+samples:
 
-The published shards are raw backup assets rather than the latent tensors
-accepted by `latent_webdataset_dir`. Restore the fields required by raw
-training and `vbvr_rule` into an ignored standard VBVR-Pro tree before using
-the raw-data configs:
+```text
+<task-data-generator>/<task-directory>/<sample-id>/
+  first_frame.png
+  metadata.json
+  video/
+    final_frame.png
+    ground_truth.mp4
+    prompt.txt
+```
+
+The separate image archives are therefore unnecessary for the current I2V
+loader. Download only the video archives:
 
 ```bash
-hf download pufanyi/vbvr-pro-rl-indomain-50k \
+.venv/bin/hf download Video-Reason/VBVR-Pro-RL \
   --repo-type dataset \
-  --local-dir storage/datasets/vbvr-pro-rl-indomain-50k
+  --revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \
+  --include 'VBVR-Pro-RL-Video/*.tar.gz' \
+  --local-dir storage/datasets/VBVR-Pro-RL
 ```
+
+Restore a flat VBVR-Pro tree and generate the descriptor consumed by the
+checked-in manifest-RL configs:
 
 ```bash
 .venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
-  --dataset-root storage/datasets/vbvr-pro-rl-indomain-50k \
-  --output-dir storage/datasets/vbvr-pro-rl-indomain-50k/materialized \
-  --expected-samples 50000 --workers 8
+  --dataset-root storage/datasets/VBVR-Pro-RL \
+  --output-dir storage/datasets/VBVR-Pro-RL/materialized \
+  --source-revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \
+  --expected-tasks 50 \
+  --expected-samples 50000 \
+  --workers 8
 ```
 
-The command verifies every newly written field against `samples.jsonl` and
-writes `materialized/dataset.json`. It is resumable and restores only the five
-training/reward-critical fields, requiring about 56.2 GiB in addition to the
-downloaded tar snapshot.
+The Hugging Face downloader validates the downloaded archive objects. The
+materializer independently rejects unsafe member paths, duplicate fields,
+incomplete samples, wrong task counts, and wrong sample counts. It never calls
+whole-archive extraction. Existing same-size outputs are reused; add
+`--verify-existing` to byte-compare them with the archive members first.
+
+The output contains `dataset.json`, `split_manifest_rl.json`, and
+`materialization.json`, which records the source repository, revision,
+archive list, sizes, tasks, and sample counts. The official archives are raw
+publication assets, not the tensor schema accepted by
+`latent_webdataset_dir`; do not point the latent loader at them.
 
 ## Dataset Design Tradeoffs
 

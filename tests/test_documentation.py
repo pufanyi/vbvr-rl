@@ -56,3 +56,16 @@ def test_only_vbvr_pro_evaluation_surface_is_shipped():
     assert not (_REPO_ROOT / "scripts/eval/vbvr").exists()
     assert not (_REPO_ROOT / "src/eval/vbvr").exists()
     assert not (_REPO_ROOT / "src/cli/eval_vbvr.py").exists()
+
+
+def test_release_uses_the_official_vbvr_pro_rl_dataset():
+    sources = [
+        *_release_documents(),
+        *sorted((_REPO_ROOT / "configs").glob("*.yaml")),
+        _REPO_ROOT / "scripts/data/vbvr_pro_unpack_hf.py",
+    ]
+    legacy_reference = "pufanyi/vbvr-pro-rl-indomain-50k"
+    assert all(legacy_reference not in path.read_text(encoding="utf-8") for path in sources)
+    for relative in ("README.md", "docs/data.md", "docs/getting_started.md"):
+        assert "Video-Reason/VBVR-Pro-RL" in (_REPO_ROOT / relative).read_text(encoding="utf-8")
+    assert not (_REPO_ROOT / "scripts/data/vbvr_pro_pack_hf.py").exists()

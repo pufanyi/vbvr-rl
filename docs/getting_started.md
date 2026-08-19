@@ -89,28 +89,34 @@ multiply memory and runtime.
 
 ## 5. Prepare the Public RL Dataset
 
-Download the published raw snapshot:
+Download the video half of the official public dataset at the pinned revision:
 
 ```bash
-hf download pufanyi/vbvr-pro-rl-indomain-50k \
+.venv/bin/hf download Video-Reason/VBVR-Pro-RL \
   --repo-type dataset \
-  --local-dir storage/datasets/vbvr-pro-rl-indomain-50k
+  --revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \
+  --include 'VBVR-Pro-RL-Video/*.tar.gz' \
+  --local-dir storage/datasets/VBVR-Pro-RL
 ```
 
 Materialize the fields required by `I2VDataset` and `vbvr_rule`:
 
 ```bash
 .venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
-  --dataset-root storage/datasets/vbvr-pro-rl-indomain-50k \
-  --output-dir storage/datasets/vbvr-pro-rl-indomain-50k/materialized \
+  --dataset-root storage/datasets/VBVR-Pro-RL \
+  --output-dir storage/datasets/VBVR-Pro-RL/materialized \
+  --source-revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \
+  --expected-tasks 50 \
   --expected-samples 50000 \
   --workers 8
 ```
 
-The unpacker is resumable, validates file hashes from `samples.jsonl`, and
-writes `materialized/dataset.json`. The published tar shards contain raw
-publication assets; they are not compatible with `latent_webdataset_dir`.
-See [Data and Precompute](data.md) for the complete schemas.
+The unpacker validates archive layout and sample completeness, safely writes
+only the five required fields, and emits `materialized/dataset.json`, the
+split manifest, and `materialization.json`. Pass `--verify-existing` to
+byte-compare previously restored files before reuse. The published archives
+are raw assets and are not compatible with `latent_webdataset_dir`. See
+[Data and Precompute](data.md) for the complete schemas.
 
 ## 6. Install the Rule Evaluator When Needed
 

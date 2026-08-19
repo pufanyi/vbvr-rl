@@ -95,20 +95,20 @@ run.
 ## Public VBVR-Pro Dataset
 
 [`data/vbvr_pro_unpack_hf.py`](data/vbvr_pro_unpack_hf.py) materializes the
-published raw snapshot into the `I2VDataset` layout:
+official `Video-Reason/VBVR-Pro-RL` video archives into the `I2VDataset`
+layout:
 
 ```bash
 .venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
-  --dataset-root storage/datasets/vbvr-pro-rl-indomain-50k \
-  --output-dir storage/datasets/vbvr-pro-rl-indomain-50k/materialized \
-  --expected-samples 50000 --workers 8
+  --dataset-root storage/datasets/VBVR-Pro-RL \
+  --output-dir storage/datasets/VBVR-Pro-RL/materialized \
+  --source-revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \
+  --expected-tasks 50 --expected-samples 50000 --workers 8
 ```
 
-[`data/vbvr_pro_pack_hf.py`](data/vbvr_pro_pack_hf.py) is the inverse
-publication utility. It emits deterministic shards, checksums, a sanitized
-manifest, and an audit report. Run its `--help` before repackaging a dataset;
-external data licenses and publication permissions remain the operator's
-responsibility.
+Download only `VBVR-Pro-RL-Video/*.tar.gz`; those archives already include all
+five fields required by raw I2V training and rule reward. The materializer
+does not use unsafe whole-archive extraction and does not republish data.
 
 ## VLM Service
 

@@ -5,7 +5,7 @@ trainer: dancegrpo
 # the production per-rank load: 16 rollouts/rank/optimizer-step.
 model_path: storage/models/diffsynth_converted_5b/wan2.2-TI2V-5B_260715_vbvr_pro_step-35500
 
-dataset_json: storage/datasets/vbvr-pro-rl-indomain-50k/materialized/dataset.json
+dataset_json: storage/datasets/VBVR-Pro-RL/materialized/dataset.json
 dataset_size: 50000
 num_frames: 81
 height: 384

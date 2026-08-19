@@ -14,7 +14,7 @@ Initial public source release.
 - Flow-CPS rollout and replay, LoRA/full fine-tuning, FSDP2/HSDP, expert
   parallelism, and RL tensor parallelism.
 - Raw Parquet and latent WebDataset pipelines, plus a resumable materializer
-  for the public 50,000-sample VBVR-Pro RL snapshot.
+  for the official 50,000-sample `Video-Reason/VBVR-Pro-RL` archives.
 - Manifest-locked VBVR-Pro generation, media preparation, external rule
   scoring, VLM judging, and stage provenance.
 - DCP checkpoint save/resume, Diffusers conversion, LoRA extraction, tests,

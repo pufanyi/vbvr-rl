@@ -106,7 +106,7 @@ storage/
     Wan2.2-TI2V-5B-Diffusers/
     Wan2.2-I2V-A14B-Diffusers/
   datasets/
-    vbvr-pro-rl-indomain-50k/
+    VBVR-Pro-RL/
     vbvr-pro-eval-500/
   evalkits/
     <external-compatible-evalkit-checkout>/
@@ -121,29 +121,39 @@ assets.
 
 ## Public VBVR-Pro RL Data
 
-The manifest-RL configs use the public Hugging Face dataset
-[`pufanyi/vbvr-pro-rl-indomain-50k`](https://huggingface.co/datasets/pufanyi/vbvr-pro-rl-indomain-50k).
-Download it into the expected ignored directory:
+The manifest-RL configs use the official public Hugging Face dataset
+[`Video-Reason/VBVR-Pro-RL`](https://huggingface.co/datasets/Video-Reason/VBVR-Pro-RL).
+This release pins revision
+`ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1`. The 50 video archives already
+contain the first frame, metadata, target video, final frame, and prompt, so
+the separate image archives are not required for I2V training.
+
+Download only the video archives into the expected ignored directory:
 
 ```bash
-hf download pufanyi/vbvr-pro-rl-indomain-50k \
+.venv/bin/hf download Video-Reason/VBVR-Pro-RL \
   --repo-type dataset \
-  --local-dir storage/datasets/vbvr-pro-rl-indomain-50k
+  --revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \
+  --include 'VBVR-Pro-RL-Video/*.tar.gz' \
+  --local-dir storage/datasets/VBVR-Pro-RL
 ```
 
-The published shards are lossless raw assets, not trainer-ready latent shards.
 Materialize the five fields required by raw training and rule scoring:
 
 ```bash
 .venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
-  --dataset-root storage/datasets/vbvr-pro-rl-indomain-50k \
-  --output-dir storage/datasets/vbvr-pro-rl-indomain-50k/materialized \
+  --dataset-root storage/datasets/VBVR-Pro-RL \
+  --output-dir storage/datasets/VBVR-Pro-RL/materialized \
+  --source-revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \
+  --expected-tasks 50 \
   --expected-samples 50000 \
   --workers 8
 ```
 
-The command is resumable, verifies restored files against `samples.jsonl`, and
-writes `materialized/dataset.json`. Details are in [Data](docs/data.md).
+The command safely reads, validates, and flattens the task archives, is
+resumable, and writes `materialized/dataset.json` plus source provenance.
+These are raw assets, not trainer-ready latent WebDataset shards. Details are
+in [Data](docs/data.md).
 
 ## External VBVR Evaluator
 
