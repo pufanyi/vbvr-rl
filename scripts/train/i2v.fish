@@ -1,7 +1,7 @@
 #!/usr/bin/env fish
 # Wan2.2 I2V training launcher
 # Usage: fish scripts/train/i2v.fish [--nproc N] [-- training args...]
-#   e.g. fish scripts/train/i2v.fish --nproc 8 -- --config configs/train_i2v.json
+#   e.g. fish scripts/train/i2v.fish --nproc 8 -- --config configs/train_sft_vbvr_5e-6.yaml
 
 set -l nproc 8
 

@@ -23,7 +23,7 @@ src/data/         raw Parquet, latent WebDataset, and remote-I/O loaders
 src/trainer/      configs, trainers, rewards, sharding, optimizers, checkpoints
 src/precompute/   video/prompt latent builders and synthetic data generation
 src/eval/         VBVR-Pro scorer adapters, VLM protocol, provenance, reports
-configs/          executable reference and smoke configurations
+configs/          release training and precompute configurations
 scripts/          Fish launchers and bounded operator utilities
 tests/            unit, consistency, CLI, and distributed-contract tests
 ```

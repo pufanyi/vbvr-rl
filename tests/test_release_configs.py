@@ -5,7 +5,7 @@ from pathlib import Path
 import yaml
 
 from scripts.dev.validate_grpo_parameter_update import _load_config
-from src.trainer import RLConfig
+from src.trainer import RLConfig, SFTConfig
 from src.trainer.dancegrpo_trainer import _shared_prompt_assignment, _shared_prompt_wave_ranges
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +14,20 @@ _EXPECTED_RL_CONFIGS = {
     "train_rl_5b_vlm.yaml": "vbvr_vlm",
     "train_rl_a14b_rule.yaml": "vbvr_rule",
 }
+
+
+def test_release_ships_only_the_selected_sft_config():
+    paths = sorted((_REPO_ROOT / "configs").glob("train_sft_*.yaml"))
+
+    assert [path.name for path in paths] == ["train_sft_vbvr_5e-6.yaml"]
+    values = yaml.safe_load(paths[0].read_text(encoding="utf-8"))
+    config = SFTConfig(**values)
+    assert config.learning_rate == 5.0e-6
+    assert config.latent_webdataset_dir == "data/vbvr/latents/sft"
+    assert config.dataset_size == 800_000
+    assert config.fsdp
+    assert config.expert_parallel
+    assert config.train_experts == "both"
 
 
 def test_release_ships_only_the_selected_rl_configs():

@@ -7,7 +7,7 @@ Default behavior:
   - require 30 consecutive minutes of low utilization
   - print a rolling 30-minute summary
   - then launch:
-      .venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_sft_maze.yaml
+      .venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_sft_vbvr_5e-6.yaml
 
 Examples:
   .venv/bin/python scripts/dev/watch_gpu_idle.py
@@ -25,7 +25,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-DEFAULT_COMMAND = ".venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_sft_maze.yaml"
+DEFAULT_COMMAND = ".venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_sft_vbvr_5e-6.yaml"
 
 
 def timestamp() -> str:

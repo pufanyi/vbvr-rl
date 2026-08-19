@@ -97,8 +97,8 @@ Example:
 
 ```bash
 .venv/bin/torchrun --nproc_per_node=8 -m src.precompute.i2v_latent_webdataset \
-  --config configs/train_sft_maze.yaml \
-  --output_dir data/maze/latents/webdataset \
+  --config configs/precompute_diffsynth_mix_260603_raw_384.yaml \
+  --output_dir storage/latents/example/webdataset \
   --batch_size 4 \
   --samples_per_shard 1000
 ```

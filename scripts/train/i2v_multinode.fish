@@ -10,8 +10,8 @@
 #   MASTER_PORT  — port on master node (default: 29500)
 #
 # Usage: fish scripts/train/i2v_multinode.fish [--nproc N] [training args...]
-#   e.g. fish scripts/train/i2v_multinode.fish --config configs/train_i2v.yaml
-#   e.g. fish scripts/train/i2v_multinode.fish --nproc 8 --config configs/train_i2v.yaml
+#   e.g. fish scripts/train/i2v_multinode.fish --config configs/train_sft_vbvr_5e-6.yaml
+#   e.g. fish scripts/train/i2v_multinode.fish --nproc 8 --config configs/train_sft_vbvr_5e-6.yaml
 
 set -l nproc 8
 

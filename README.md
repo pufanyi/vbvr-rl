@@ -187,8 +187,13 @@ Single-machine SFT uses `scripts/train/i2v.fish`:
 
 ```fish
 fish scripts/train/i2v.fish --nproc 8 -- \
-  --config configs/train_sft_vbvr_5b_256x256x161_lr_1e-5.yaml
+  --config configs/train_sft_vbvr_5e-6.yaml
 ```
+
+This sole SFT reference is an A14B expert-parallel run over 800,000
+precomputed latent samples at `data/vbvr/latents/sft`. Those latents are an
+external artifact and are not interchangeable with the public raw
+`Video-Reason/VBVR-Pro-RL` archives.
 
 Single-machine RL uses `scripts/train/grpo.fish`:
 
@@ -300,7 +305,7 @@ src/data/         raw-media, WebDataset, and remote-I/O loaders
 src/trainer/      SFT/RL trainers, rewards, distributed runtime, checkpoints
 src/precompute/   latent and synthetic-data builders
 src/eval/         VBVR-Pro scoring, provenance, and reporting helpers
-configs/          reference experiment and smoke configs
+configs/          release training and precompute configs
 scripts/          Fish launchers and operator utilities
 tests/            focused unit and contract tests
 docs/             public guides and technical references

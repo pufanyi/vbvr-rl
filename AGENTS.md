@@ -41,6 +41,9 @@
   `configs/train_rl_5b_rule.yaml`, `configs/train_rl_5b_vlm.yaml`, and
   `configs/train_rl_a14b_rule.yaml`. Derive bounded smoke parameters in the
   validator instead of adding experiment-specific RL YAMLs.
+- Keep `configs/train_sft_vbvr_5e-6.yaml` as the only checked-in
+  `train_sft_*.yaml` reference. Raw precompute descriptors may remain under a
+  `precompute_*.yaml` name and are not additional SFT launch configs.
 - `third_party/VBVR-EvalKit` is intentionally absent. The supported public
   rule-evaluation path is `scripts/eval/vbvr_pro/` plus helpers in `src/eval/`.
   Do not restore a vendored or implicit evaluator fallback.

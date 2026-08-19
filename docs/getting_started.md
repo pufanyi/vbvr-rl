@@ -162,8 +162,12 @@ Single-machine SFT:
 
 ```fish
 fish scripts/train/i2v.fish --nproc 8 -- \
-  --config configs/train_sft_vbvr_5b_256x256x161_lr_1e-5.yaml
+  --config configs/train_sft_vbvr_5e-6.yaml
 ```
+
+The retained SFT config expects the A14B base model and an external
+800,000-sample latent WebDataset at `data/vbvr/latents/sft`. The public raw RL
+archives prepared above are not a drop-in replacement for those latents.
 
 Single-machine DanceGRPO:
 

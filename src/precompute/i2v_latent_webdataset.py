@@ -1,8 +1,8 @@
 """Precompute latent WebDataset shards from a standard I2V training config.
 
 This turns a regular parquet-backed dataset (the same format used by
-``configs/train_sft_maze.yaml``) into the latent tar-shard layout consumed by
-``VBVRLatentDataset``:
+``configs/precompute_diffsynth_mix_260603_raw_384.yaml``) into the latent
+tar-shard layout consumed by ``VBVRLatentDataset``:
 
   output_dir/shard-000000.tar
     {key}.safetensors  - prompt_embeds, latents, condition
@@ -11,8 +11,8 @@ This turns a regular parquet-backed dataset (the same format used by
 Example:
     .venv/bin/torchrun --nproc_per_node=8 \
         -m src.precompute.i2v_latent_webdataset \
-        --config configs/train_sft_maze.yaml \
-        --output_dir data/maze/latents/webdataset \
+        --config configs/precompute_diffsynth_mix_260603_raw_384.yaml \
+        --output_dir storage/latents/example/webdataset \
         --batch_size 4 \
         --samples_per_shard 1000
 """

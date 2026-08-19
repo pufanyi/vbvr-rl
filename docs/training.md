@@ -98,8 +98,14 @@ Launch on one machine:
 
 ```fish
 fish scripts/train/i2v.fish --nproc 8 -- \
-  --config configs/train_sft_vbvr_5b_256x256x161_lr_1e-5.yaml
+  --config configs/train_sft_vbvr_5e-6.yaml
 ```
+
+This release keeps one SFT reference. It targets A14B, expects 800,000
+precomputed latent samples at `data/vbvr/latents/sft`, and uses FSDP expert
+parallelism, so launch it with an even distributed world size. The latent
+dataset is external and is not generated from the public raw RL archives by
+the release setup steps.
 
 `lora_rank: 0` performs full fine-tuning. A positive rank inserts adapters and
 keeps base transformer weights frozen. When changing between full tuning and
