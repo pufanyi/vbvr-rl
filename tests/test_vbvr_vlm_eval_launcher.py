@@ -151,3 +151,52 @@ def test_assignment_only_never_invokes_auto_judge(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert not judge_marker.exists()
     assert "assignment-only mode; automatic judge was not launched" in result.stdout
+
+
+def test_missing_scheduler_topology_defaults_to_single_node(tmp_path: Path) -> None:
+    metadata = tmp_path / "checkpoints" / "checkpoint-100" / "high" / ".metadata"
+    metadata.parent.mkdir(parents=True)
+    metadata.write_text("complete")
+    fake_delegate = tmp_path / "delegate.fish"
+    topology_log = tmp_path / "topology.log"
+    _write_fish(fake_delegate, "echo $WORLD_SIZE/$RANK >$FAKE_TOPOLOGY_LOG\n")
+    env = {
+        **os.environ,
+        "FAKE_TOPOLOGY_LOG": str(topology_log),
+        "VLM_EVAL_SHARED_INCREMENTAL_LAUNCHER": str(fake_delegate),
+    }
+    env.pop("WORLD_SIZE", None)
+    env.pop("RANK", None)
+    result = subprocess.run(
+        [
+            "fish",
+            str(LAUNCHER),
+            "formal",
+            "--checkpoint-root",
+            str(tmp_path / "checkpoints"),
+            "--assignment-only",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert topology_log.read_text().strip() == "1/0"
+    assert "using single node 0/1" in result.stdout
+
+
+def test_partial_scheduler_topology_is_rejected(tmp_path: Path) -> None:
+    env = {**os.environ, "WORLD_SIZE": "1"}
+    env.pop("RANK", None)
+    result = subprocess.run(
+        ["fish", str(LAUNCHER), "formal", "--assignment-only"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "WORLD_SIZE and RANK must be set together" in result.stderr

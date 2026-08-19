@@ -1,0 +1,15 @@
+[
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round3_hard",
+    "case_id": "case_002",
+    "display_id": "r3_case002_revised",
+    "rollout_overrides": [
+      {
+        "rollout_index": 0,
+        "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_replacement_ck300_g15_20260818",
+        "case_id": "case_001",
+        "source_rollout_index": 1
+      }
+    ]
+  }
+]

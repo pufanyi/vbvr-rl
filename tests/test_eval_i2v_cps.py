@@ -4,7 +4,7 @@ import pytest
 import torch
 from PIL import Image
 
-from src.cli.eval_i2v_cps import _inference_config, _prepare_input, parse_args
+from src.cli.eval_i2v_cps import _inference_config, _item_seed, _prepare_input, parse_args
 
 
 def _args(tmp_path: Path, noise_level: str = "0.7"):
@@ -48,6 +48,17 @@ def test_inference_config_uses_flowcps_and_training_sampling_defaults(tmp_path: 
     assert cfg.seed == 17
     assert cfg.share_init_noise
     assert not cfg.save_steps
+
+
+def test_item_seed_preserves_legacy_index_seeding_and_accepts_explicit_seed() -> None:
+    assert _item_seed({}, 7, base_seed=100) == 107
+    assert _item_seed({"seed": 9001}, 7, base_seed=100) == 9001
+
+
+@pytest.mark.parametrize("value", [True, 1.5, "17", -1])
+def test_item_seed_rejects_invalid_values(value) -> None:
+    with pytest.raises(ValueError, match="seed"):
+        _item_seed({"seed": value}, 0, base_seed=0)
 
 
 def test_prepare_input_encodes_prompt_and_first_frame(tmp_path: Path) -> None:

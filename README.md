@@ -258,7 +258,9 @@ fish scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_incremental_
   formal --nproc 8
 ```
 
-Run it on every evaluation node with scheduler `WORLD_SIZE/RANK`. Completed
+On one evaluation machine, omit scheduler variables; the adapter defaults to
+`WORLD_SIZE=1` and `RANK=0`, while `--nproc` remains the local GPU count. For
+multiple machines, run it on every node with both variables set. Completed
 formal and VLM cells are audited and skipped; a node with no pending judge work
 does not start Qwen. Use `--no-vlm-judge` for an EvalKit-only invocation.
 

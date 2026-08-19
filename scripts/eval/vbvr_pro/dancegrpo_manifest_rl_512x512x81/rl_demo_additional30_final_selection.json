@@ -1,0 +1,272 @@
+[
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round5_proven_tasks",
+    "case_id": "case_056",
+    "display_id": "r5_case056",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round5_proven_tasks/01_r5_case056_case_056.jpg",
+    "manual_note": "四次 rollout 标记了四个不同候选形状；仅满分轨迹正确标出第二大形状，其余三个错误选择均被判为 0。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round6_targeted_replacements",
+    "case_id": "case_010",
+    "display_id": "r6_case010",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round6_targeted_replacements/01_r6_case010_case_010.jpg",
+    "manual_note": "四条轨迹形成四种不同亮灯序列；rollout 3 最终只点亮第 2–4 盏并与 GT 一致，满分判定正确。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round4_additional30",
+    "case_id": "case_008",
+    "display_id": "r4_case008",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round4_additional30/06_r4_case008_case_008.jpg",
+    "manual_note": "四条轨迹的删除速度、残留或替代结果不同；完整删除目标符号的轨迹得分最高，判分与 GT 一致。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round5_proven_tasks",
+    "case_id": "case_065",
+    "display_id": "r5_case065",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round5_proven_tasks/17_r5_case065_case_065.jpg",
+    "manual_note": "四条轨迹产生四种不同最终灯态；包含正确连续目标灯段的轨迹显著高分，其余错误模式低分。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round3_hard",
+    "case_id": "case_019",
+    "display_id": "r3_case019",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_old_remaining/10_old_r3_case019_case_019.jpg",
+    "manual_note": "四条穿块网格路线本质不同；得分差异与是否穿过指定方块、碰撞及到达终点的完成度一致。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round5_proven_tasks",
+    "case_id": "case_024",
+    "display_id": "r5_case024",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round5_proven_tasks/20_r5_case024_case_024.jpg",
+    "manual_note": "四次合并的计数、标签和运动过程均不同；正确汇总为红色 A:25 的轨迹最接近 GT 并获得最高分。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round5_proven_tasks",
+    "case_id": "case_074",
+    "display_id": "r5_case074",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round5_proven_tasks/21_r5_case074_case_074.jpg",
+    "manual_note": "四条轨迹给出不同的簇移动、红球数量和最终标签；判分顺序与合并完整度及计数正确性相符。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round5_proven_tasks",
+    "case_id": "case_013",
+    "display_id": "r5_case013",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round5_proven_tasks/23_r5_case013_case_013.jpg",
+    "manual_note": "四条障碍迷宫路线明显不同；高分轨迹更接近无碰撞最短路径，低分轨迹存在绕行或路线错误。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round5_proven_tasks",
+    "case_id": "case_015",
+    "display_id": "r5_case015",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round5_proven_tasks/24_r5_case015_case_015.jpg",
+    "manual_note": "四条黑球吞噬路径和最终大小不同；吞噬顺序及成长结果越接近 GT 的轨迹得分越高。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round5_proven_tasks",
+    "case_id": "case_076",
+    "display_id": "r5_case076",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round5_proven_tasks/26_r5_case076_case_076.jpg",
+    "manual_note": "四个最终亮灯模式互不相同；仅高分轨迹覆盖正确目标灯段但仍有一个额外亮灯，因此未得到满分。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round6_targeted_replacements",
+    "case_id": "case_023",
+    "display_id": "r6_case023",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round6_targeted_replacements/04_r6_case023_case_023.jpg",
+    "manual_note": "四条减色混合轨迹落在四种可辨别的最终颜色；颜色越接近 GT 的青绿色，规则分越高。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round5_proven_tasks",
+    "case_id": "case_017",
+    "display_id": "r5_case017",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round5_proven_tasks/28_r5_case017_case_017.jpg",
+    "manual_note": "四次连通器液面演化和最终高度不同；更接近 GT 平衡液面的轨迹得到更高分，排序合理。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round3_hard",
+    "case_id": "case_016",
+    "display_id": "r3_case016",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_old_remaining/15_old_r3_case016_case_016.jpg",
+    "manual_note": "四条滑块轨迹形成四个不同终盘；高分终盘在数字顺序和空格位置上更接近 GT。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round3_hard",
+    "case_id": "case_010",
+    "display_id": "r3_case010",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_old_remaining/16_old_r3_case010_case_010.jpg",
+    "manual_note": "四条障碍迷宫路径不同；到达进度、绕行和穿越障碍的差异能够解释对应分数。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round6_targeted_replacements",
+    "case_id": "case_008",
+    "display_id": "r6_case008",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round6_targeted_replacements/05_r6_case008_case_008.jpg",
+    "manual_note": "四条轨迹采用不同吞噬顺序，并产生不同数量或大小的黑球；保持单一黑球并正确成长的轨迹得分更高。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round3_hard",
+    "case_id": "case_005",
+    "display_id": "r3_case005",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_old_remaining/20_old_r3_case005_case_005.jpg",
+    "manual_note": "四条钥匙—门迷宫路径不同；取钥匙、匹配门与最终到达状态的完成度能够解释分差。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round6_targeted_replacements",
+    "case_id": "case_012",
+    "display_id": "r6_case012",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round6_targeted_replacements/06_r6_case012_case_012.jpg",
+    "manual_note": "四条球簇合并轨迹的中间计数与最终标签均不同；正确形成 A:25 的轨迹得分最高。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round5_proven_tasks",
+    "case_id": "case_064",
+    "display_id": "r5_case064",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round5_proven_tasks/33_r5_case064_case_064.jpg",
+    "manual_note": "四次吞噬的路径、先后顺序和最终黑球尺寸不同；更完整的吞噬轨迹得到更高规则分。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round5_proven_tasks",
+    "case_id": "case_054",
+    "display_id": "r5_case054",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round5_proven_tasks/35_r5_case054_case_054.jpg",
+    "manual_note": "四条滑块轨迹给出四种不同终盘；数字顺序及空格位置越接近目标，得分总体越高。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round3_hard",
+    "case_id": "case_027",
+    "display_id": "r3_case027",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_old_remaining/23_old_r3_case027_case_027.jpg",
+    "manual_note": "四条指定方块网格路线不同；穿块顺序、碰撞和终点完成度与规则分差一致。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round6_targeted_replacements",
+    "case_id": "case_007",
+    "display_id": "r6_case007",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round6_targeted_replacements/07_r6_case007_case_007.jpg",
+    "manual_note": "四条滑块轨迹的移动过程和终盘均不同；rollout 3 的数字排列最接近目标，因此得分最高。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round3_hard",
+    "case_id": "case_022",
+    "display_id": "r3_case022",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_old_remaining/24_old_r3_case022_case_022.jpg",
+    "manual_note": "四条多钥匙迷宫路径不同；是否先取任意钥匙再抵达唯一门以及路径效率能够解释分数排序。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round4_additional30",
+    "case_id": "case_021",
+    "display_id": "r4_case021",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round4_additional30/12_r4_case021_case_021.jpg",
+    "manual_note": "四条黑球移动与吞噬路径、最终尺寸均不同；得分随吞噬完成度和 GT 轨迹相似度变化。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round6_targeted_replacements",
+    "case_id": "case_018",
+    "display_id": "r6_case018",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round6_targeted_replacements/08_r6_case018_case_018.jpg",
+    "manual_note": "四条编号网格轨迹在访问顺序和中间位置上可区分；更接近按 1→2→3 到终点的轨迹获得更高分。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round3_hard",
+    "case_id": "case_037",
+    "display_id": "r3_case037",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_old_remaining/27_old_r3_case037_case_037.jpg",
+    "manual_note": "四条钥匙—门路径在选钥匙和到门路线方面不同；完成匹配并更接近参考路线的轨迹得分更高。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round6_targeted_replacements",
+    "case_id": "case_011",
+    "display_id": "r6_case011",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round6_targeted_replacements/09_r6_case011_case_011.jpg",
+    "manual_note": "四条合并轨迹的簇位置、红球总数和标签结果不同；保留更多正确红球与总量结构的轨迹得分较高。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round4_additional30",
+    "case_id": "case_027",
+    "display_id": "r4_case027",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round4_additional30/13_r4_case027_case_027.jpg",
+    "manual_note": "四次减色混合得到四种明显不同的色块；与 GT 目标颜色越接近的轨迹分数越高。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round3_hard",
+    "case_id": "case_039",
+    "display_id": "r3_case039",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_old_remaining/28_old_r3_case039_case_039.jpg",
+    "manual_note": "四条迷宫移动路线本质不同；均完成较好，但最短且无碰撞路线得分最高，绕行路线相对较低。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818",
+    "case_id": "case_012",
+    "display_id": "r1_case012",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_old_remaining/29_old_r1_case012_case_012.jpg",
+    "manual_note": "四条迷宫路线在转折、绕行和到达进度上不同；规则分排序与路径质量基本一致。"
+  },
+  {
+    "source_root": "storage/eval_out/vbvr_pro_rl_rollout_demo_cps0p7_e140_20260818_round4_additional30",
+    "case_id": "case_018",
+    "display_id": "r4_case018",
+    "manual_review": "pass",
+    "reviewed_at": "2026-08-18",
+    "audit_sheet": "storage/eval_out/vbvr_pro_rl_rollout_demo_manual_audit_round4_additional30/14_r4_case018_case_018.jpg",
+    "manual_note": "四条加色混合轨迹形成四种不同最终颜色；颜色接近 GT 目标混合结果的轨迹获得更高分。"
+  }
+]

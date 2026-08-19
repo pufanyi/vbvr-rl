@@ -197,6 +197,9 @@ adapter automatically invokes this offline judge on the same frozen checkpoint
 snapshot. Exact cell filters keep every node's shard stable; completed cells
 are skipped, partial cells resume, and a node with no pending judgments does
 not load Qwen. Pass `--no-vlm-judge` only when an EvalKit-only run is intended.
+When invoked outside a scheduler on one machine, omit both `WORLD_SIZE` and
+`RANK`; the adapter defaults them to `1` and `0`, respectively. `--nproc` still
+selects the local GPU count. Multi-machine invocations must set both variables.
 The standalone launcher below remains available for arbitrary compatible
 formal roots.
 

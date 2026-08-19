@@ -7,6 +7,8 @@
 # six-sampler snapshot and automatically score only missing cells with the
 # training-time Qwen3.6 judge. This file selects the DCP source and isolates all
 # derived model, score, log, trajectory, and VLM-judge namespaces by run name.
+# When no scheduler topology is present, this adapter defaults to one machine;
+# --nproc remains the number of GPUs available on that machine.
 
 function _fail
     echo "[error] $argv" >&2
@@ -26,6 +28,10 @@ function _usage
     echo "  --nproc N               Local GPU count for formal evaluation (default: 8)"
     echo "  --assignment-only       Print the multi-node assignment without evaluation"
     echo
+    echo "Evaluation topology:"
+    echo "  Omit WORLD_SIZE and RANK on one machine (defaults: WORLD_SIZE=1, RANK=0)."
+    echo "  On multiple machines, set both variables on every node."
+    echo
     echo "Automatic VLM judge options:"
     echo "  --no-vlm-judge          Stop after formal EvalKit evaluation"
     echo "  --vlm-output-root PATH  Override the independent resumable judge result root"
@@ -40,6 +46,18 @@ end
 set -l script_dir (realpath (dirname (status filename)))
 set -l project_root (realpath $script_dir/../../../..)
 cd $project_root; or _fail "could not enter project root: $project_root"
+
+set -l has_world_size 0
+set -l has_rank 0
+set -q WORLD_SIZE[1]; and set has_world_size 1
+set -q RANK[1]; and set has_rank 1
+test $has_world_size -eq $has_rank
+or _fail "WORLD_SIZE and RANK must be set together; omit both for single-node evaluation"
+if test $has_world_size -eq 0
+    set -gx WORLD_SIZE 1
+    set -gx RANK 0
+    echo "[topology] WORLD_SIZE/RANK not set; using single node 0/1"
+end
 
 # This is the topology-isolated output produced by the requested YAML through
 # scripts/train/grpo_vlm_eval_cluster.fish on 16 x 8 GPUs.

@@ -994,14 +994,16 @@ fish scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_incremental_
   --nproc 8
 ```
 
-It uses scheduler `WORLD_SIZE` as the current evaluation-machine count and
-`RANK` as the zero-based machine rank; this is independent of the source
-training topology, so five or six eight-GPU evaluation nodes are valid even
-though this checkpoint was trained with world128. `--checkpoint-dir` derives
-the parent checkpoint root and numeric step, then isolates the converted model,
-formal results, logs, and optional trajectory outputs using the parent run
-name. It cannot be combined with `--checkpoints` because it already selects one
-step.
+On one evaluation machine, omit `WORLD_SIZE` and `RANK`; the adapter defaults
+to machine count 1 and rank 0, while `--nproc` remains the local GPU count. On
+multiple machines, scheduler `WORLD_SIZE` is the current evaluation-machine
+count and `RANK` is the zero-based machine rank. This is independent of the
+source training topology, so five or six eight-GPU evaluation nodes are valid
+even though this checkpoint was trained with world128. `--checkpoint-dir`
+derives the parent checkpoint root and numeric step, then isolates the
+converted model, formal results, logs, and optional trajectory outputs using
+the parent run name. It cannot be combined with `--checkpoints` because it
+already selects one step.
 
 Omit `--checkpoint-dir` to scan the default output of
 `configs/train_dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml`,

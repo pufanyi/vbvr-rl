@@ -43,6 +43,16 @@ def _noise_level(value: str) -> float:
     return level
 
 
+def _item_seed(item: dict, index: int, *, base_seed: int) -> int:
+    """Resolve an optional per-item seed while preserving legacy index seeding."""
+    value = item.get("seed", base_seed + index)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"Eval item {index} seed must be an integer, got {value!r}")
+    if value < 0:
+        raise ValueError(f"Eval item {index} seed must be non-negative, got {value}")
+    return value
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Wan2.2 I2V Flow-CPS batch evaluation")
     parser.add_argument("--eval_json", required=True)
@@ -218,7 +228,8 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError(f"Eval item {index} has no prompt")
         image = image.resize((args.width, args.height), Image.Resampling.LANCZOS)
 
-        cfg = _inference_config(args, device, seed=args.seed + index)
+        sample_seed = _item_seed(item, index, base_seed=args.seed)
+        cfg = _inference_config(args, device, seed=sample_seed)
         prepared = _prepare_input(model, image, prompt, args, device)
         result = InferenceEngine(model, cfg).sample(prepared)
         video = decode_batch_to_uint8(model, result.final_latent.to(device))[0]
@@ -240,7 +251,10 @@ def main(argv: list[str] | None = None) -> int:
             tmp_path.replace(out_path)
         finally:
             tmp_path.unlink(missing_ok=True)
-        print(f"[rank {rank}] [{count + 1}/{len(my_indices)}] Saved {out_path}", flush=True)
+        print(
+            f"[rank {rank}] [{count + 1}/{len(my_indices)}] Saved {out_path} (seed={sample_seed})",
+            flush=True,
+        )
 
         del prepared, result, video, frames
         torch.cuda.empty_cache()
