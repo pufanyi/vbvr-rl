@@ -10,6 +10,7 @@ from pathlib import Path
 
 import yaml
 
+from src.cli.validate_grpo_runtime import validate_vbvr_evalkit_contract
 from src.eval.vbvr_runtime import validate_vbvr_scorer_runtime
 from src.trainer import DanceGRPOTrainer, RLConfig
 
@@ -40,11 +41,15 @@ def main():
 
     cfg = RLConfig(**cfg_dict)
     if cfg.grpo_reward_fn == "vbvr_rule":
+        evalkit_report = validate_vbvr_evalkit_contract(
+            cfg.vbvr_reward_evalkit_dir,
+            cfg.vbvr_reward_evalkit_source_sha256,
+        )
         runtime_report = validate_vbvr_scorer_runtime(verify_imports=False)
         if int(os.environ.get("LOCAL_RANK", "0")) == 0:
             print(
-                "[preflight] VBVR scorer runtime passed before trainer initialization: "
-                f"sha256={runtime_report['sha256']}"
+                "[preflight] VBVR scorer and external EvalKit passed before trainer initialization: "
+                f"runtime_sha256={runtime_report['sha256']} evalkit_sha256={evalkit_report['sha256']}"
             )
     trainer = DanceGRPOTrainer(cfg)
     trainer.train()

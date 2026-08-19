@@ -1,78 +1,138 @@
 # Scripts
 
-This directory only contains runnable launchers and small operator utilities.
-Reusable Python logic should live under `src/`; generated outputs should live
-under `storage/`, `data/`, or `docs/assets/`.
+This directory contains launchers and bounded operator utilities. Reusable
+training, data, checkpoint, and evaluation logic belongs under `src/`.
+Generated artifacts belong under ignored directories such as `storage/`.
 
 ## Layout
 
-- `lib/`: shared fish setup helpers.
-- `train/`: single-node and multi-node training launchers.
-- `inference/`: general inference and VAE smoke-test launchers.
-- `precompute/`: latent, WebDataset, and benchmark precompute launchers.
-- `data/`: dataset packaging, shuffling, and upload utilities.
-- `eval/`: evaluation pipelines grouped by runtime/benchmark; see
-  [`eval/README.md`](eval/README.md).
-- `convert/`: checkpoint conversion launchers and compatibility wrappers.
-- `download/`: model download helpers.
-- `serve/`: standalone model services used by training and evaluation.
-- `dev/`: local experiments and operator utilities.
+| Directory | Purpose |
+| --- | --- |
+| `lib/` | Shared Fish environment setup |
+| `train/` | Single- and multi-machine training launchers |
+| `inference/` | General inference and sampler utilities |
+| `precompute/` | Latent and WebDataset preparation |
+| `data/` | Dataset packaging, materialization, shuffling, and upload tools |
+| `eval/` | Benchmark-specific evaluation and reporting launchers |
+| `convert/` | Checkpoint conversion wrappers |
+| `download/` | External model download helpers |
+| `serve/` | Standalone services used by rewards/evaluation |
+| `dev/` | Bounded diagnostics and contract validators |
 
 ## Common Entrypoints
 
-```fish
-fish scripts/train/i2v.fish --config configs/train_i2v.yaml
-fish scripts/train/grpo.fish --config configs/train_grpo_maze.yaml
-fish scripts/train/grpo_vlm_eval_multinode.fish --config configs/train_dancegrpo_vbvr_pro_5b_384x384x81_vlm_qwen36_smoke_1node_3step.yaml
-fish scripts/train/grpo_vlm_eval_scaleout.fish --yaml=configs/train_dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml
-fish scripts/inference/i2v.fish --image path/to/image.jpg --prompt "..."
-fish scripts/precompute/vbvr_384_webdataset_single_node.fish
-fish scripts/precompute/maze_webdataset.fish --num_samples 20000
-fish scripts/eval/vbvr/vbvr_generate_score.fish
-fish scripts/convert/dcp_to_diffusers.fish
-```
-
-`scripts/data/vbvr_pro_pack_hf.py` converts a manifest-selected raw VBVR-Pro
-view into deterministic, lossless WebDataset shards suitable for a Hugging
-Face Dataset repository. It also writes a sanitized source manifest, per-file
-and per-shard checksums, a privacy/credential audit, and a dataset card:
+Create a deterministic raw-media fixture:
 
 ```bash
-.venv/bin/python scripts/data/vbvr_pro_pack_hf.py \
-  --dataset-json data/vbvr_pro/vbvr_pro_rl_indomain_256x256x161_evalkit_6fedd9d9.json \
-  --output-dir storage/hf/vbvr-pro-rl-indomain-50k \
-  --repo-id pufanyi/vbvr-pro-rl-indomain-50k \
-  --license-file /path/to/VBVR-Pro/LICENSE \
-  --expected-samples 50000
+.venv/bin/python scripts/dev/create_i2v_smoke_dataset.py \
+  --output-dir storage/smoke/i2v_512x512x81 \
+  --samples 4 --frames 81 --height 512 --width 512 --fps 16
 ```
 
-Most fish launchers source `scripts/lib/env.fish`, which changes to the repo
-root, activates `.venv`, exports `PYTHONPATH`, and makes matching Python
-development headers available to Triton through `CPATH` when possible. The
-multi-node GRPO launcher also reads the selected reward from the config and,
-for `vbvr_rule`, validates the pinned scorer dependencies and OpenCV
-`HoughLinesP` behavior on every node before loading the model. It then
-preflights the Triton CUDA driver.
-
-The generic VLM wrapper accepts the same scheduler environment and arguments
-as `grpo_multinode.fish`, starts one node-local Qwen3.6 vLLM endpoint, probes
-its generic vision/JSON path and exact task-prompt/regex path, and then
-delegates to the standard launcher. The cluster wrapper detects 4/8/16 nodes,
-defaults every endpoint to four local TP2 replicas with vLLM internal DP, and
-isolates output names by world size. All topology controls remain
-environment-variable overrides.
-See [`docs/vlm_judge_reward.md`](../docs/vlm_judge_reward.md) for setup and GPU
-memory controls.
-
-When a cluster image has Python 3.12 runtime files but no `Python.h`, provision
-the ignored shared toolchain once before submitting the multi-node job:
+Launch SFT/COS:
 
 ```fish
-fish scripts/dev/bootstrap_triton_python_headers.fish
+fish scripts/train/i2v.fish --nproc 8 -- \
+  --config configs/<reviewed-sft-or-cos-config>.yaml
 ```
 
-The bootstrap uses `uv`, then forces a fresh-cache Triton driver compilation.
-`scripts/lib/env.fish` discovers the resulting versioned include directory on
-every node without downloading during launch. For a cheap scheduler-wide check,
-set `WAN_TRAINER_TRITON_PREFLIGHT_ONLY=1` on all nodes; rerun without it after
-all nodes report that the preflight passed.
+Launch DanceGRPO:
+
+```fish
+fish scripts/train/grpo.fish --nproc 8 \
+  --config configs/<reviewed-rl-config>.yaml
+```
+
+Launch multi-machine DanceGRPO on every machine:
+
+```bash
+MASTER_ADDR=<rank-zero-host> MASTER_PORT=29500 \
+WORLD_SIZE=<machine-count> RANK=<machine-rank> \
+fish scripts/train/grpo_multinode.fish --nproc 8 -- \
+  --config configs/<reviewed-rl-config>.yaml
+```
+
+Evaluate a VBVR-Pro checkpoint:
+
+```bash
+DRY_RUN=1 \
+CHECKPOINT=storage/checkpoints/<run>/checkpoint-100 \
+GT_BASE=storage/datasets/vbvr-pro-eval-500 \
+EVALKIT_DIR=storage/evalkits/<compatible-checkout> \
+fish scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish
+```
+
+Convert a DCP checkpoint:
+
+```bash
+.venv/bin/python -m src.cli.convert_dcp_to_diffusers \
+  --checkpoint storage/checkpoints/<run>/checkpoint-100 \
+  --base_model storage/models/Wan2.2-TI2V-5B-Diffusers \
+  --output storage/models/converted/<run>-checkpoint-100
+```
+
+`scripts/convert/dcp_to_diffusers.fish` is the batch wrapper for discovering
+and converting checkpoints beneath `CHECKPOINT_ROOT`.
+
+## Launcher Conventions
+
+Most Fish launchers source `scripts/lib/env.fish`. It enters the repository
+root, activates `.venv`, sets `PYTHONPATH`, and exposes matching Python headers
+to Triton when available.
+
+For multi-machine launchers:
+
+- `WORLD_SIZE` is the machine count;
+- `RANK` is the zero-based machine rank;
+- `--nproc` is the number of local processes;
+- the global process count is `WORLD_SIZE * --nproc`.
+
+The GRPO launchers run cheap reward/attention checks before model loading. The
+multi-machine launcher additionally exercises Triton's CUDA driver setup on
+every machine. Use `WAN_TRAINER_TRITON_PREFLIGHT_ONLY=1` for a preflight-only
+run.
+
+## Public VBVR-Pro Dataset
+
+[`data/vbvr_pro_unpack_hf.py`](data/vbvr_pro_unpack_hf.py) materializes the
+published raw snapshot into the `I2VDataset` layout:
+
+```bash
+.venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
+  --dataset-root storage/datasets/vbvr-pro-rl-indomain-50k \
+  --output-dir storage/datasets/vbvr-pro-rl-indomain-50k/materialized \
+  --expected-samples 50000 --workers 8
+```
+
+[`data/vbvr_pro_pack_hf.py`](data/vbvr_pro_pack_hf.py) is the inverse
+publication utility. It emits deterministic shards, checksums, a sanitized
+manifest, and an audit report. Run its `--help` before repackaging a dataset;
+external data licenses and publication permissions remain the operator's
+responsibility.
+
+## VLM Service
+
+The optional Qwen judge uses an isolated runtime:
+
+```fish
+fish scripts/dev/setup_host_vllm.fish
+fish scripts/download/qwen36_27b_hf_mirror.fish
+fish scripts/serve/qwen36_27b_vllm.fish
+```
+
+Co-hosted training wrappers manage the service process group, probe its
+multimodal and task-schema paths, delegate to the standard GRPO launcher, and
+stop the service at exit. See
+[`docs/vlm_judge_reward.md`](../docs/vlm_judge_reward.md).
+
+## Development Rules
+
+- Keep launchers thin and use Python modules for reusable behavior.
+- Preserve explicit operator overrides; defaults should be repository-relative
+  and safe for a fresh checkout.
+- Validate required environment variables before starting expensive work.
+- Use unique output namespaces for different model, data, sampler, or scorer
+  contracts.
+- Ensure background services and subprocess groups are stopped on success,
+  failure, and signals.
+- Run `fish -n <changed-launcher>` before committing.

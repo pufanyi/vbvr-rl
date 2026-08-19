@@ -40,4 +40,4 @@ task generalization. The 500 scored benchmark samples are sample-disjoint from t
 manifest training IDs.
 
 This Space is generated from the authoritative score JSON files by
-`scripts/eval/vbvr_pro/build_vbvrpro_space.py` in Wan-Trainer.
+`scripts/eval/vbvr_pro/build_vbvrpro_space.py` in VBVR-RL.

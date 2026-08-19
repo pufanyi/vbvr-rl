@@ -323,7 +323,7 @@ class OfflineTaskVLMJudge:
 
     def __init__(self, config: OfflineJudgeConfig) -> None:
         self.config = config
-        # Never route node-local data-URL payloads through a login proxy.
+        # Never route loopback data-URL payloads through an inherited proxy.
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def validate_service(self) -> None:

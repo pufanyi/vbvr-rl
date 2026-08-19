@@ -47,4 +47,4 @@ and [`checkpoint-2200`](https://huggingface.co/datasets/pufanyi/vbvrpro_sampler_
 step archives. All media is streamed on demand through the Hub CDN.
 
 This Space is generated from the strict local trajectory archive by
-`scripts/eval/vbvr_pro/build_vbvr_trajectory_space.py` in Wan-Trainer.
+`scripts/eval/vbvr_pro/build_vbvr_trajectory_space.py` in VBVR-RL.

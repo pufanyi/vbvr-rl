@@ -47,8 +47,8 @@ if not test -f "$config"
 end
 set config (realpath "$config")
 
-# WORLD_SIZE is the scheduler node count. The same bs32/G32 contract is valid
-# at world32/64/128 because wave16 gives 2/4/8 ranks per prompt respectively.
+# WORLD_SIZE is the scheduler machine count. The bs32/G32 contract requires
+# wave16 and a data-parallel world that satisfies the prompt-group divisibility rules.
 if not set -q MASTER_ADDR; or test -z "$MASTER_ADDR"
     echo "ERROR: MASTER_ADDR is not set" >&2
     exit 1

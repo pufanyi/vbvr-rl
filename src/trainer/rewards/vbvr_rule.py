@@ -38,8 +38,6 @@ from src.eval.vbvr_runtime import validate_vbvr_scorer_runtime
 from src.trainer.rewards.base import BaseReward
 from src.trainer.rewards.registry import register_reward
 
-_EVALKIT = Path(__file__).resolve().parents[3] / "third_party" / "VBVR-EvalKit"
-
 
 @dataclass(slots=True)
 class _PendingVBVRReward:
@@ -63,7 +61,12 @@ class _PendingVBVRReward:
 
 
 def _resolve_evalkit_path(evalkit_dir: str | None = None) -> Path:
-    return Path(evalkit_dir).expanduser().resolve() if evalkit_dir else _EVALKIT
+    if not evalkit_dir:
+        raise ValueError(
+            "vbvr_rule requires an explicit external EvalKit checkout; "
+            "set vbvr_reward_evalkit_dir and vbvr_reward_evalkit_source_sha256"
+        )
+    return Path(evalkit_dir).expanduser().resolve()
 
 
 def _ensure_evalkit_path(evalkit_dir: str | None = None) -> Path:

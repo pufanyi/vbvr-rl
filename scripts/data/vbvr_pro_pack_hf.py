@@ -57,7 +57,6 @@ _TEXT_SUFFIXES = frozenset({".json", ".txt"})
 _AUDIT_PATTERNS = {
     "absolute_host_path": re.compile(rb"/(?:mnt|home|Users)/", re.IGNORECASE),
     "home_path": re.compile(rb"/home/[A-Za-z0-9._-]+/", re.IGNORECASE),
-    "internal_username": re.compile(rb"\b(?:pufanyi|xujunxiang)\b", re.IGNORECASE),
     "email_address": re.compile(rb"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE),
     "private_key": re.compile(rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),
     "credential_field": re.compile(
@@ -527,7 +526,7 @@ configs:
 # VBVR-Pro RL In-Domain 50K
 
 This repository contains the exact `{sample_count:,}` samples selected by the
-Wan-Trainer raw-data descriptor
+VBVR-RL raw-data descriptor
 `vbvr_pro_rl_indomain_256x256x161_evalkit_6fedd9d9.json`: `{task_count}` EvalKit
 In-Domain tasks with 1,000 RL samples per task.
 
@@ -543,7 +542,7 @@ manifests.
 - Source file bytes: **{source_bytes / 1e9:.3f} GB**
 - Tar archive bytes: **{archive_bytes / 1e9:.3f} GB**
 - Training view: `{config["width"]}x{config["height"]}`, `{config["num_frames"]}` frames
-- Source `fps` field: `{config["fps"]}` (metadata only in the current Wan-Trainer raw loader)
+- Source `fps` field: `{config["fps"]}` (metadata only in the current VBVR-RL raw loader)
 - Source split-manifest SHA-256: `{manifest_sha256}`
 - Dataset descriptor SHA-256: `{dataset_json_sha256}`
 

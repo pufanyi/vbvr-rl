@@ -1,121 +1,281 @@
 # Evaluation
 
-Evaluation has two phases: generate videos from prompts/images, then score generated videos with either the in-repo VLM evaluator or the bundled VBVR-EvalKit compatibility path.
+The supported release workflow evaluates Wan2.2 checkpoints on an exact
+VBVR-Pro manifest. It converts the training checkpoint when necessary,
+generates videos, validates every expected path, prepares media for the rule
+contract, scores through an external pinned evaluator, and records provenance
+for every stage.
 
-## Batch I2V Generation
+Use [`scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish`](../scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish)
+for complete rule-based evaluation. Lower-level commands are documented here
+for inspection and debugging, not as a substitute for provenance checks.
 
-`src.cli.eval_i2v` loads a Diffusers `WanImageToVideoPipeline`, optionally loads a DCP checkpoint into the pipeline, and generates one `.mp4` per input record.[^eval-i2v]
+## Inputs
 
-Input JSON format:
+A complete run needs:
 
-```json
-[
-  {
-    "name": "sample_0001",
-    "image": "path/to/reference.png",
-    "prompt": "A short task prompt."
-  },
-  {
-    "name": "sample_0002",
-    "video": "path/to/source.mp4",
-    "prompt": "If image is absent, first video frame is used."
-  }
-]
-```
+- a DCP checkpoint plus its base Diffusers model, or a preconverted Diffusers
+  model with immutable conversion/import metadata;
+- a flattened VBVR-Pro evaluation tree;
+- the exact split manifest used to select and order samples;
+- a separately obtained compatible EvalKit checkout and source fingerprint;
+- EasyOCR model assets for OCR-dependent tasks;
+- the locked project environment and FFmpeg/ffprobe.
 
-The generator computes output resolution from image aspect ratio and `max_area`, rounded to the pipeline's VAE/patch multiple, or accepts an explicit `--height` and `--width`. Multi-GPU mode partitions records round-robin by rank. Seeds are derived from the global sample index, and videos are validated for resolution, frame count, and FPS before an atomic rename, so changing rank count or resuming around existing outputs does not change other samples. Fixed-resolution runs can use `--validate_only` to verify the exact expected path set without initializing CUDA or loading a model. Model loading can be parallel or rank-serialized to reduce host RAM spikes.[^eval-i2v]
+Model weights, the evaluation set, evaluator source, OCR weights, and generated
+outputs are not bundled with this repository.
 
-Example:
-
-```bash
-.venv/bin/torchrun --nproc_per_node=8 -m src.cli.eval_i2v \
-  --eval_json storage/eval_out/vbvr/vbvr_eval.json \
-  --output_dir storage/eval_out/vbvr/checkpoint-4000 \
-  --checkpoint storage/checkpoints/sft_vbvr_fixed/checkpoint-4000 \
-  --use_ema
-```
-
-## DCP Loading For Evaluation
-
-When `--checkpoint` is provided, `eval_i2v` calls `load_dcp_into_pipeline`. That function:
-
-1. detects LoRA sidecars and wraps pipeline transformers if needed;
-2. detects flat vs high/low checkpoint layout;
-3. reads DCP into CPU tensors;
-4. prefers EMA shadows when `--use_ema` is set;
-5. remaps plain/LoRA key layouts into the current pipeline module;
-6. loads the result with `strict=False` to tolerate adapter keys.[^checkpoint]
-
-## VBVR VLM Scoring
-
-`src.cli.eval_vbvr` expects generated videos under:
+## End-to-End Pipeline
 
 ```text
-<model_output>/
-  Open_60/
-    <task>/<idx>.mp4
-  Hidden_40/
-    <task>/<idx>.mp4
+DCP checkpoint + base model
+            |
+            v
+  converted Diffusers model
+            |
+split manifest + GT tree ---> eval_samples.json
+            |                       |
+            +-----------------------+
+                                    v
+                           generated MP4 tree
+                                    |
+                                    v
+                     frame-preserving preparation
+                                    |
+                                    v
+                     pinned external rule scorer
+                                    |
+                                    v
+                    result JSON + provenance files
 ```
 
-It discovers matching ground-truth records from `data/vbvr/VBVR-Bench`, builds `EvalSample` objects, loads a VLM judge, and writes resumable per-rank `scores.rank*.jsonl` shards plus rank-0 summaries.[^eval-vbvr][^vbvr-dataset][^vbvr-runner]
+Each stage validates its complete inputs and outputs. Existing files are
+resumed only when they match the current provenance contract.
 
-The VLM judge shows the task prompt, the expected final frame, optionally the starting frame, and uniformly sampled generated frames. It asks the model for strict JSON, then parses a 0-10 score into `[0, 1]`.[^vlm-judge]
+## Inspect a Run Without Loading Weights
 
-Example:
+Set the artifact paths and use `DRY_RUN=1`:
 
 ```bash
-.venv/bin/torchrun --nproc_per_node=8 -m src.cli.eval_vbvr \
-  --model_output storage/eval_out/vbvr/checkpoint-4000 \
-  --gt_base data/vbvr/VBVR-Bench \
-  --output_dir storage/eval_out/vbvr_vlm \
-  --judge_model google/gemma-4-26B-A4B-it \
-  --num_frames 6
+DRY_RUN=1 \
+CHECKPOINT=storage/checkpoints/<run>/checkpoint-100 \
+BASE_MODEL=storage/models/Wan2.2-TI2V-5B-Diffusers \
+GT_BASE=storage/datasets/vbvr-pro-eval-500 \
+EVALKIT_DIR=storage/evalkits/<compatible-checkout> \
+OUTPUT_ROOT=storage/eval_out/<run>/checkpoint-100 \
+fish scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish
 ```
 
-## Rule-Based VBVR-EvalKit Path
+The dry run prints model, output, sampler, and evaluator selections. For a
+real run, the configured evaluator revision and digest must match the checkout.
+See [External EvalKit](external_evalkit.md).
 
-`scripts/eval/vbvr/vbvr_generate_score.fish` automates a common checkpoint loop:
+## Build the Exact Evaluation JSON
 
-1. build an eval JSON if missing;
-2. generate videos with `src.cli.eval_i2v`;
-3. either run `src.cli.eval_vbvr` (`JUDGE=vlm`) or restructure outputs and call the rule scorer (`JUDGE=rule`).[^vbvr-script]
-
-The rule path uses:
-
-- `src.eval.vbvr_restructure_to_evalkit` to convert generation output into the layout expected by the third-party kit;
-- `src.eval.vbvr_run_evaluation_parallel` for parallel rule scoring, with `--evalkit_dir` selecting the exact scorer checkout and `--expected_videos` enforcing completeness.[^vbvr-restructure][^vbvr-rule]
-
-The current VBVR-Pro 5B workflow has a dedicated [main_v2 evaluation guide](vbvr_pro_eval.md). It covers the 500-sample manifest contract, eight-GPU native Diffusers generation, frame-preserving resize/retime preparation, and latest rule scorer.
-
-## Output Files
-
-The VLM runner writes:
+The builder walks:
 
 ```text
-<output_dir>/<model_name>/
-  scores.rank0.jsonl
-  scores.rank1.jsonl
-  ...
-  eval_results.json
-  summary.json
+<gt-base>/
+  In-Domain_50/<task>/<00000>/
+  Out-of-Domain_50/<task>/<00000>/
 ```
 
-`eval_results.json` contains every `SampleScore`, plus `In_Domain`, `Out_of_Domain`, and overall summaries. `summary.json` contains only headline aggregate fields.[^vbvr-runner]
+and emits output names that already match EvalKit's domain/task/sample layout:
 
-## Current Evaluation Limitations
+```bash
+.venv/bin/python -m src.eval.build_vbvr_eval_json \
+  --gt_base storage/datasets/vbvr-pro-eval-500 \
+  --split_manifest storage/datasets/vbvr-pro-eval-500/split_manifest.json \
+  --output storage/eval_out/<run>/eval_samples.json \
+  --layout domain \
+  --expected_samples 500
+```
 
-- The VLM judge is not calibrated against a human-labeled validation set.
-- The prompt in `_JUDGE_SYSTEM` asks for a short reasoning string, but no consistency or self-checking pass is performed.
-- The rule path and VLM path are separate output formats until the script normalizes them.
-- VLM scoring caches JSONL shards, but malformed/torn lines are only skipped, not repaired.
+Manifest validation compares every flattened sample's `metadata.json` task ID
+with the selected bench entry. Missing, extra, reordered, or mislabeled
+samples fail before generation.
 
-[^eval-i2v]: [`src/cli/eval_i2v.py`](../src/cli/eval_i2v.py)
-[^checkpoint]: [`src/trainer/checkpoint.py`](../src/trainer/checkpoint.py)
-[^eval-vbvr]: [`src/cli/eval_vbvr.py`](../src/cli/eval_vbvr.py)
-[^vbvr-dataset]: [`src/eval/vbvr/dataset.py`](../src/eval/vbvr/dataset.py)
-[^vbvr-runner]: [`src/eval/vbvr/runner.py`](../src/eval/vbvr/runner.py)
-[^vlm-judge]: [`src/eval/vbvr/judges/vlm.py`](../src/eval/vbvr/judges/vlm.py)
-[^vbvr-script]: [`scripts/eval/vbvr/vbvr_generate_score.fish`](../scripts/eval/vbvr/vbvr_generate_score.fish)
-[^vbvr-restructure]: [`src/eval/vbvr_restructure_to_evalkit.py`](../src/eval/vbvr_restructure_to_evalkit.py)
-[^vbvr-rule]: [`src/eval/vbvr_run_evaluation_parallel.py`](../src/eval/vbvr_run_evaluation_parallel.py)
+For duration-matched generation, add `--generation_fps` and
+`--temporal_alignment`. The builder derives a per-sample `num_frames` value
+that follows Wan's `alignment * k + 1` temporal rule.
+
+## Generate Videos
+
+For an existing Diffusers model:
+
+```bash
+.venv/bin/torchrun --standalone --nproc_per_node=8 \
+  -m src.cli.eval_i2v \
+  --eval_json storage/eval_out/<run>/eval_samples.json \
+  --model_path storage/models/converted/<model> \
+  --output_dir storage/eval_out/<run>/generated \
+  --height 256 \
+  --width 256 \
+  --num_frames 161 \
+  --num_inference_steps 50 \
+  --guidance_scale 5.0 \
+  --fps 16 \
+  --seed 0
+```
+
+Each rank loads a pipeline and processes a disjoint deterministic slice. A
+video is written through a temporary path and atomically promoted only after
+encoding. Existing outputs are reused only when frame count, dimensions, and
+FPS validate.
+
+Generation entrypoints are:
+
+| Mode | Module | Extra option |
+| --- | --- | --- |
+| UniPC ODE | `src.cli.eval_i2v` | none |
+| Euler ODE | `src.cli.eval_i2v_euler` | none |
+| Flow-CPS | `src.cli.eval_i2v_cps` | `--noise_level` |
+
+Keep model, checkpoint, EMA choice, sampler, sigma grid, inference steps, CFG,
+seed, resolution, frame count, and FPS fixed when comparing checkpoints.
+
+Validate an existing generation tree without loading a model:
+
+```bash
+.venv/bin/python -m src.cli.eval_i2v \
+  --eval_json storage/eval_out/<run>/eval_samples.json \
+  --output_dir storage/eval_out/<run>/generated \
+  --height 256 --width 256 --num_frames 161 --fps 16 \
+  --validate_only
+```
+
+## Load a DCP Checkpoint
+
+`src.cli.eval_i2v` can load DCP directly with `--checkpoint`, but the public
+VBVR-Pro launcher first converts to a standalone Diffusers directory. That
+conversion is easier to fingerprint, reuse across samplers, and validate
+before expensive generation.
+
+```bash
+.venv/bin/python -m src.cli.convert_dcp_to_diffusers \
+  --checkpoint storage/checkpoints/<run>/checkpoint-100 \
+  --base_model storage/models/Wan2.2-TI2V-5B-Diffusers \
+  --output storage/models/converted/<run>-checkpoint-100 \
+  --merge_lora
+```
+
+Use `--use_ema` only when the intended evaluation contract calls for EMA.
+Conversion provenance must record checkpoint and base-model fingerprints,
+dtype, EMA choice, LoRA merge choice, and complete output-tree fingerprint.
+See [Checkpoints](checkpoints.md).
+
+## Prepare Media for Rule Scoring
+
+Generated videos are not passed directly to the evaluator. Preparation:
+
+- preserves every source frame;
+- scales down without cropping;
+- pads to the target canvas;
+- removes audio and metadata;
+- increases FPS only when necessary to fit the maximum duration;
+- validates dimensions, frame count, FPS, and duration after encoding.
+
+```bash
+.venv/bin/python -m src.cli.prepare_vbvr_eval_videos \
+  --input-dir storage/eval_out/<run>/generated \
+  --output-dir storage/eval_out/<run>/prepared \
+  --width 1024 \
+  --height 1024 \
+  --max-duration 5 \
+  --workers 8 \
+  --expected-videos 500 \
+  --crf 12
+```
+
+This operation does not temporally subsample the rollout. If the source has too
+many frames for the duration limit, it raises the encoded frame rate.
+
+## Rule-Based Scoring
+
+Run the scorer on CPU with CUDA hidden from EasyOCR workers:
+
+```bash
+CUDA_VISIBLE_DEVICES= \
+EASYOCR_MODULE_PATH=storage/evalkits/easyocr-shared \
+.venv/bin/python -m src.eval.vbvr_run_evaluation_parallel \
+  --model_path storage/eval_out/<run>/prepared \
+  --gt_base storage/datasets/vbvr-pro-eval-500 \
+  --output_dir storage/eval_out/<run>/scores \
+  --evalkit_dir storage/evalkits/<compatible-checkout> \
+  --expected_evalkit_source_sha256 <64-hex-digest> \
+  --expected_videos 500 \
+  --device cpu \
+  --num_workers 8 \
+  --threads_per_worker 8
+```
+
+The adapter validates the pinned dependency runtime, fingerprints the complete
+evaluator contract, checks the discovered video count, and writes per-sample
+errors rather than silently dropping samples. A result is complete only when
+it contains the expected sample count and no scorer errors.
+
+## Result Contract
+
+The score JSON contains:
+
+- model/prepared-tree identity;
+- evaluator source and scorer runtime fingerprints;
+- one record per sample with task, domain, score, and optional error;
+- aggregate means for `In_Domain`, `Out_of_Domain`, and `overall`.
+
+The end-to-end launcher additionally writes:
+
+```text
+<output-root>/
+  eval_samples.json
+  generation-provenance.json
+  preparation-provenance.json
+  score-provenance.json
+  generated_*/
+  eval_*/
+  scores/*_vbvr_results.json
+```
+
+Do not report an aggregate without retaining its score JSON and provenance
+manifests.
+
+## VLM Judge Evaluation
+
+`src.cli.eval_vbvr_vlm_outputs` scores existing generated-video matrices with
+the same task-specific prompt contract used by `vbvr_vlm` training reward. It
+uses an independent append-only result root, supports deterministic
+multi-machine assignment, and audits completeness before aggregation.
+
+The VLM path is optional and does not replace rule scoring. Set up the judge
+service and use the command recipes in
+[Qwen VLM Reward](vlm_judge_reward.md).
+
+## Reproducible Comparison Checklist
+
+Before comparing two cells, confirm equality of:
+
+- split manifest and expected sample count;
+- base model, checkpoint loading, EMA, and LoRA merge semantics;
+- sampler implementation, inference steps, sigma schedule, CFG, and seed;
+- generated resolution, frame count or duration policy, and FPS;
+- preparation canvas, duration limit, CRF, and frame-preserving behavior;
+- evaluator source digest, scorer runtime digest, and OCR assets.
+
+If any item changes, label the cell as a different evaluation contract rather
+than attributing the difference only to the checkpoint.
+
+## Completion Criteria
+
+A release-quality evaluation is complete only when:
+
+1. conversion or preconverted-model provenance validates;
+2. the eval JSON matches the exact split manifest;
+3. the generated tree has exactly the expected valid MP4 paths;
+4. the prepared tree preserves every frame and passes media validation;
+5. the scorer source and runtime fingerprints match the intended contract;
+6. the score JSON has the expected sample count and zero sample errors;
+7. every provenance manifest is in the `complete` state;
+8. all processes exit successfully.
+
+See [VBVR-Pro Evaluation](vbvr_pro_eval.md) for the full launcher environment,
+resume behavior, sampler variants, and checkpoint sweeps.

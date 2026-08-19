@@ -89,7 +89,7 @@ dancegrpo_timestep_selection_ratio: 0.6
 
 # Latest pinned GitHub main_v2 revision:
 # 6fedd9d9edb8daafa56aca8e53885aa8ad6f6037. Its contract fingerprint covers
-# the entrypoint, all vbvr_bench Python, bundled annotations, and requirements.
+# the entrypoint, all vbvr_bench Python, task annotations, and requirements.
 vbvr_reward_evalkit_dir: storage/evalkits/vbvr-evalkit-interleave-main_v2-6fedd9d9
 vbvr_reward_evalkit_source_sha256: eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c
 vbvr_reward_easyocr_module_path: storage/evalkits/easyocr-shared

@@ -9,34 +9,66 @@ but run_evaluation.py hard-expects::
     $MODEL_OUT/In-Domain_50/{task_name}/{idx}.mp4
     $MODEL_OUT/Out-of-Domain_50/{task_name}/{idx}.mp4
 
-This helper reads ``OUT_OF_DOMAIN_PREFIXES`` from the vendored ``vbvr_bench``
-and symlinks each task into the correct split. Idempotent: re-runs are safe.
+This helper reads the split classifier from an explicit external EvalKit
+checkout and symlinks each task into the correct split. Idempotent: re-runs
+are safe.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import sys
 from pathlib import Path
 
-# Make the vendored EvalKit importable regardless of CWD.
-_HERE = Path(__file__).resolve()
-_EVALKIT = _HERE.parents[2] / "third_party" / "VBVR-EvalKit"
-sys.path.insert(0, str(_EVALKIT))
 
-from vbvr_bench.evaluators import is_out_of_domain  # noqa: E402
+def _module_is_from(module, directory: Path) -> bool:
+    module_file = getattr(module, "__file__", None)
+    if not module_file:
+        return False
+    try:
+        Path(module_file).resolve().relative_to(directory)
+    except ValueError:
+        return False
+    return True
+
+
+def _load_split_classifier(evalkit_dir: Path):
+    directory = evalkit_dir.expanduser().resolve()
+    if not (directory / "vbvr_bench").is_dir():
+        raise FileNotFoundError(f"EvalKit checkout does not contain vbvr_bench: {directory}")
+    root_module = sys.modules.get("vbvr_bench")
+    if root_module is not None and not _module_is_from(root_module, directory):
+        for name in list(sys.modules):
+            if name == "vbvr_bench" or name.startswith("vbvr_bench."):
+                sys.modules.pop(name, None)
+    sys.path.insert(0, str(directory))
+    importlib.invalidate_caches()
+    module = importlib.import_module("vbvr_bench.evaluators")
+    if not _module_is_from(module, directory):
+        raise ImportError(f"EvalKit split classifier resolved outside the requested checkout: {module.__file__}")
+    classifier = getattr(module, "is_out_of_domain", None)
+    if classifier is None:
+        raise ImportError(f"EvalKit split classifier is missing from {directory / 'vbvr_bench/evaluators'}")
+    return classifier
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--model_out", required=True, type=Path, help="Video directory root")
+    ap.add_argument("--evalkit_dir", required=True, type=Path, help="External EvalKit checkout")
     ap.add_argument(
         "--source_split",
         required=True,
         help="Name of the existing subdir containing task folders (e.g. Open_60)",
     )
     args = ap.parse_args()
+    try:
+        is_out_of_domain = _load_split_classifier(args.evalkit_dir)
+    except (FileNotFoundError, ImportError) as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        return 1
 
     model_out: Path = args.model_out.resolve()
     src_dir = model_out / args.source_split

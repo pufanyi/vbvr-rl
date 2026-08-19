@@ -10,8 +10,8 @@ fps: 16
 shuffle_raw_indices: true
 shuffle_raw_indices_seed: 42
 
-# Single-node validation of the world128 per-rank workload. Batch 2 over world8
-# keeps four ranks per prompt and eight G=32 rollouts per rank.
+# Bounded validation of the intended per-rank workload. Batch 2 over eight
+# ranks keeps four ranks per prompt and eight G=32 rollouts per rank.
 output_dir: /tmp/wan-trainer/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_fa3_compile_smoke_1node_3step
 resume_from: null
 reset_dataloader: null

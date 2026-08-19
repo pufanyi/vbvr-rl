@@ -46,8 +46,8 @@ num_workers: 0
 prefetch_factor: 2
 persistent_workers: false
 
-# The production config is full-FT HSDP across 64 GPUs. LoRA keeps this
-# one-H800 smoke bounded while still executing rollout, reward, replay,
+# The large-scale reference is full-FT HSDP. LoRA keeps this one-GPU smoke
+# bounded while still executing rollout, reward, replay,
 # backward, gradient clipping, and a real optimizer update at 512x512x81.
 fsdp: false
 expert_parallel: false

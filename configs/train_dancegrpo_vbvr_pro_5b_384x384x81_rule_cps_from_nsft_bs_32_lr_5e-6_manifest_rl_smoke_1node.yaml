@@ -1,5 +1,5 @@
 trainer: dancegrpo
-# Local complete Diffusers pipeline with the DiffSynth step-35500 LoRA merged
+# Complete Diffusers pipeline with the DiffSynth step-35500 LoRA merged
 # into the matching Wan2.2 TI2V-5B base.
 model_path: storage/models/diffsynth_converted_5b/wan2.2-TI2V-5B_260715_vbvr_pro_step-35500
 
@@ -52,8 +52,8 @@ num_workers: 2
 prefetch_factor: 2
 persistent_workers: true
 
-# One node uses plain FSDP across eight H800s. HSDP adds no second replication
-# dimension on a single node.
+# One machine uses plain FSDP across eight ranks. HSDP adds no second
+# replication dimension on a single machine.
 fsdp: true
 expert_parallel: false
 hsdp: false
@@ -61,8 +61,8 @@ train_experts: both
 lora_rank: 0
 lora_alpha: 32
 
-# batch_size remains 32 global prompts. Four waves of eight prompts fit one
-# eight-GPU node; each prompt is owned by one rank and retains all G=32 samples.
+# batch_size remains 32 global prompts. Four waves of eight prompts fit the
+# eight-rank world; each prompt is owned by one rank and retains all G=32 samples.
 grpo_shared_prompt_batch: true
 grpo_shared_prompt_microbatch_size: 8
 grpo_delayed_replay: true
@@ -99,8 +99,8 @@ vbvr_reward_prepared_width: 1024
 vbvr_reward_prepared_height: 1024
 vbvr_reward_max_duration_seconds: 5.0625
 vbvr_reward_prepare_crf: 12
-# EvalKit 6fedd9d9 has a known G-16 metadata-path exception. Preserve the
-# production continuity fallback until that exact evaluator regression is fixed.
+# EvalKit 6fedd9d9 has a known G-16 metadata-path exception. Use fail-open
+# scoring for this bounded compatibility config and monitor fallback counts.
 vbvr_reward_fail_on_error: false
 vbvr_reward_task_specific_only: true
 vbvr_reward_tmp_dir: /tmp/wan-trainer/vbvr_pro_5b_384x384x81_rule_reward_cps0p7_from_diffsynth_step35500_lr5e-6_manifest_rl_smoke_1node

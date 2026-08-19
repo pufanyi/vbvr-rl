@@ -51,7 +51,9 @@ Remaining work:
 
 ## 5. Calibrate VLM Scoring
 
-The current VLM judge uses one prompt, one model, and one sampled frame set.[^vlm-judge] It is useful for quick iteration but should not be treated as ground truth without calibration.
+The current VLM judge uses versioned task-specific rubrics and a fixed video
+sampling contract.[^vlm-judge] It is useful for iteration but should not be
+treated as ground truth without calibration.
 
 Recommended work:
 
@@ -63,7 +65,8 @@ Recommended work:
 
 ## 6. Unify Rule And VLM Outputs
 
-The evaluation script supports both rule scoring and VLM scoring, but the paths are operationally separate.[^vbvr-script]
+VBVR-Pro supports both rule scoring and VLM scoring, but the result paths are
+operationally separate.[^vbvr-script]
 
 Recommended work:
 
@@ -88,6 +91,6 @@ Recommended work:
 [^i2v-latent-precompute]: [`src/precompute/i2v_latent_webdataset.py`](../../src/precompute/i2v_latent_webdataset.py)
 [^i2v-dataset]: [`src/data/i2v_dataset.py`](../../src/data/i2v_dataset.py)
 [^eval-i2v]: [`src/cli/eval_i2v.py`](../../src/cli/eval_i2v.py)
-[^vlm-judge]: [`src/eval/vbvr/judges/vlm.py`](../../src/eval/vbvr/judges/vlm.py)
-[^vbvr-script]: [`scripts/eval/vbvr/vbvr_generate_score.fish`](../../scripts/eval/vbvr/vbvr_generate_score.fish)
+[^vlm-judge]: [`src/trainer/rewards/vbvr_vlm.py`](../../src/trainer/rewards/vbvr_vlm.py)
+[^vbvr-script]: [`scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish`](../../scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish)
 [^maze-webdataset]: [`src/precompute/maze_webdataset.py`](../../src/precompute/maze_webdataset.py)

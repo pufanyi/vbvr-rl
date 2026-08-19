@@ -8,7 +8,7 @@ Examples:
         --max_area 147456 --num_frames 161 --num_inference_steps 50
 
     {
-      "image": "./image.png",
+      "image": "storage/examples/input.png",
       "prompt": "A red solution line grows step-by-step through a maze.",
       "output": "out.mp4",
       "seed": 0

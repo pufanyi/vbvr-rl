@@ -139,7 +139,7 @@ class VBVRVLMReward(BaseReward):
         self._base_url = os.environ.get("WAN_TRAINER_VLM_BASE_URL", cfg.vlm_reward_base_url).rstrip("/")
         self._model_name = os.environ.get("WAN_TRAINER_VLM_MODEL", cfg.vlm_reward_model)
         self._api_key = os.environ.get("WAN_TRAINER_VLM_API_KEY", cfg.vlm_reward_api_key)
-        # Cluster login proxies must never intercept node-local judge traffic.
+        # Inherited proxies must never intercept loopback judge traffic.
         self._url_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         self._prompt_mode = str(cfg.vlm_reward_prompt_mode)
         self._system_prompt = self._load_system_prompt(cfg) if self._prompt_mode == "custom" else None

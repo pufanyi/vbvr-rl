@@ -61,7 +61,7 @@ num_workers: 2
 prefetch_factor: 2
 persistent_workers: true
 
-# World sizes 32/64/128 use 4/8/16 HSDP replicas x eight shards.
+# HSDP uses eight-rank shard groups and adds replicas as the world grows.
 fsdp: true
 expert_parallel: false
 hsdp: true
@@ -69,8 +69,8 @@ train_experts: both
 lora_rank: 0
 lora_alpha: 32
 
-# Two 16-prompt waves preserve 32 global prompts. At world32/64/128 each prompt
-# uses 2/4/8 ranks, so each rank owns 16/8/4 rollouts per wave.
+# Two 16-prompt waves preserve 32 global prompts. The ranks assigned to each
+# prompt must divide G=32; per-rank rollout ownership follows from that ratio.
 grpo_shared_prompt_batch: true
 grpo_shared_prompt_microbatch_size: 16
 
@@ -81,9 +81,8 @@ grpo_delayed_replay: true
 grpo_delayed_replay_clip_range: 1.0e-2
 grpo_group_size: 32
 
-# The rule-reward batch-8 512 path reached 48.9/53.6 GiB allocated/reserved.
-# Cap rollout/replay and VAE decode chunks at four for the initial 50%-vLLM
-# co-hosted run. This creates 8/4/2 chunks per rank at world32/64/128.
+# Cap rollout/replay and VAE decode chunks at four to leave headroom for the
+# co-hosted service. The number of chunks follows the per-rank rollout count.
 grpo_sample_batch_size: 4
 grpo_train_sample_batch_size: 4
 grpo_fsdp_sync_each_backward: true

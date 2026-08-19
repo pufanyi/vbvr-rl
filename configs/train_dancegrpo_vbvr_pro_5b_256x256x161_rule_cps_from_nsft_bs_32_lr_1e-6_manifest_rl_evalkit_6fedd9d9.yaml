@@ -67,7 +67,7 @@ dancegrpo_share_group_init_noise: true
 dancegrpo_timestep_selection_ratio: 0.6
 
 # GitHub main_v2 revision 6fedd9d9edb8daafa56aca8e53885aa8ad6f6037.
-# The fingerprint covers run_evaluation.py, vbvr_bench Python, bundled
+# The fingerprint covers run_evaluation.py, vbvr_bench Python, task
 # annotations, and requirements.txt.
 vbvr_reward_evalkit_dir: storage/evalkits/vbvr-evalkit-interleave-main_v2-6fedd9d9
 vbvr_reward_evalkit_source_sha256: eb977da60e95456734063ba018b14d805680179fdf0e3e3b2ba6f603f27a935c

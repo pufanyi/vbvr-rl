@@ -10,10 +10,10 @@
 # so you can just let all ranks write to the same --output_dir:
 #
 #   # on rank-0 node:
-#   env NNODES=2 NODE_RANK=0 MASTER_ADDR=node0.internal MASTER_PORT=29500 \
+#   env NNODES=2 NODE_RANK=0 MASTER_ADDR=<rank-zero-host> MASTER_PORT=29500 \
 #       ./scripts/precompute/maze_webdataset.fish --num_samples 20000
 #   # on rank-1 node (same MASTER_ADDR / MASTER_PORT):
-#   env NNODES=2 NODE_RANK=1 MASTER_ADDR=node0.internal MASTER_PORT=29500 \
+#   env NNODES=2 NODE_RANK=1 MASTER_ADDR=<rank-zero-host> MASTER_PORT=29500 \
 #       ./scripts/precompute/maze_webdataset.fish --num_samples 20000
 #
 # Output directory is consumed by `latent_webdataset_dir:` in the training

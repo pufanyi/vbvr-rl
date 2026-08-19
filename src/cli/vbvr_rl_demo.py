@@ -782,7 +782,7 @@ def _write_final_gallery(
     )
     document = f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Wan-Trainer · RL 同输入四次 rollout demo</title><style>
+<title>VBVR-RL · RL 同输入四次 rollout demo</title><style>
 :root {{ color-scheme: light; }}
 body {{ font:15px/1.5 system-ui,sans-serif; margin:0; background:#f3f5f8; color:#18202a; }}
 header {{ padding:32px max(24px,calc((100vw - 1500px)/2)); background:#172033; color:white; }}

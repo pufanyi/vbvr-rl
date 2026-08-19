@@ -1,42 +1,64 @@
-# Wan-Trainer Documentation
+# Documentation
 
-This directory documents the current Wan-Trainer codebase from source, not from older generated notes. All code citations point to repository files; external citations point to papers or official documentation that motivate the design.
+These guides describe the released repository and its public interfaces. They
+use repository-relative example paths and assume generated artifacts are kept
+under the ignored `storage/` tree.
 
-## Reading Order
+## Start Here
 
-1. [Architecture](architecture.md) explains the execution model, trainer hierarchy, model wrapper, distributed setup, and checkpointing.
-2. [Training](training.md) explains SFT, COS, correction, and DanceGRPO-style training.
-3. [Data](data.md) explains raw Parquet inputs, latent WebDataset shards, and precompute pipelines.
-4. [Evaluation](evaluation.md) explains inference, VBVR generation, VLM scoring, and rule scoring.
-5. [VBVR-Pro main_v2 Evaluation](vbvr_pro_eval.md) documents the current 5B eight-GPU generation, video preparation, and rule-scoring workflow.
-6. [Checkpoints](checkpoints.md) explains the unified high/low DCP layout, EMA, LoRA sidecars, and resume semantics.
-7. [Qwen3.6 vLLM Judge Reward](vlm_judge_reward.md) explains standalone serving, VLM reward requests, GPU co-hosting, and multi-node topologies.
-8. [Improvements](improvements/README.md) lists algorithm, data, training-systems, and engineering improvements.
+1. [Getting Started](getting_started.md) — install the locked environment,
+   download external artifacts, and run a one-GPU smoke.
+2. [Configuration](configuration.md) — understand YAML precedence, data paths,
+   distributed topology, rewards, and resume behavior.
+3. [Data](data.md) — prepare raw Parquet data, latent WebDataset shards, and the
+   public VBVR-Pro RL snapshot.
+4. [Training](training.md) — launch SFT, COS, correction, or DanceGRPO and adapt
+   the reference configs safely.
+5. [Evaluation](evaluation.md) — generate, prepare, score, and audit VBVR-Pro
+   outputs.
 
-## Current System Summary
+## Reference Guides
 
-Wan-Trainer is centered on a Wan2.2 image-to-video training wrapper that loads the Diffusers tokenizer, UMT5 text encoder, Wan VAE, and one or both denoising transformers (`transformer` for high-noise timesteps and `transformer_2` for low-noise timesteps). The wrapper reads `boundary_ratio` from `model_index.json` and `flow_shift` from the scheduler config, then builds a shifted sigma schedule used by all trainers.[^model-wrapper]
+| Guide | Use it when you need to… |
+| --- | --- |
+| [Architecture](architecture.md) | Locate trainers, model wrappers, data loaders, distributed execution, and checkpoint code. |
+| [Checkpoints](checkpoints.md) | Resume a run, initialize from weights, convert DCP to Diffusers, or extract LoRA. |
+| [External EvalKit](external_evalkit.md) | Install and fingerprint a compatible scorer without vendoring it. |
+| [VBVR-Pro Evaluation](vbvr_pro_eval.md) | Run the complete manifest-locked rule-scoring workflow or checkpoint sweeps. |
+| [Qwen VLM Reward](vlm_judge_reward.md) | Host the optional Qwen judge, train with `vbvr_vlm`, or score existing videos. |
+| [Async Rollout Design](dancegrpo_async_rollout_design.md) | Understand the split actor/trainer queue and weight synchronization design. |
 
-The training stack has two parallel base hierarchies:
+## Supplemental Material
 
-- `BaseTrainer` serves SFT-like objectives: I2V, COS, and correction.[^base-trainer]
-- `BaseRLTrainer` / `BaseGRPOTrainer` serve the DanceGRPO RL objective.[^base-rl][^base-grpo]
+- [Maze generation](maze_generation_100k.md) documents the synthetic maze data
+  generator used by auxiliary experiments.
+- [Improvement notes](improvements/README.md) collect design proposals. They
+  are not promises of implemented behavior.
+- `docs/reports/` contains dated experiment reports and presentation source.
+  Reports preserve historical evidence; current commands and contracts are
+  defined by the guides above and the checked-in configs.
 
-Both stacks share the same model wrapper, optimizer factory, EMA implementation, FSDP2 sharding style, WebDataset latent loader, and DCP checkpoint runtime.
+## Documentation Conventions
 
-## Citation Convention
+- Commands run from the repository root unless stated otherwise.
+- `.venv/bin/python` and `.venv/bin/torchrun` refer to the locked project
+  environment created by `uv sync --frozen`.
+- `WORLD_SIZE` in Fish multi-machine launchers means machine count;
+  `--nproc` means local processes/GPUs.
+- Paths under `storage/` are local runtime artifacts and are not part of the
+  Git repository.
+- `<placeholder>` values must be supplied by the user. Do not copy angle
+  brackets literally.
 
-Local code citations are written as footnotes that point to source files. External references appear in each document's reference section. The most important external anchors are Wan2.2's model card for two-expert denoising, PyTorch FSDP2/DCP documentation for distributed training and checkpointing, Flow Matching for the base objective, and Flow-GRPO/DanceGRPO/PPO/GRPO papers for the RL layer.[^wan22][^fsdp2][^dcp][^fm][^flowgrpo][^dancegrpo][^ppo][^grpo]
+## Source of Truth
 
-[^model-wrapper]: [`src/models/wan_i2v.py`](../src/models/wan_i2v.py)
-[^base-trainer]: [`src/trainer/base_trainer.py`](../src/trainer/base_trainer.py)
-[^base-rl]: [`src/trainer/base_rl_trainer.py`](../src/trainer/base_rl_trainer.py)
-[^base-grpo]: [`src/trainer/base_grpo_trainer.py`](../src/trainer/base_grpo_trainer.py)
-[^wan22]: Wan-AI, "Wan2.2-I2V-A14B-Diffusers", Hugging Face model card, https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B-Diffusers
-[^fsdp2]: PyTorch, "`torch.distributed.fsdp.fully_shard`", https://docs.pytorch.org/docs/2.8/distributed.fsdp.fully_shard.html
-[^dcp]: PyTorch, "Distributed Checkpoint", https://docs.pytorch.org/docs/stable/distributed.checkpoint.html
-[^fm]: Lipman et al., "Flow Matching for Generative Modeling", arXiv:2210.02747, https://arxiv.org/abs/2210.02747
-[^flowgrpo]: Liu et al., "Flow-GRPO: Training Flow Matching Models via Online RL", arXiv:2505.05470, https://arxiv.org/abs/2505.05470
-[^dancegrpo]: DanceGRPO authors, "DanceGRPO: Unleashing GRPO on Visual Generation", arXiv:2505.07818, https://arxiv.org/abs/2505.07818
-[^ppo]: Schulman et al., "Proximal Policy Optimization Algorithms", arXiv:1707.06347, https://arxiv.org/abs/1707.06347
-[^grpo]: Shao et al., "DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models", arXiv:2402.03300, https://arxiv.org/abs/2402.03300
+When text and code differ, use this order:
+
+1. Pydantic config validation in `src/trainer/config.py`;
+2. the selected CLI or launcher;
+3. the runnable YAML config;
+4. these guides;
+5. dated reports.
+
+Please report stale commands or broken links through the repository issue
+tracker. See [Contributing](../CONTRIBUTING.md) before submitting a patch.

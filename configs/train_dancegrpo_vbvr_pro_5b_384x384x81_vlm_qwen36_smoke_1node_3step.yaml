@@ -1,6 +1,6 @@
 trainer: dancegrpo
 # Co-hosting feasibility smoke for scripts/train/grpo_vlm_eval_multinode.fish.
-# Eight training ranks share the same eight H800s with one TP8 Qwen3.6-27B
+# Eight training ranks share their visible devices with one TP8 Qwen3.6-27B
 # vLLM service. G=8 gives one rollout per rank for a single shared prompt;
 # T=8 and max_steps=3 intentionally bound the first end-to-end validation
 # while retaining enough denoising steps for a VLM to distinguish outcomes.

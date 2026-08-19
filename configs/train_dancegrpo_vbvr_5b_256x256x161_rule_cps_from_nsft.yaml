@@ -66,7 +66,7 @@ dancegrpo_timestep_selection_ratio: 0.6
 
 # VBVR EvalKit rule reward. This decodes generated/GT latents to temporary
 # videos and scores with task_specific_only=True, matching run_evaluation.py.
-vbvr_reward_evalkit_dir: third_party/VBVR-EvalKit
+vbvr_reward_evalkit_dir: storage/evalkits/VBVR-EvalKit-f9940448
 vbvr_reward_evalkit_source_sha256: f99404482a094931059ddb80b80a7d7d6f700d63bae2d2d15a20d0fd01b37842
 vbvr_reward_device: cpu
 vbvr_reward_fps: 16

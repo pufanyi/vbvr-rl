@@ -1,6 +1,6 @@
-# Data And Precompute
+# Data and Precompute
 
-Wan-Trainer has two data paths: raw media through a Parquet-backed dataset, and precomputed latents through WebDataset tar shards.
+VBVR-RL has two data paths: raw media through a Parquet-backed dataset, and precomputed latents through WebDataset tar shards.
 
 ## Raw I2V Dataset
 
@@ -151,7 +151,13 @@ integrity and publication audit trail.
 The published shards are raw backup assets rather than the latent tensors
 accepted by `latent_webdataset_dir`. Restore the fields required by raw
 training and `vbvr_rule` into an ignored standard VBVR-Pro tree before using
-the local single-node config:
+the raw-data configs:
+
+```bash
+hf download pufanyi/vbvr-pro-rl-indomain-50k \
+  --repo-type dataset \
+  --local-dir storage/datasets/vbvr-pro-rl-indomain-50k
+```
 
 ```bash
 .venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \

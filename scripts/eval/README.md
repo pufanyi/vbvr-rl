@@ -1,47 +1,86 @@
 # Evaluation Scripts
 
-Evaluation launchers are grouped by benchmark and runtime so checkpoint sweeps
-do not crowd a single directory:
+The release-supported VBVR path is `vbvr_pro/`. It evaluates exact VBVR-Pro
+manifests and keeps conversion, generation, media preparation, scoring, and
+provenance in one auditable workflow.
 
-- `lmms/`: DCP conversion plus lmms-eval/FastVideo launchers.
-- `maze/`: Maze rendering and queued Maze/VBVR checkpoint evaluation.
-- `vbvr/`: legacy VBVR generation, scoring, monitors, and compatibility wrappers.
-- `vbvr_pro/`: VBVR-Pro `main_v2` evaluation and reporting.
+## Directory Layout
 
-The VBVR-Pro DanceGRPO wrappers are further separated by training run:
+| Directory | Status and purpose |
+| --- | --- |
+| `vbvr_pro/` | Supported VBVR-Pro `main_v2` pipeline, checkpoint/sampler wrappers, summaries, and optional result viewers |
+| `maze/` | Synthetic maze evaluation utilities |
+| `lmms/` | Optional lmms-eval/FastVideo integration |
 
-- `vbvr_pro/dancegrpo_bs32/`: the original bs32 checkpoints at steps 300–2700.
-- `vbvr_pro/dancegrpo_bs32_lr_1e-6/`: lr=1e-6 checkpoints at steps 100–800;
-  every checkpoint has UniPC ODE, deterministic FlowMatch Euler ODE, CPS 0.3,
-  and CPS 0.7 entrypoints.
-- `vbvr_pro/dancegrpo_indomain_strict/`: the strict In-Domain checkpoint series.
-- `vbvr_pro/dancegrpo_manifest_rl_384x384x81/`: the 384x384x81 manifest-RL
-  checkpoint sweep plus two provenance-locked scorer-only migrations. Use the
-  fixed `...rescore_512x512_main_v2.fish` wrapper for the formal native-512 to
-  1024x1024/e140 evaluation; the unsuffixed `...rescore_main_v2.fish` requires
-  native-384 generation provenance and is only the resolution ablation. Both
-  reuse prepared videos with bounded CPU multiprocessing and never generate or
-  prepare video.
-- `vbvr_pro/dancegrpo_manifest_rl_512x512x81/`: the 512x512x81 manifest-RL
-  checkpoint series evaluated with the matching 30-step CPS 0.7 rollout policy.
-  The sweep discovers every complete checkpoint in the native-512/e140-reward
-  run and isolates its converted models and outputs. The
-  `...diffsynth_step35500_baseline_cps0p7...` entry point evaluates that run's
-  pre-RL initialization with the exact same sampler, media, dataset, and scorer
-  contract so it can serve as a valid step-0 baseline.
+## VBVR-Pro Entry Point
 
-Run every launcher from the repository root. Most fish launchers source
-`scripts/lib/env.fish`, which activates `.venv` and sets `PYTHONPATH`.
+The shared launcher is:
 
-VBVR-Pro training rewards and offline scoring deliberately use the same pinned
-scorer runtime. Check it before a launch with:
+```fish
+fish scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish
+```
+
+Inspect a run first:
+
+```bash
+DRY_RUN=1 \
+CHECKPOINT=storage/checkpoints/<run>/checkpoint-100 \
+BASE_MODEL=storage/models/Wan2.2-TI2V-5B-Diffusers \
+GT_BASE=storage/datasets/vbvr-pro-eval-500 \
+EVALKIT_DIR=storage/evalkits/<compatible-checkout> \
+OUTPUT_ROOT=storage/eval_out/<run>/checkpoint-100 \
+fish scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish
+```
+
+The launcher requires a separately obtained evaluator. It verifies both an
+exact Git revision, when available, and a complete source-contract digest.
+There is no vendored evaluator fallback.
+
+See [`docs/vbvr_pro_eval.md`](../../docs/vbvr_pro_eval.md) for environment
+variables, stage contracts, resume behavior, and completion criteria.
+
+## Wrappers and Sweeps
+
+Subdirectories under `vbvr_pro/` contain experiment-specific wrappers. A
+wrapper should only select checkpoint, model, sampler, media, manifest,
+evaluator, and output variables before delegating to the shared launcher.
+
+When adding a wrapper:
+
+- use a unique `CONVERTED_MODEL` and `OUTPUT_ROOT` for each evaluation cell;
+- encode the checkpoint and sampler in its name;
+- keep the split manifest, preparation, and scorer contract explicit;
+- support `DRY_RUN=1` through the shared launcher;
+- do not duplicate generation or scorer implementation.
+
+Summarize completed result trees with:
+
+```fish
+fish scripts/eval/vbvr_pro/summarize_vbvr_pro_results.fish \
+  --root storage/eval_out/<result-root>
+```
+
+## VLM Judge
+
+The optional offline Qwen judge reads completed generated-video cells and
+writes a separate resumable result root. Its convenience launcher is under:
+
+```text
+vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/
+```
+
+It does not replace the rule evaluator and must not share output files with
+rule scoring. See
+[`docs/vlm_judge_reward.md`](../../docs/vlm_judge_reward.md).
+
+## Runtime Check
+
+Before rule-based evaluation:
 
 ```bash
 .venv/bin/python -m src.eval.vbvr_runtime
 ```
 
-The common VBVR-Pro launcher records that runtime in score provenance, and both
-the parent scorer and every spawned worker validate it before loading EvalKit.
-Do not move only offline evaluation into a separate environment: that creates a
-real train/eval gap. If scorer isolation becomes necessary, route both the
-training reward and offline scoring through the same isolated runtime.
+Training reward and offline scoring intentionally use the same pinned
+scientific-media runtime. If the contract changes, update both paths and write
+results to a new provenance namespace.

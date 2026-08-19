@@ -103,4 +103,4 @@ Recommended work:
 [^dancegrpo-trainer]: [`src/trainer/dancegrpo_trainer.py`](../../src/trainer/dancegrpo_trainer.py)
 [^ppo]: Schulman et al., "Proximal Policy Optimization Algorithms", arXiv:1707.06347, https://arxiv.org/abs/1707.06347
 [^base-grpo]: [`src/trainer/base_grpo_trainer.py`](../../src/trainer/base_grpo_trainer.py)
-[^vlm-judge]: [`src/eval/vbvr/judges/vlm.py`](../../src/eval/vbvr/judges/vlm.py)
+[^vlm-judge]: [`src/trainer/rewards/vbvr_vlm.py`](../../src/trainer/rewards/vbvr_vlm.py)

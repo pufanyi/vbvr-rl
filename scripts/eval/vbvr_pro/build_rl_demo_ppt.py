@@ -235,7 +235,7 @@ def new_presentation() -> Presentation:
     presentation.slide_height = Inches(7.5)
     presentation.core_properties.title = "VBVR-Pro RL four-rollout demo"
     presentation.core_properties.subject = "DanceGRPO checkpoint evidence with embedded MP4 rollouts"
-    presentation.core_properties.author = "Wan-Trainer"
+    presentation.core_properties.author = "VBVR-RL"
     presentation.core_properties.keywords = "RL, DanceGRPO, VBVR-Pro, CPS, embedded video"
     return presentation
 

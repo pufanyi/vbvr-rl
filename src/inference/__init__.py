@@ -1,4 +1,4 @@
-"""Unified ODE / SDE / CPS inference for any Wan-Trainer checkpoint.
+"""Unified ODE / SDE / CPS inference for any VBVR-RL checkpoint.
 
 Loads a DCP checkpoint into ``WanI2VForTraining`` and runs one denoising
 trajectory (ODE deterministic, SDE stochastic DanceGRPO, or flow-CPS),

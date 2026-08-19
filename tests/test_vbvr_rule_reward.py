@@ -135,6 +135,11 @@ def test_reward_uses_canonical_decoder_to_uint8_conversion():
     assert np.array_equal(VBVRRuleReward._to_uint8_videos(decoded), uint8_from_decoded(decoded))
 
 
+def test_reward_requires_explicit_external_evalkit_path():
+    with pytest.raises(ValueError, match="explicit external EvalKit checkout"):
+        vbvr_rule_module._resolve_evalkit_path(None)
+
+
 def test_reward_rejects_unpinned_evalkit_source(tmp_path: Path):
     evalkit = tmp_path / "evalkit"
     _write_fake_evalkit(evalkit)

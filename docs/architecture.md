@@ -1,47 +1,96 @@
 # Architecture
 
-Wan-Trainer is a distributed fine-tuning and evaluation stack around Wan2.2 I2V Diffusers checkpoints. Its core shape is:
+VBVR-RL is a distributed Wan2.2 training and VBVR-Pro evaluation stack. Its
+primary control flow is:
 
 ```text
-CLI or fish launcher
-  -> Pydantic config
-  -> Trainer hierarchy
+Fish launcher or Python CLI
+  -> Pydantic configuration
+  -> trainer and distributed topology
   -> WanI2VForTraining
-  -> raw media loader or latent WebDataset loader
-  -> FSDP2/HSDP/expert-parallel execution
+  -> raw media or latent WebDataset
+  -> objective and optional reward
   -> DCP checkpoint runtime
+  -> provenance-checked evaluation
 ```
+
+## Source Map
+
+```text
+src/cli/          user-facing training, generation, conversion, and evaluation CLIs
+src/models/       Wan model wrapper, COS paths, LoRA integration
+src/data/         raw Parquet, latent WebDataset, and remote-I/O loaders
+src/trainer/      configs, trainers, rewards, sharding, optimizers, checkpoints
+src/precompute/   video/prompt latent builders and synthetic data generation
+src/eval/         VBVR-Pro scorer adapters, VLM protocol, provenance, reports
+configs/          executable reference and smoke configurations
+scripts/          Fish launchers and bounded operator utilities
+tests/            unit, consistency, CLI, and distributed-contract tests
+```
+
+Reusable logic belongs under `src/`. Launchers should configure and compose
+that logic rather than duplicate algorithm or scoring implementations.
 
 ## Entry Points
 
-| Entry point | Config class | Trainer path | Notes |
-| --- | --- | --- | --- |
-| `src.cli.train_i2v` | `SFTConfig` | `I2VTrainer` or `COSTrainer` | Dispatches on `trainer: i2v` vs `trainer: cos`.[^train-i2v] |
-| `src.cli.train_cos` | `SFTConfig` | `COSTrainer` | Dedicated COS entry point, equivalent to `trainer: cos`.[^train-cos] |
-| `src.cli.train_i2v_correction` | `CorrectionConfig` | `I2VCorrectionTrainer` | SFT plus teacher-rollout correction; forbids expert parallel.[^train-correction] |
-| `src.cli.train_grpo` | `RLConfig` | `DanceGRPOTrainer` | RL entry point; split rollout/train execution is controlled by `rl_train_node_count`.[^train-grpo] |
-| `src.cli.eval_i2v` | argparse | Diffusers pipeline | Batch generation; can load DCP checkpoint weights.[^eval-i2v] |
-| `src.cli.eval_vbvr` | argparse | VLM judge + runner | Scores already-generated VBVR videos.[^eval-vbvr] |
+| Entry point | Purpose |
+| --- | --- |
+| `src.cli.train_i2v` | Dispatch SFT or COS from `SFTConfig.trainer` |
+| `src.cli.train_i2v_correction` | Run supervised teacher-rollout correction |
+| `src.cli.train_grpo` | Run DanceGRPO rollout, reward, and replay |
+| `src.cli.eval_i2v` | Batch UniPC generation and exact output validation |
+| `src.cli.eval_i2v_euler` | Deterministic Euler generation |
+| `src.cli.eval_i2v_cps` | Flow-CPS generation |
+| `src.cli.convert_dcp_to_diffusers` | Convert a DCP checkpoint for portable inference |
+| `src.eval.vbvr_run_evaluation_parallel` | Score prepared videos through external EvalKit |
+| `src.cli.eval_vbvr_vlm_outputs` | Score existing evaluation cells with the VLM judge |
 
-The fish wrappers in `scripts/` are thin operational launchers. They activate `.venv`, set `PYTHONPATH`, and call the Python module with `torchrun` where needed.[^scripts-env][^scripts-readme]
+Fish wrappers source [`scripts/lib/env.fish`](../scripts/lib/env.fish), enter the
+repository root, activate `.venv`, set `PYTHONPATH`, and construct `torchrun`
+arguments. The Python entrypoints remain usable directly.
+
+## Configuration Layer
+
+[`src/trainer/config.py`](../src/trainer/config.py) defines:
+
+```text
+TrainConfig
+  SFTConfig
+  CorrectionConfig
+  RLConfig
+```
+
+`TrainConfig` owns model, data, optimizer, precision, distributed, checkpoint,
+and logging fields. Subclasses add COS, correction, rollout, replay, and reward
+settings. Entry points merge defaults, YAML, and CLI overrides before
+constructing a validated config.
+
+Runtime topology validation also occurs in the trainers because some
+constraints depend on the initialized world size and device mesh. See
+[Configuration](configuration.md).
 
 ## Model Wrapper
 
-`WanI2VForTraining` owns the training-facing view of the Wan2.2 pipeline. It can load:
+[`WanI2VForTraining`](../src/models/wan_i2v.py) provides the training view of a
+Diffusers pipeline. Depending on data and reward requirements, it loads:
 
-- tokenizer and UMT5 text encoder, unless prompt embeddings are precomputed;
-- Wan VAE, unless VAE latents and condition tensors are precomputed;
-- `transformer` for high-noise denoising;
-- `transformer_2` for low-noise denoising;
-- optional LoRA adapters on attention projection modules.[^wan-wrapper]
+- tokenizer and UMT5 text encoder;
+- Wan VAE;
+- high-noise `transformer`;
+- low-noise `transformer_2` for A14B;
+- optional LoRA adapters.
 
-The wrapper reads `boundary_ratio` from `model_index.json` and converts it into `boundary_timestep`. It also reads scheduler `flow_shift`, constructs shifted sigma values, and computes `boundary_idx` from shifted timesteps rather than assuming a linear index.[^wan-wrapper] This matters because the same shifted schedule is used in SFT, COS, correction, GRPO sampling, and reward evaluation.
+The wrapper reads the A14B expert boundary and scheduler flow shift from model
+metadata, constructs the shifted sigma/timestep schedule, and routes forward
+passes to the correct expert. TI2V-5B uses one dense transformer and expanded
+per-token timesteps.
 
-The Wan2.2 model card describes the A14B family as a two-expert MoE design: a high-noise expert handles early layout-oriented denoising, and a low-noise expert handles later detail refinement.[^wan22] The code mirrors that design by routing `timestep >= boundary_timestep` to `transformer` and lower timesteps to `transformer_2`.[^wan-wrapper]
+Model-family condition layouts differ, so dataset precompute artifacts are
+coupled to the base model family and preprocessing contract.
 
 ## Trainer Hierarchy
 
-The SFT side uses `BaseTrainer` for shared infrastructure and subclasses for algorithm-specific loops:
+Supervised modes share one base:
 
 ```text
 BaseTrainer
@@ -50,9 +99,8 @@ BaseTrainer
   I2VCorrectionTrainer
 ```
 
-`BaseTrainer` initializes distributed state, expert-parallel rank groups, the model, optional FSDP2/HSDP sharding, EMA, dataset, StatefulDataLoader, optimizer(s), DCP state, W&B, and resume handling.[^base-trainer]
-
-The RL side is deliberately separate:
+The RL side is separate because it owns rollout policy state, reference-policy
+logic, reward workers, trajectory storage, and optional actor ranks:
 
 ```text
 BaseRLTrainer
@@ -60,136 +108,159 @@ BaseRLTrainer
     DanceGRPOTrainer
 ```
 
-`BaseRLTrainer` duplicates much of the SFT infrastructure because the RL pipeline supports different sampling/training GPU layouts. `BaseGRPOTrainer` adds reference policy handling, reward construction, group-relative advantage computation, SDE schedule helpers, and the outer DanceGRPO training loop.[^base-rl][^base-grpo]
-
-## Distributed Execution
-
-The main sharding mode is PyTorch FSDP2 through `fully_shard`, using `MixedPrecisionPolicy` and `DeviceMesh`.[^fsdp2] The code supports:
-
-- plain FSDP over all ranks;
-- HSDP with a 2D mesh: shard within node and replicate across nodes;
-- expert parallel, where half the ranks train the high-noise expert and half train the low-noise expert;
-- expert-parallel plus HSDP, building per-expert sharded/replicated meshes;
-- DanceGRPO tensor parallel composed with FSDP, for example a single-node
-  `DP=4 x TP=2` mesh over eight GPUs;
-- non-FSDP mode with manual gradient all-reduce, mainly useful for small/LoRA runs.[^base-trainer][^base-rl]
-
-The DanceGRPO TP path applies tensor parallelism before FSDP2. Q/K/V and the
-first FFN projection are column-sharded; attention output and the second FFN
-projection are row-sharded. Wan normalizes Q/K across all heads, so the TP
-implementation uses an autograd-aware TP all-reduce for the RMS statistic
-instead of changing the model to a local/per-head norm. Parameters outside
-those projections remain TP-replicated and are FSDP-sharded over the DP
-dimension.[^wan-tp][^pytorch-tp]
-
-TP ranks form one logical data replica: they use the same sampler shard,
-rollout seeds, reward, and replay inputs. Expensive VAE/CPU rewards run on TP
-rank 0 and are broadcast to its partner; rewards that call the Wan policy are
-marked `requires_policy_forward` and execute collectively on every TP rank.
-The current TP implementation is RL-only and deliberately rejects LoRA,
-HSDP, expert parallel, split RL, and trainable text encoders. Liger and
-`torch.compile` are supported together with TP, with two semantic safeguards:
-all current Wan RMSNorms are the global-across-head Q/K norms, so TP converts
-the initially installed Liger modules to its collective-aware norm; and that
-small collective-aware norm stays outside Dynamo because compiling through
-`distributed.nn` otherwise loses the matching backward all-reduce. The rest
-of each Wan block remains eligible for compilation. Modules are compiled in
-place so their checkpoint/state-dict identity is unchanged. The custom bf16
-activation-checkpoint path uses ambient autocast around non-reentrant
-`checkpoint()` so PyTorch records and restores it for recompute; an autocast
-`context_fn` is not compile-compatible in PyTorch 2.11.
-
-Expert parallel changes the effective model loaded on each rank. Ranks in group 0 load/train only `transformer`; ranks in group 1 load/train only `transformer_2`. The checkpoint runtime still writes the same `high/` and `low/` layout regardless of whether a flat or expert-parallel trainer produced the checkpoint.[^checkpoint-runtime]
+Both bases initialize distributed state, model modules, datasets,
+`StatefulDataLoader`, optimizers, EMA, W&B, and DCP. Changes to shared concerns
+such as checkpointing, FSDP, data loading, or resume semantics must be reviewed
+in both stacks.
 
 ## Data Flow
 
-Raw media path:
+Raw media:
 
 ```text
-JSON config -> Parquet rows -> videos/image/prompt
+dataset JSON -> Parquet row -> image + video(s) + prompt
   -> UMT5 prompt embeddings
-  -> VAE video latents
-  -> VAE first-frame condition tensor
-  -> trainer loss
+  -> VAE video latent and first-frame condition
+  -> trainer or rollout
 ```
 
-Latent path:
+Precomputed input:
 
 ```text
-latent_webdataset_dir/shard-*.tar
+shard-*.tar -> {key}.safetensors + {key}.json
   -> prompt_embeds + condition + latents
-  -> optional maze_* metadata
-  -> trainer loss or reward
+  -> optional reward tensors and metadata
+  -> trainer or rollout
 ```
 
-The raw dataset is Parquet-backed and supports either one final video (`video`) or an ordered chain (`videos`) for COS.[^i2v-dataset] The latent dataset is an `IterableDataset` built on WebDataset tar shards; it pads/truncates prompt embeddings to 512 tokens and passes through extra safetensors keys such as `maze_*` for rewards.[^latent-dataset] WebDataset's tar-shard design matches the repository's large-scale latent training use case.[^webdataset]
+The raw loader supports a single target or an ordered COS chain. The latent
+loader pads/truncates text embeddings and passes non-reserved tensors through
+to rewards. Iterable latent datasets require an exact `dataset_size` to keep
+rank-local epochs synchronized.
+
+## Distributed Execution
+
+### FSDP2 and HSDP
+
+FSDP2 uses `fully_shard`, mixed-precision policies, and device meshes. HSDP
+adds a replicated mesh dimension across machines while sharding within each
+machine. Non-FSDP mode uses manual gradient all-reduce and is mainly intended
+for bounded LoRA or diagnostic runs.
+
+### Expert parallelism
+
+A14B expert parallel assigns the high- and low-noise transformers to separate
+rank groups. Each rank loads only its expert, but checkpoint output still uses
+the unified `high/` and `low/` layout. Expert groups must keep sampling and
+control flow synchronized.
+
+### Tensor parallel RL
+
+The RL-only tensor-parallel path shards attention and feed-forward projections
+before applying FSDP over data replicas. It preserves Wan's global-across-head
+Q/K RMSNorm with an autograd-aware collective. Tensor-parallel ranks share one
+data shard, rollout seed, reward, and replay input; expensive pixel rewards run
+on TP rank zero and broadcast their results.
+
+The current tensor-parallel path rejects LoRA, HSDP, expert parallel, split
+actors, and trainable text encoders. It compiles modules in place so DCP keys
+remain stable.
+
+### Split rollout actors
+
+DanceGRPO can reserve the first rank group for FSDP training and the remaining
+ranks for rollout/reward actors. A bounded async queue carries complete prompt
+steps. LoRA or full policy tensors are synchronized at a configured interval;
+the full-model option requires async rollout.
+
+## DanceGRPO Pipeline
+
+```text
+prompt batch
+  -> G stochastic trajectories per prompt
+  -> VAE decode when required
+  -> asynchronous rule/VLM/model reward
+  -> group-relative advantages
+  -> selected replay timesteps
+  -> clipped policy surrogate + optional reference penalty
+  -> optimizer step
+```
+
+Shared-prompt mode distributes one prompt's group across ranks. Prompt waves
+prepare several subsets before replay. Delayed replay and split async rollout
+are distinct pipelines with different staleness semantics; see
+[Training](training.md) and
+[Async Rollout Design](dancegrpo_async_rollout_design.md).
+
+## Reward Boundary
+
+Rewards implement the interface in
+[`src/trainer/rewards/base.py`](../src/trainer/rewards/base.py) and are resolved
+through the registry. A reward declares whether it needs VAE decoding or a
+policy forward.
+
+`vbvr_rule` resolves all model/GT paths, prepares media, and starts CPU scorer
+workers against an explicit external EvalKit checkout. There is no bundled or
+implicit evaluator fallback. `vbvr_vlm` encodes the first frame and complete
+rollout for an external OpenAI-compatible service and validates a task-specific
+response schema.
 
 ## Checkpoint Runtime
 
-Checkpointing uses PyTorch Distributed Checkpoint (DCP). DCP calls `state_dict` / `load_state_dict` on Stateful objects, which is why the repository wraps model weights and scalar training state in `TrainState` and EMA in `EMA`.[^dcp][^checkpoint][^ema]
-
-Current checkpoints are written with a unified layout:
+PyTorch Distributed Checkpoint stores model and EMA state. Rank-local sidecars
+store optimizer and `StatefulDataLoader` state. New checkpoints use stable
+expert directories:
 
 ```text
 checkpoint-N/
   high/
-    .metadata + *.distcp
-    optimizer_transformer_rank{R}.pt
-    optimizer_text_encoder_rank{R}.pt
+    .metadata and *.distcp
+    optimizer_*_rank{R}.pt
     dataloader_rank{R}.pt
     lora/transformer/
   low/
-    .metadata + *.distcp
-    optimizer_transformer_2_rank{R}.pt
-    optimizer_text_encoder_rank{R}.pt
+    .metadata and *.distcp
+    optimizer_*_rank{R}.pt
     dataloader_rank{R}.pt
     lora/transformer_2/
 ```
 
-The design makes flat and expert-parallel checkpoints cross-loadable because both always use the same high/low directories. Legacy top-level DCP checkpoints are still loadable but are no longer written by the current runtime.[^checkpoint-runtime]
+Flat and expert-parallel jobs can exchange weight state through this layout
+when the required expert directories are present. Full resume additionally
+requires compatible optimizer, dataloader, counters, RNG, and topology. See
+[Checkpoints](checkpoints.md).
 
-## Configuration Model
+## Evaluation Architecture
 
-`TrainConfig` defines shared fields for model paths, raw/latent data, optimizer choice, trainable components, FSDP/HSDP/expert-parallel flags, LoRA, checkpointing, and logging. `SFTConfig`, `CorrectionConfig`, and `RLConfig` extend it with algorithm-specific fields.[^config]
+The public VBVR-Pro rule path separates GPU and CPU stages:
 
-Important config consequences:
+```text
+DCP -> validated Diffusers tree -> GPU generation
+    -> FFmpeg media preparation -> CPU external evaluator
+    -> score JSON and stage provenance
+```
 
-- `latent_webdataset_dir` switches the model loader into precomputed mode, skipping VAE and text encoder unless required.
-- `dataset_size` is required for correct scheduling and epoch length with iterable latent datasets.
-- `train_experts` selects high, low, or both experts; `expert_parallel` requires `train_experts: both`.
-- `transformer_load_dtype: auto` loads full fine-tuning transformers in fp32 but LoRA bases in bf16.
-- `prompt_dropout` zeroes whole prompt embeddings to train an unconditional CFG branch.
+[`src/eval/evaluation_provenance.py`](../src/eval/evaluation_provenance.py)
+fingerprints stage parameters, implementation files, inputs, and output trees.
+Generation and preparation can resume matching individual media; scoring is
+rewritten and promoted only after the complete result passes sample/error
+validation.
 
-## Architectural Tensions
+The optional VLM evaluation path reads already-generated cells into an
+independent append-only result root and partitions complete cells across
+evaluation machines.
 
-The source shows several useful but risky tensions:
+## Design Constraints
 
-- SFT and RL base trainers duplicate infrastructure. This keeps RL independent but creates drift risk for FSDP, dataset, checkpoint, EMA, and optimizer behavior.
-- `src/trainer/checkpoint.py` has a historical docstring that still describes a top-level flat checkpoint, while `checkpoint_runtime.py` now writes high/low subdirectories for all new checkpoints.
-- Correction training recommends EMA in comments, but current correction configs set `ema_decay: 0`, causing teacher rollout to use live student weights and triggering a runtime warning.
-- Expert parallel is effective for memory, but it relies on send/recv handshakes and identical control flow between peer ranks. Logging, reward computation, and sampling schedules must stay perfectly synchronized.
-
-[^train-i2v]: [`src/cli/train_i2v.py`](../src/cli/train_i2v.py)
-[^train-cos]: [`src/cli/train_cos.py`](../src/cli/train_cos.py)
-[^train-correction]: [`src/cli/train_i2v_correction.py`](../src/cli/train_i2v_correction.py)
-[^train-grpo]: [`src/cli/train_grpo.py`](../src/cli/train_grpo.py)
-[^eval-i2v]: [`src/cli/eval_i2v.py`](../src/cli/eval_i2v.py)
-[^eval-vbvr]: [`src/cli/eval_vbvr.py`](../src/cli/eval_vbvr.py)
-[^scripts-env]: [`scripts/lib/env.fish`](../scripts/lib/env.fish)
-[^scripts-readme]: [`scripts/README.md`](../scripts/README.md)
-[^wan-wrapper]: [`src/models/wan_i2v.py`](../src/models/wan_i2v.py)
-[^wan22]: Wan-AI, "Wan2.2-I2V-A14B-Diffusers", Hugging Face model card, https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B-Diffusers
-[^base-trainer]: [`src/trainer/base_trainer.py`](../src/trainer/base_trainer.py)
-[^base-rl]: [`src/trainer/base_rl_trainer.py`](../src/trainer/base_rl_trainer.py)
-[^base-grpo]: [`src/trainer/base_grpo_trainer.py`](../src/trainer/base_grpo_trainer.py)
-[^wan-tp]: [`src/trainer/tensor_parallel.py`](../src/trainer/tensor_parallel.py)
-[^pytorch-tp]: PyTorch, "Tensor Parallelism - torch.distributed.tensor.parallel", https://docs.pytorch.org/docs/stable/distributed.tensor.parallel.html
-[^fsdp2]: PyTorch, "`torch.distributed.fsdp.fully_shard`", https://docs.pytorch.org/docs/2.8/distributed.fsdp.fully_shard.html
-[^checkpoint-runtime]: [`src/trainer/checkpoint_runtime.py`](../src/trainer/checkpoint_runtime.py)
-[^i2v-dataset]: [`src/data/i2v_dataset.py`](../src/data/i2v_dataset.py)
-[^latent-dataset]: [`src/data/vbvr_latent_dataset.py`](../src/data/vbvr_latent_dataset.py)
-[^webdataset]: Hugging Face Hub docs, "WebDataset", https://huggingface.co/docs/hub/datasets-webdataset
-[^dcp]: PyTorch, "Distributed Checkpoint", https://docs.pytorch.org/docs/stable/distributed.checkpoint.html
-[^checkpoint]: [`src/trainer/checkpoint.py`](../src/trainer/checkpoint.py)
-[^ema]: [`src/trainer/ema.py`](../src/trainer/ema.py)
-[^config]: [`src/trainer/config.py`](../src/trainer/config.py)
+- FSDP-wrapped ranks must execute compatible module sequences; timestep or
+  expert-routing divergence can deadlock collectives.
+- Raw and latent data paths are not interchangeable, and latent artifacts are
+  model-family-specific.
+- Full-finetune RL replay can retain unsharded gradients unless each backward
+  synchronizes.
+- Evaluator source, scientific-media dependencies, manifest selection, and
+  video preparation all affect reported scores and are provenance inputs.
+- Weight-only initialization and true resume use the same checkpoint reader
+  but intentionally restore different state.
+- Training and RL base classes duplicate some runtime infrastructure; shared
+  changes require mirrored review and tests.

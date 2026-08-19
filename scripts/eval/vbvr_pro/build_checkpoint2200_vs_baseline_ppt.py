@@ -337,11 +337,7 @@ def prepare_movie_posters(cases: list[PairCase], output_dir: Path) -> dict[str, 
 
 
 def audit_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    candidates = (
-        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-        REPO_ROOT / "storage/presentations/vbvr_rl_demo_20260818/_preview_tooling/native/root/usr/share/fonts/truetype/"
-        "dejavu/DejaVuSans.ttf",
-    )
+    candidates = (Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),)
     for path in candidates:
         if path.is_file():
             return ImageFont.truetype(str(path), size=size)

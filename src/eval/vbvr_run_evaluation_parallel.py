@@ -1,4 +1,4 @@
-r"""Parallel drop-in replacement for VBVR-EvalKit's ``run_evaluation.py``.
+r"""Parallel adapter for an external VBVR-EvalKit ``run_evaluation.py``.
 
 Reuses EvalKit's functions verbatim (collect_videos, find_gt_info,
 evaluate_single_video, aggregate_score, finalize_summary) — the only change
@@ -11,14 +11,14 @@ EvalKit's EasyOCR-backed evaluators create GPU readers whenever CUDA is
 visible, regardless of the ``--device`` value. Run scoring with CUDA hidden
 and point EasyOCR at a writable or pre-populated model directory, for example::
 
-    CUDA_VISIBLE_DEVICES="" EASYOCR_MODULE_PATH=/personal/easyocr_module_root \
+    CUDA_VISIBLE_DEVICES="" EASYOCR_MODULE_PATH=/path/to/easyocr_root \
         .venv/bin/python -m src.eval.vbvr_run_evaluation_parallel ...
 
 Main-v2 also has evaluators that explicitly use ``./easyocr_models``. Workers
 run from ``--evalkit_dir`` so relative annotations resolve correctly; that
 checkout must therefore contain an ``easyocr_models`` directory or symlink.
 
-Usage (called by scripts/eval/vbvr/vbvr_rule_score.fish):
+Usage (called by the VBVR-Pro evaluation launchers):
     .venv/bin/python -m src.eval.vbvr_run_evaluation_parallel \
         --model_path /abs/path/model_out \
         --gt_base    /abs/path/VBVR-Bench \
@@ -48,8 +48,6 @@ from tqdm import tqdm
 
 from src.eval.vbvr_runtime import validate_vbvr_scorer_runtime
 
-_HERE = Path(__file__).resolve()
-_DEFAULT_EVALKIT = _HERE.parents[2] / "third_party" / "VBVR-EvalKit"
 _REQUIRED_EVALKIT_API = (
     "NumpyEncoder",
     "aggregate_score",
@@ -65,7 +63,7 @@ _WORKER_REK: ModuleType | None = None
 
 
 def evalkit_source_sha256(evalkit_dir: Path | str) -> str:
-    """Fingerprint the complete bundled EvalKit scoring contract.
+    """Fingerprint the complete external EvalKit scoring contract.
 
     Besides executable Python, main_v2 reads task annotation JSON files at
     runtime. Requirements are included as well so a dependency-contract edit
@@ -286,7 +284,7 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "EasyOCR scoring should run with CUDA hidden to prevent every worker from loading a model on GPU 0:\n"
-            '  CUDA_VISIBLE_DEVICES="" EASYOCR_MODULE_PATH=/personal/easyocr_module_root <command>\n'
+            '  CUDA_VISIBLE_DEVICES="" EASYOCR_MODULE_PATH=/path/to/easyocr_root <command>\n'
             "Workers chdir to --evalkit_dir; main_v2 also requires <evalkit_dir>/easyocr_models (a symlink is fine)."
         ),
     )
@@ -296,15 +294,13 @@ def main() -> int:
     ap.add_argument(
         "--evalkit_dir",
         type=Path,
-        default=_DEFAULT_EVALKIT,
-        help="EvalKit checkout containing run_evaluation.py (default: repository third_party checkout)",
+        required=True,
+        help="External EvalKit checkout containing run_evaluation.py",
     )
     ap.add_argument(
         "--expected_evalkit_source_sha256",
-        help=(
-            "Expected SHA-256 fingerprint of the complete bundled EvalKit "
-            "scoring contract; fail before scoring on a mismatch"
-        ),
+        required=True,
+        help="Expected SHA-256 fingerprint of the complete EvalKit scoring contract",
     )
     ap.add_argument(
         "--expected_videos",
@@ -334,7 +330,7 @@ def main() -> int:
         return 1
     try:
         source_sha256 = evalkit_source_sha256(evalkit_dir)
-        if args.expected_evalkit_source_sha256 and source_sha256 != args.expected_evalkit_source_sha256.lower():
+        if source_sha256 != args.expected_evalkit_source_sha256.lower():
             raise RuntimeError(
                 "EvalKit source fingerprint mismatch: "
                 f"expected={args.expected_evalkit_source_sha256.lower()}, "

@@ -2,7 +2,7 @@
 
 The renderer publishes one small atomic manifest per sample shard. This watcher
 reads only those manifests (never the million-file media tree), so it is safe to
-poll on shared cluster storage every few seconds.
+poll on shared storage every few seconds.
 """
 
 from __future__ import annotations

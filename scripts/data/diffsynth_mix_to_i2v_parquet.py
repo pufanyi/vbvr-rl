@@ -1,4 +1,4 @@
-"""Convert a DiffSynth multi-annotation config to Wan-Trainer I2V parquet.
+"""Convert a DiffSynth multi-annotation config to VBVR-RL I2V parquet.
 
 The input config is a dict whose values contain ``annotation`` and optional
 ``root`` fields. Each annotation may be JSON or JSONL. Output rows use the

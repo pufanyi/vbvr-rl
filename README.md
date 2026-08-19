@@ -1,372 +1,336 @@
-# Wan-Trainer
+# VBVR-RL
 
-Wan-Trainer is a research training stack for **Wan2.2 Image-to-Video** models. The current codebase supports supervised flow-matching fine-tuning, Chain-of-Step (COS) path training, on-policy correction, DanceGRPO-style replay, TP+FSDP full fine-tuning, latent WebDataset training, DCP checkpointing, LoRA extraction/loading, and VBVR-style evaluation.
+VBVR-RL is a research training and evaluation stack for reinforcement learning
+of Wan2.2 image-to-video models on VBVR-Pro. It includes supervised
+fine-tuning, Chain-of-Step training, on-policy correction, DanceGRPO-style
+replay, Flow-CPS sampling, distributed full fine-tuning, LoRA, DCP
+checkpointing, and provenance-checked VBVR-Pro evaluation.
 
-The detailed English documentation lives in [`docs/`](docs/README.md). Start there if you need the full architecture and code-path analysis.
+This repository is a source release. Model weights, datasets, generated media,
+and the third-party VBVR evaluator are not bundled.
 
-## Setup
+## Highlights
+
+- Wan2.2 I2V A14B and TI2V-5B training through Diffusers.
+- Raw Parquet and latent WebDataset input pipelines.
+- SFT, COS, correction, and grouped on-policy RL objectives.
+- FSDP2, HSDP, expert parallelism, and RL-only tensor parallelism.
+- Fixed and randomized Flow-CPS coefficients with replay-consistent sampling.
+- Rule-based VBVR-Pro rewards and task-specific Qwen VLM rewards.
+- Unified high/low DCP checkpoints, EMA, and PEFT-compatible LoRA sidecars.
+- Resumable VBVR-Pro generation, media preparation, scoring, and provenance
+  audits.
+
+## Release Scope
+
+The repository contains the training runtime, configs, launchers, tests, and
+VBVR-Pro integration code. It intentionally does not contain:
+
+- Wan or Qwen model weights;
+- the VBVR-Pro evaluation set or the 50,000-sample RL dataset;
+- VBVR-EvalKit source code or EasyOCR model weights;
+- credentials, object-store SDKs, scheduler settings, or host-specific paths;
+- generated checkpoints, videos, W&B runs, or evaluation outputs.
+
+All local artifacts should live under the ignored `storage/` directory.
+
+## Requirements
+
+- Linux
+- Python 3.12
+- `uv`
+- Fish shell for the provided launchers
+- An NVIDIA GPU and driver compatible with the locked PyTorch 2.11 CUDA 12.6
+  wheels for GPU workflows
+- A host C/C++ compiler and Python development headers when Triton must compile
+  a fresh CUDA driver helper
+
+CPU-only documentation checks and most unit tests do not require model weights.
+Training and video generation require CUDA.
+
+## Quick Start
+
+Clone and create the locked environment:
 
 ```bash
-# Python >= 3.12
+git clone https://github.com/pufanyi/vbvr-rl.git
+cd vbvr-rl
 uv sync --frozen
 uv sync --frozen --check
 ```
 
-The lockfile selects the official PyTorch 2.11 CUDA 12.6 wheels. The Python
-media stack uses `decord2`, headless OpenCV, and a bundled FFmpeg/ffprobe
-fallback, so a system FFmpeg installation is optional.
-
-Expected repository layout:
-
-```text
-storage/models/Wan2.2-I2V-A14B-Diffusers/
-data/
-storage/checkpoints/
-storage/eval_out/
-```
-
-Most launchers source `scripts/lib/env.fish`, activate `.venv`, set `PYTHONPATH`, and run from the repository root.
-
-## Runtime and Data Setup
-
-The checked-in configs use repository-relative paths. Keep models, datasets,
-checkpoints, evaluator checkouts, and generated outputs beneath the ignored
-`storage/` tree; use `/tmp` only for disposable per-process artifacts. Supply
-object-store credentials and proxy settings through the runtime environment,
-never through committed files.
-
-### Public VBVR-Pro Data
-
-The runnable manifest-RL configs use the public
-`pufanyi/vbvr-pro-rl-indomain-50k` snapshot. After downloading it beneath
-`storage/datasets/vbvr-pro-rl-indomain-50k`, materialize the raw training tree:
+Check the installed scorer/media runtime:
 
 ```bash
-.venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
-  --dataset-root storage/datasets/vbvr-pro-rl-indomain-50k \
-  --output-dir storage/datasets/vbvr-pro-rl-indomain-50k/materialized \
-  --expected-samples 50000 --workers 8
+.venv/bin/python -m src.eval.vbvr_runtime
 ```
 
-The downloaded shards are publication assets, not latent WebDataset input.
-Restoring the training/reward-critical fields creates the standard 50,000-sample
-small-file tree consumed by the configs. Its manifest is task-grouped, so the
-configs apply a deterministic raw-index shuffle.
-
-Do not use host-specific absolute paths for scorer inputs.
-Spawned VBVR workers change their working directory to the pinned EvalKit
-checkout. `VBVRRuleReward` therefore resolves GT video, first/final frame,
-metadata, and source-directory paths before crossing the process boundary.
-Without that normalization, repo-relative data works in the trainer but becomes
-missing in the worker; EvalKit can then return a valid-looking reward of
-exactly zero without raising an exception.
-
-### Optional Remote Media
-
-The public configs use local files and require no object-store client. Custom
-raw-data descriptors may still reference `s3://` media. To enable those paths,
-set `WAN_TRAINER_REMOTE_DOWNLOADER` to an external command prefix; the loader
-appends the source URI and local destination as two arguments and invokes the
-command without a shell. For example:
-
-```bash
-export WAN_TRAINER_REMOTE_DOWNLOADER='/path/to/downloader --profile training'
-export WAN_TRAINER_REMOTE_CACHE_DIR=storage/remote_cache
-```
-
-Install and authenticate that downloader outside the repository. Do not put
-credentials in the command itself because process listings may expose its
-arguments.
-
-### Distributed Runtime
-
-Run the same Git commit and locked environment on every machine. The launcher
-expects `MASTER_ADDR`, `MASTER_PORT`, `WORLD_SIZE` (machine count), and `RANK`
-(zero-based machine rank):
-
-```bash
-MASTER_ADDR=<rank-0-host> MASTER_PORT=29500 \
-WORLD_SIZE=<machines> RANK=<machine-rank> \
-fish scripts/train/grpo_multinode.fish --nproc 8 -- \
-  --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_rule_cps_from_nsft_bs_32_lr_5e-6_manifest_rl.yaml
-```
-
-Before a new image or topology runs training, execute the all-machine compiler
-and runtime preflight with the same scheduler variables:
-
-```bash
-WAN_TRAINER_TRITON_PREFLIGHT_ONLY=1 \
-fish scripts/train/grpo_multinode.fish --nproc 8 -- \
-  --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_rule_cps_from_nsft_bs_32_lr_5e-6_manifest_rl.yaml
-```
-
-Use `uv sync --frozen --check` to verify dependency parity. Run
-`.venv/bin/python -m src.cli.validate_grpo_runtime --grpo_reward_fn vbvr_rule`
-on every machine before loading model weights. Runtime-only images also need
-matching Python development headers for fresh Triton builds; install the
-matching `python3.12-dev` package or run
-`fish scripts/dev/bootstrap_triton_python_headers.fish` once.
-
-The Triton cache defaults to node-local `/tmp/wan-trainer-triton-cache`.
-Downloaded attention kernels persist under `~/.cache/wan-trainer/kernels` or
-the path supplied by `WAN_TRAINER_KERNELS_CACHE`. Prefetch the pinned FA3
-artifact before submitting an offline job:
-
-```bash
-.venv/bin/python -m src.cli.prefetch_attention_kernel --backend _flash_3_hub
-```
-
-### Topology and Memory Rules
-
-- Multi-node full fine-tuning uses `hsdp: true`; bounded one-node validation uses
-  `hsdp: false` and plain FSDP.
-- Keep `grpo_fsdp_sync_each_backward: true` for full fine-tuning. Suppressing
-  FSDP gradient synchronization retains full unsharded gradients and is an OOM
-  trap, especially for A14B's two experts.
-- Keep `grpo_offload_inference_models: true` when memory headroom matters; T5
-  and VAE are restored for raw encoding/reward and offloaded before replay.
-- `batch_size` is the global prompt count in shared-prompt GRPO. The checked-in
-  `batch_size=32`, `G=32`, and prompt-wave settings target world size 128.
-  Adjust all three together when scaling to a different world size.
-- `grpo_shared_prompt_microbatch_size` must divide both the global prompt batch
-  and the data-parallel world. `G` must divide the ranks assigned to each
-  prompt.
-- The current replay path reuses rollout chunks; it does not independently
-  enforce a smaller `grpo_train_sample_batch_size`. Size memory from
-  `grpo_sample_batch_size` until replay rechunking is implemented.
-
-For VBVR reward work, keep generated/prepared temporary videos under `/tmp`.
-`vbvr_reward_cpu_workers` is per reward-producing rank, so size the aggregate
-process/thread budget for the host and validate `reward_drain` before raising
-worker or native-thread counts. Point `WANDB_DIR` at a writable run directory.
-
-### Reward-Zero Triage and Validated Boundaries
-
-An all-zero hard-rule reward is not normal. Before blaming the model:
-
-1. Run `.venv/bin/python -m src.cli.validate_grpo_runtime --config <config>`.
-2. Search every rank for `VBVR rule reward failed`, OpenCV/EasyOCR warnings,
-   and dependency fingerprint changes.
-3. Preserve one online scorer input with `vbvr_reward_keep_tmp: true` and one
-   rollout video, then score that exact MP4 with
-   `scripts/dev/validate_vbvr_reward_alignment.py`.
-4. Check that every GT path passed to the scorer is absolute and exists from
-   the worker process. `vbvr_reward_fail_on_error: false` cannot expose this
-   bug because missing GT may produce a numeric zero rather than an exception.
-5. If a run loaded a contaminated scorer environment, restart the complete job
-   from the last clean checkpoint; repairing packages on disk does not replace
-   modules already imported by scorer workers.
-
-Resume semantics also matter across experiments. `auto_resume: true` combined with
-`reset_dataloader: true` loads the latest checkpoint as weight-only
-initialization and restarts optimizer/step/epoch/dataloader state. It therefore
-repeats the epoch-0 sample permutation. Use isolated output/W&B/tmp namespaces
-for different resolutions, scorer revisions, learning rates, and delayed-replay
-modes; never auto-resume an incompatible run.
-
-## Main Workflows
-
-Supervised I2V / COS:
-
-```fish
-fish scripts/train/i2v.fish --nproc 8 -- --config configs/train_sft_vbvr.yaml
-fish scripts/train/i2v.fish --nproc 8 -- --config configs/train_cos_maze_cos_path_all_bfs_w_color_latent.yaml
-fish scripts/train/i2v.fish --nproc 8 -- --config configs/train_sft_maze_lr_5e-6.yaml
-```
-
-DanceGRPO:
-
-```fish
-fish scripts/train/grpo.fish --nproc 8 --config configs/train_grpo_maze.yaml
-fish scripts/train/grpo.fish --nproc 8 --config configs/train_dancegrpo_maze.yaml
-fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8
-
-# Co-host a Qwen3.6 VLM judge per node, then run the standard scheduler
-# contract (MASTER_ADDR/WORLD_SIZE/RANK) for a three-step smoke.
-fish scripts/train/grpo_vlm_eval_multinode.fish --nproc 8 --config \
-  configs/train_dancegrpo_vbvr_pro_5b_384x384x81_vlm_qwen36_smoke_1node_3step.yaml
-
-# WORLD_SIZE=4/8/16: four TP2 judge replicas per machine.
-fish scripts/train/grpo_vlm_eval_scaleout.fish \
-  --yaml=configs/train_dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml \
-  --max_steps 1 --save_steps 0 --no-save_final_checkpoint --no-auto_resume
-
-# Lower-pressure native-384 variant.
-fish scripts/train/grpo_vlm_eval_scaleout.fish \
-  --yaml=configs/train_dancegrpo_vbvr_pro_5b_384x384x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml \
-  --max_steps 1 --save_steps 0 --no-save_final_checkpoint --no-auto_resume
-
-# Single-node A14B full fine-tuning: TP2 x FSDP4, global prompt batch 16.
-fish scripts/train/grpo.fish --nproc 8 --config \
-  configs/train_dancegrpo_vbvr_pro_a14b_256x256x161_rule_cps_from_sft_diffsynth_mix_260603_bs_16_lr_1e-5_full_tp2_fsdp4.yaml
-
-# Four-node counterpart: TP2 x FSDP16, still global prompt batch 16.
-# Run the same command on every scheduler node with WORLD_SIZE=4 and RANK=0..3.
-fish scripts/train/dancegrpo_vbvr_pro_a14b_full_tp2_4node.fish
-```
-
-The VLM co-hosting design, isolated vLLM environment, Qwen model download,
-reward contract, and true multi-node vLLM alternatives are documented in
-[`docs/vlm_judge_reward.md`](docs/vlm_judge_reward.md).
-
-The VLM run's incremental formal evaluator now generates/EvalKit-scores missing
-cells and then automatically fills only missing task-specific Qwen judgments:
-
-```fish
-fish scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_incremental_multinode.fish \
-  formal --nproc 8
-```
-
-On one evaluation machine, omit scheduler variables; the adapter defaults to
-`WORLD_SIZE=1` and `RANK=0`, while `--nproc` remains the local GPU count. For
-multiple machines, run it on every node with both variables set. Completed
-formal and VLM cells are audited and skipped; a node with no pending judge work
-does not start Qwen. Use `--no-vlm-judge` for an EvalKit-only invocation.
-
-To score another existing formal VBVR-Pro video tree with that same
-task-specific Qwen contract, without running Wan inference again:
-
-```fish
-fish scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_vlm_judge_multinode.fish \
-  score --input-root /path/to/formal-result-root --concurrency 16
-```
-
-The command is single-node by default and uses evaluation-machine
-`WORLD_SIZE/RANK` for deterministic multi-node cell sharding when provided.
-After a checkpoint-only judge matrix completes, render its audited standalone
-curve with a contract-matched six-sampler baseline root:
-
-```fish
-.venv/bin/python -m src.cli.plot_vbvr_vlm_checkpoint_trends \
-  --vlm-judge-root /path/to/checkpoint-vlm-results \
-  --vlm-baseline-root /path/to/complete-vlm-results-with-baselines \
-  --output-dir /path/to/trend-plots
-```
-
-Single-GPU official Wan2.2-TI2V-5B end-to-end smoke:
+For a one-GPU end-to-end training smoke, first create a deterministic local
+fixture:
 
 ```bash
 .venv/bin/python scripts/dev/create_i2v_smoke_dataset.py \
   --output-dir storage/smoke/i2v_512x512x81 \
-  --samples 4 --frames 81 --height 512 --width 512 --fps 16
+  --samples 4 \
+  --frames 81 \
+  --height 512 \
+  --width 512 \
+  --fps 16
+```
 
+Place the official TI2V-5B Diffusers model at
+`storage/models/Wan2.2-TI2V-5B-Diffusers`, then run:
+
+```bash
 .venv/bin/torchrun --standalone --nproc_per_node=1 \
   -m scripts.dev.validate_grpo_parameter_update \
   --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_official_base_smoke_1gpu.yaml
 ```
 
-This smoke uses LoRA and the model-internal `neg_loss` reward. It verifies raw
-T5/VAE encoding, Flow-CPS rollout, replay, backward, and a nonzero optimizer
-update; it does not replace the full-FT, multi-node `vbvr_rule` production run.
-To exercise the locally downloaded merged DiffSynth step-35500 with the same
-bounded smoke, override only the model and output paths:
+This bounded smoke uses LoRA and the model-internal `neg_loss` reward. It
+verifies data loading, T5/VAE encoding, Flow-CPS rollout, replay, backward, and
+a nonzero optimizer update. It does not validate the external rule scorer or a
+production distributed topology.
+
+See [Getting Started](docs/getting_started.md) for model, dataset, evaluator,
+and distributed setup.
+
+## Artifact Layout
+
+The checked-in configs use repository-relative paths. A typical installation
+looks like this:
+
+```text
+storage/
+  models/
+    Wan2.2-TI2V-5B-Diffusers/
+    Wan2.2-I2V-A14B-Diffusers/
+  datasets/
+    vbvr-pro-rl-indomain-50k/
+    vbvr-pro-eval-500/
+  evalkits/
+    <external-compatible-evalkit-checkout>/
+    easyocr-shared/
+  checkpoints/
+  eval_out/
+  tmp/
+```
+
+The paths under `storage/` are examples of the runtime contract, not bundled
+assets.
+
+## Public VBVR-Pro RL Data
+
+The manifest-RL configs use the public Hugging Face dataset
+[`pufanyi/vbvr-pro-rl-indomain-50k`](https://huggingface.co/datasets/pufanyi/vbvr-pro-rl-indomain-50k).
+Download it into the expected ignored directory:
 
 ```bash
-.venv/bin/torchrun --standalone --nproc_per_node=1 \
-  -m src.cli.train_grpo \
-  --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_official_base_smoke_1gpu.yaml \
-  --model_path storage/models/diffsynth_converted_5b/wan2.2-TI2V-5B_260715_vbvr_pro_step-35500 \
-  --output_dir storage/checkpoints/dancegrpo_vbvr_pro_5b_512x512x81_step35500_smoke_1gpu
+hf download pufanyi/vbvr-pro-rl-indomain-50k \
+  --repo-type dataset \
+  --local-dir storage/datasets/vbvr-pro-rl-indomain-50k
 ```
 
-On-policy correction:
-
-```fish
-fish scripts/train/i2v_correction.fish --nproc 8 -- --config configs/train_correction_vbvr.yaml
-```
-
-Latent precompute:
-
-```fish
-fish scripts/precompute/maze_webdataset.fish --num_samples 20000
-
-.venv/bin/torchrun --nproc_per_node=8 -m src.precompute.i2v_latent_webdataset \
-  --config configs/train_sft_maze.yaml \
-  --output_dir data/maze/latents/webdataset \
-  --batch_size 4 \
-  --samples_per_shard 1000
-```
-
-Inference and evaluation:
+The published shards are lossless raw assets, not trainer-ready latent shards.
+Materialize the five fields required by raw training and rule scoring:
 
 ```bash
-.venv/bin/python -m src.cli.infer_i2v \
-  --image path/to/image.jpg \
-  --prompt "A concise I2V prompt." \
-  --output storage/outputs/sample.mp4
-
-fish scripts/eval/vbvr/vbvr_generate_score.fish
+.venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
+  --dataset-root storage/datasets/vbvr-pro-rl-indomain-50k \
+  --output-dir storage/datasets/vbvr-pro-rl-indomain-50k/materialized \
+  --expected-samples 50000 \
+  --workers 8
 ```
 
-## Data Inputs
+The command is resumable, verifies restored files against `samples.jsonl`, and
+writes `materialized/dataset.json`. Details are in [Data](docs/data.md).
 
-Raw training uses a JSON config that points to one or more Parquet files:
+## External VBVR Evaluator
 
-```json
-[
-  {
-    "data_path": "/path/to/train.parquet",
-    "root": "/path/to/media/root",
-    "num_frames": 81,
-    "height": 256,
-    "width": 256,
-    "fps": 16
-  }
-]
+VBVR-EvalKit is deliberately not vendored. Every `vbvr_rule` training config
+must set both:
+
+```yaml
+vbvr_reward_evalkit_dir: storage/evalkits/<checkout>
+vbvr_reward_evalkit_source_sha256: <64-hex-scorer-contract-digest>
 ```
 
-Each Parquet row should contain:
+Offline rule scoring likewise requires `--evalkit_dir` and
+`--expected_evalkit_source_sha256`. The fingerprint covers the entrypoint,
+evaluator Python files, annotations, and requirements. A source mismatch is a
+hard error because changing the evaluator changes the RL objective and the
+reported metric.
 
-- `videos`: ordered `list<string>` for COS or multi-step chains, where the last item is the final target.
-- `video`: single target video path, used when `videos` is absent.
-- `prompt`: text prompt.
-- `image`: optional reference image. If omitted, the first frame of the final video is used.
+The recorded `main_v2` experiments use a compatibility fork and must not be
+silently substituted with the public upstream default branch. Obtain a
+compatible checkout separately, or override the revision and digest only when
+you intentionally define a new scorer contract. See
+[External EvalKit](docs/external_evalkit.md).
 
-Latent training uses `latent_webdataset_dir` pointing at `shard-*.tar` files. Each sample stores `prompt_embeds`, `condition`, and either `latents` or `latents_0`, `latents_1`, ... for COS chains. Set `dataset_size` in latent configs so schedules and epoch lengths are well-defined.
+## Training
+
+Single-machine SFT/COS launchers use `scripts/train/i2v.fish`:
+
+```fish
+fish scripts/train/i2v.fish --nproc 8 -- \
+  --config configs/train_sft_vbvr_5b_256x256x161_lr_1e-5.yaml
+```
+
+Single-machine RL uses `scripts/train/grpo.fish`:
+
+```fish
+fish scripts/train/grpo.fish --nproc 8 \
+  --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_official_base_smoke_1gpu.yaml
+```
+
+The one-GPU config above is a smoke config; pass `--nproc 1` when running it
+through the Fish launcher. Production configs are topology-specific reference
+configs and must be reviewed before launch.
+
+For multiple machines, run the same command on every machine with the
+scheduler-provided rendezvous values:
+
+```bash
+MASTER_ADDR=<rank-zero-host> \
+MASTER_PORT=29500 \
+WORLD_SIZE=<machine-count> \
+RANK=<machine-rank> \
+fish scripts/train/grpo_multinode.fish --nproc 8 -- \
+  --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_rule_cps_from_nsft_bs_32_lr_5e-6_manifest_rl.yaml
+```
+
+`WORLD_SIZE` is the machine count; `--nproc` is the number of local training
+processes. The selected YAML still determines global prompt, rollout, replay,
+and sharding semantics. Read [Configuration](docs/configuration.md) and
+[Training](docs/training.md) before adapting a reference config.
+
+## VBVR-Pro Evaluation
+
+The supported public evaluation path lives under `scripts/eval/vbvr_pro/`.
+The shared launcher performs:
+
+1. DCP-to-Diffusers conversion or validation of a preconverted model;
+2. exact-manifest video generation;
+3. frame-preserving resize/pad/retime preparation;
+4. CPU rule scoring through an external pinned EvalKit checkout;
+5. provenance validation and aggregate export.
+
+Inspect a configured run without loading weights:
+
+```bash
+DRY_RUN=1 \
+CHECKPOINT=storage/checkpoints/<run>/checkpoint-100 \
+GT_BASE=storage/datasets/vbvr-pro-eval-500 \
+EVALKIT_DIR=storage/evalkits/<checkout> \
+fish scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish
+```
+
+For a real run, also provide a compatible evaluator source through either an
+existing `EVALKIT_DIR` or `EVALKIT_REPO`, and use an output directory dedicated
+to that model, sampler, media, manifest, and scorer contract.
+
+The full procedure and completion criteria are documented in
+[Evaluation](docs/evaluation.md) and
+[VBVR-Pro Evaluation](docs/vbvr_pro_eval.md).
+
+## Checkpoints
+
+Training uses PyTorch Distributed Checkpoint. New checkpoints have stable
+`high/` and `low/` expert directories regardless of whether the producing job
+used expert parallelism. Model/EMA state is stored with DCP; optimizer and
+dataloader state are rank-local sidecars; LoRA runs additionally emit
+PEFT-compatible adapter folders.
+
+Use the conversion CLI for portable Diffusers inference:
+
+```bash
+.venv/bin/python -m src.cli.convert_dcp_to_diffusers \
+  --checkpoint storage/checkpoints/<run>/checkpoint-100 \
+  --base_model storage/models/Wan2.2-TI2V-5B-Diffusers \
+  --output storage/models/converted/<run>-checkpoint-100 \
+  --merge_lora
+```
+
+See [Checkpoints](docs/checkpoints.md) for resume versus weight-only
+initialization semantics.
+
+## Validation
+
+Run project tests from the explicit test directory:
+
+```bash
+.venv/bin/python -m pytest tests
+```
+
+Run the same lint and formatting checks as CI:
+
+```bash
+.venv/bin/ruff check --output-format=github .
+.venv/bin/ruff format --check .
+```
+
+For rule-reward configs, validate the complete GRPO runtime before allocating
+model memory:
+
+```bash
+.venv/bin/python -m src.cli.validate_grpo_runtime \
+  --config configs/<rule-reward-config>.yaml
+```
 
 ## Repository Map
 
 ```text
-src/cli/          entry points for training, inference, evaluation, conversion
-src/models/       Wan2.2 training wrapper and COS path implementations
-src/data/         raw Parquet and latent WebDataset loaders
-src/trainer/      SFT, COS, correction, GRPO, checkpointing, EMA, optimizers
-src/precompute/   VAE/T5 latent precompute and synthetic maze generation
-src/eval/         VBVR generation/result tooling and VLM judge
-configs/          runnable training configs
-scripts/          fish launchers and operator utilities
-tests/            focused unit/consistency checks
-docs/             architecture, training, data, evaluation, and improvement docs
+src/cli/          training, inference, conversion, and evaluation entrypoints
+src/models/       Wan2.2 model wrapper and COS paths
+src/data/         raw-media, WebDataset, and remote-I/O loaders
+src/trainer/      SFT/RL trainers, rewards, distributed runtime, checkpoints
+src/precompute/   latent and synthetic-data builders
+src/eval/         VBVR-Pro scoring, provenance, and reporting helpers
+configs/          reference experiment and smoke configs
+scripts/          Fish launchers and operator utilities
+tests/            focused unit and contract tests
+docs/             public guides and historical research reports
 ```
-
-## Checkpoints
-
-Training checkpoints use PyTorch Distributed Checkpoint (DCP). New checkpoints are written with a unified expert layout:
-
-```text
-checkpoint-N/
-  high/
-    .metadata
-    *.distcp
-    optimizer_transformer_rank*.pt
-    dataloader_rank*.pt
-    lora/transformer/
-  low/
-    .metadata
-    *.distcp
-    optimizer_transformer_2_rank*.pt
-    dataloader_rank*.pt
-    lora/transformer_2/
-```
-
-Use `--checkpoint <checkpoint-dir> --use_ema` with `src.cli.eval_i2v` to generate from a DCP checkpoint. Conversion helpers live under `src/cli/convert_dcp_to_diffusers.py` and `src/cli/convert_dcp_to_lora.py`.
 
 ## Documentation
 
-- [`docs/architecture.md`](docs/architecture.md): system architecture and code-path analysis.
-- [`docs/training.md`](docs/training.md): SFT, COS, correction, and DanceGRPO behavior.
-- [`docs/data.md`](docs/data.md): raw and latent dataset contracts.
-- [`docs/evaluation.md`](docs/evaluation.md): generation, VBVR, VLM/rule scoring.
-- [`docs/vbvr_pro_eval.md`](docs/vbvr_pro_eval.md): VBVR-Pro main_v2 eight-GPU evaluation.
-- [`docs/checkpoints.md`](docs/checkpoints.md): DCP, resume/init, LoRA, EMA.
-- [`docs/improvements/`](docs/improvements/README.md): algorithm-to-engineering improvement plan.
+- [Documentation index](docs/README.md)
+- [Getting started](docs/getting_started.md)
+- [Configuration](docs/configuration.md)
+- [Architecture](docs/architecture.md)
+- [Data and precompute](docs/data.md)
+- [Training](docs/training.md)
+- [Checkpoints](docs/checkpoints.md)
+- [Evaluation](docs/evaluation.md)
+- [External EvalKit](docs/external_evalkit.md)
+- [VBVR-Pro evaluation reference](docs/vbvr_pro_eval.md)
+- [Qwen VLM reward and judge](docs/vlm_judge_reward.md)
+- [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
+
+## Known Boundaries
+
+- Checked-in large-scale configs preserve specific research semantics; they are
+  examples, not automatic hardware discovery profiles.
+- Rule-based reward and reporting require a separately obtained compatible
+  evaluator checkout and EasyOCR weights.
+- The public 50,000-sample RL snapshot contains raw publication assets and must
+  be materialized before raw training.
+- The one-GPU smoke proves plumbing and an optimizer update, not model quality
+  or production-scale memory capacity.
+- VLM rewards require a separately hosted OpenAI-compatible multimodal service.
+- Existing `WAN_TRAINER_*` environment-variable names are retained for
+  compatibility even though the released project is named VBVR-RL.
+
+## Citation
+
+GitHub-compatible citation metadata is provided in
+[`CITATION.cff`](CITATION.cff). Update its version and release date together
+with future tagged releases.
+
+## License
+
+The repository source is released under the [MIT License](LICENSE). Models,
+datasets, evaluator code, and other external artifacts retain their own
+licenses and terms. Review those terms before downloading or redistributing
+them.

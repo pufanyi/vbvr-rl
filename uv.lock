@@ -3266,7 +3266,7 @@ wheels = [
 ]
 
 [[package]]
-name = "wan-trainer"
+name = "vbvr-rl"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

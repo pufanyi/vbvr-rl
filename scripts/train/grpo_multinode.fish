@@ -1,7 +1,7 @@
 #!/usr/bin/env fish
 # Wan2.2 I2V DanceGRPO multi-node training launcher
 #
-# Expected environment variables (typically set by the cluster scheduler):
+# Expected environment variables (typically set by the job scheduler):
 #   MASTER_ADDR  — hostname/IP of the master node
 #   WORLD_SIZE   — number of nodes
 #   RANK         — this node's rank (0-indexed)

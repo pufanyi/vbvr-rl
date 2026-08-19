@@ -1,9 +1,13 @@
 [project]
-name = "wan-trainer"
+name = "vbvr-rl"
 version = "0.1.0"
-description = "Add your description here"
+description = "Distributed Wan2.2 training and reinforcement learning for VBVR-Pro"
 readme = "README.md"
 requires-python = ">=3.12"
+authors = [
+    { name = "Pu Fanyi", email = "FPU001@e.ntu.edu.sg" },
+]
+license = "MIT"
 dependencies = [
     "decord2==3.4.0",
     "diffusers[torch]>=0.37.1",
@@ -11,7 +15,7 @@ dependencies = [
     "ffmpeg-binaries-compat==1.1.0",
     "ftfy>=6.3.1",
     # VBVR main_v2 scorer runtime. Keep these exact pins synchronized with
-    # src/eval/vbvr_runtime.py and the known-good pre-resume W&B snapshot.
+    # src/eval/vbvr_runtime.py and the documented evaluator contract.
     "imageio==2.37.3",
     "imageio-ffmpeg==0.6.0",
     "numpy==2.4.4",
@@ -55,6 +59,10 @@ dev = [
     "ruff==0.16.3",
 ]
 
+[project.urls]
+Repository = "https://github.com/pufanyi/vbvr-rl"
+Documentation = "https://github.com/pufanyi/vbvr-rl/tree/main/docs"
+
 [tool.uv]
 # Norfair 2.3 still declares numpy<2 even though the pinned VBVR evaluator is
 # exercised with the project's NumPy 2 stack. Keep the runtime constraint
@@ -79,7 +87,7 @@ select = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["wan_trainer"]
+known-first-party = ["src"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/trainer/rewards/vbvr_vlm_eval_prompts.py" = ["E501"]

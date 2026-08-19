@@ -1,6 +1,6 @@
 # Checkpoints
 
-Wan-Trainer uses PyTorch Distributed Checkpoint (DCP) for model and EMA state, plus rank-local `.pt` files for optimizer and dataloader state. The runtime is implemented in `CheckpointRuntimeMixin` and low-level helpers in `checkpoint.py`.[^checkpoint-runtime][^checkpoint]
+VBVR-RL uses PyTorch Distributed Checkpoint (DCP) for model and EMA state, plus rank-local `.pt` files for optimizer and dataloader state. The runtime is implemented in `CheckpointRuntimeMixin` and low-level helpers in `checkpoint.py`.[^checkpoint-runtime][^checkpoint]
 
 ## Why DCP
 
@@ -92,9 +92,22 @@ The remapper supports:
 
 `src.cli.convert_dcp_to_lora` extracts LoRA tensors and writes adapter folders from a DCP checkpoint.[^convert-lora]
 
-## Known Risks
+Example portable conversion:
 
-- `checkpoint.py` still has a historical top-level layout docstring, while the active writer is the unified high/low runtime. Treat `checkpoint_runtime.py` as authoritative for new checkpoints.
+```bash
+.venv/bin/python -m src.cli.convert_dcp_to_diffusers \
+  --checkpoint storage/checkpoints/<run>/checkpoint-100 \
+  --base_model storage/models/Wan2.2-TI2V-5B-Diffusers \
+  --output storage/models/converted/<run>-checkpoint-100 \
+  --merge_lora
+```
+
+For a published evaluation, retain conversion provenance identifying the base
+model, checkpoint tree, EMA choice, LoRA merge choice, dtype, converter source,
+and complete converted output tree.
+
+## Operational Limits
+
 - Optimizer fallback state for Muon non-2D parameters is stepped but not checkpointed by design.[^optimizer]
 - Weight-only init reads a full DCP subdirectory into CPU memory on rank 0. This is convenient but can be a startup memory spike for full 14B checkpoints.[^checkpoint-runtime]
 - If a checkpoint contains only one expert subdirectory, a flat trainer will load the available expert and warn/skip the missing one.

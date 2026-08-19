@@ -4,7 +4,7 @@
 #   baseline + every complete production checkpoint
 #   Flow-CPS {0.1, 0.3, 0.7, 0.9}, Euler ODE, UniPC ODE
 # All runs use 30 steps, CFG 1, seed 0, 512x512x81 at exact 16 FPS and the
-# pinned e140 main_v2 scorer. Four two-GPU jobs fill one eight-H800 wave.
+# pinned e140 main_v2 scorer. Independent two-GPU jobs may run concurrently.
 
 source (dirname (status filename))/../../../lib/env.fish
 

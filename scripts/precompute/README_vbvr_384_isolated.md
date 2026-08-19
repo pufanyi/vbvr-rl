@@ -190,9 +190,9 @@ Example from the aggregation machine:
 mkdir -p data/vbvr/latents/vbvr_384x384x81/prompt_embeds
 mkdir -p data/vbvr/latents/vbvr_384x384x81/vae_latents
 
-rsync -av machine1:/path/to/Wan-Trainer/data/vbvr/latents/vbvr_384x384x81/prompt_embeds/ \
+rsync -av machine1:/path/to/VBVR-RL/data/vbvr/latents/vbvr_384x384x81/prompt_embeds/ \
   data/vbvr/latents/vbvr_384x384x81/prompt_embeds/
-rsync -av machine1:/path/to/Wan-Trainer/data/vbvr/latents/vbvr_384x384x81/vae_latents/ \
+rsync -av machine1:/path/to/VBVR-RL/data/vbvr/latents/vbvr_384x384x81/vae_latents/ \
   data/vbvr/latents/vbvr_384x384x81/vae_latents/
 ```
 

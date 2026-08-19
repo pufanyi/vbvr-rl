@@ -45,9 +45,9 @@ Useful overrides:
 
 ## DCP to Diffusers Conversion
 
-`scripts/convert/dcp_to_diffusers.fish` should be run from the Wan-Trainer repo
-root. It sources `scripts/lib/env.fish`, activates the repo `.venv`, and sets
-`PYTHONPATH`.
+`scripts/convert/dcp_to_diffusers.fish` should be run from the VBVR-RL
+repository root. It sources `scripts/lib/env.fish`, activates the repo
+`.venv`, and sets `PYTHONPATH`.
 
 Important defaults:
 
