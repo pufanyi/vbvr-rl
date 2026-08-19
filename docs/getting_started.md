@@ -36,15 +36,15 @@ workers, and tests unambiguous.
 
 ## 2. Download a Base Model
 
-The smallest public smoke config expects the official TI2V-5B Diffusers model
-at `storage/models/Wan2.2-TI2V-5B-Diffusers`:
+The bounded smoke profile expects the official TI2V-5B Diffusers model at
+`storage/models/Wan2.2-TI2V-5B-Diffusers`:
 
 ```bash
 hf download Wan-AI/Wan2.2-TI2V-5B-Diffusers \
   --local-dir storage/models/Wan2.2-TI2V-5B-Diffusers
 ```
 
-The A14B reference configs instead expect
+The A14B reference config instead expects
 `storage/models/Wan2.2-I2V-A14B-Diffusers`. Review the model license and access
 requirements before downloading either artifact. A config may point at a
 compatible converted or fine-tuned Diffusers directory through `model_path`.
@@ -75,10 +75,16 @@ tensors actually change:
 ```bash
 .venv/bin/torchrun --standalone --nproc_per_node=1 \
   -m scripts.dev.validate_grpo_parameter_update \
-  --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_official_base_smoke_1gpu.yaml
+  --config configs/train_rl_5b_rule.yaml \
+  --one-gpu-smoke \
+  --model-path storage/models/Wan2.2-TI2V-5B-Diffusers \
+  --dataset-json storage/smoke/i2v_512x512x81/dataset.json \
+  --output-dir storage/smoke/checkpoints/rl_5b_update
 ```
 
-This smoke uses LoRA, Flow-CPS, and the model-internal `neg_loss` reward. It
+The validator derives a temporary single-GPU profile from the release config;
+it does not modify the YAML. The smoke uses LoRA, Flow-CPS, and the
+model-internal `neg_loss` reward. It
 covers raw loading, prompt and video encoding, rollout, replay, backward, and
 optimizer update. It deliberately does not require VBVR-Pro data or the
 external rule evaluator.
@@ -163,7 +169,7 @@ Single-machine DanceGRPO:
 
 ```fish
 fish scripts/train/grpo.fish --nproc 8 \
-  --config configs/<reviewed-rl-config>.yaml
+  --config configs/train_rl_a14b_rule.yaml
 ```
 
 Multi-machine DanceGRPO uses the same command on every machine:
@@ -174,7 +180,7 @@ MASTER_PORT=29500 \
 WORLD_SIZE=<machine-count> \
 RANK=<machine-rank> \
 fish scripts/train/grpo_multinode.fish --nproc 8 -- \
-  --config configs/<reviewed-rl-config>.yaml
+  --config configs/train_rl_5b_rule.yaml
 ```
 
 Here `WORLD_SIZE` is the machine count and `--nproc` is the local process
@@ -195,7 +201,7 @@ For a selected RL config, run the same preflight used by the launcher:
 
 ```bash
 .venv/bin/python -m src.cli.validate_grpo_runtime \
-  --config configs/<reviewed-rl-config>.yaml
+  --config configs/train_rl_5b_rule.yaml
 ```
 
 ## Troubleshooting

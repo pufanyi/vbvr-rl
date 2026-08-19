@@ -15,7 +15,7 @@ if not set -q WORLD_SIZE; or test "$WORLD_SIZE" != "4"
 end
 
 set -l script_dir (realpath (dirname (status filename)))
-set -l config configs/train_dancegrpo_vbvr_pro_a14b_256x256x161_rule_cps_from_sft_diffsynth_mix_260603_bs_16_lr_1e-5_full_tp2_fsdp4.yaml
+set -l config configs/train_rl_a14b_rule.yaml
 set -l run_stem dancegrpo_vbvr_pro_a14b_256x256x161_rule_cps_from_sft_diffsynth_mix_260603_bs16_lr_1e-5_full_tp2_fsdp16_4node_liger_compile
 
 exec fish $script_dir/grpo_multinode.fish \

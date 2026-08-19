@@ -84,7 +84,11 @@ Place the official TI2V-5B Diffusers model at
 ```bash
 .venv/bin/torchrun --standalone --nproc_per_node=1 \
   -m scripts.dev.validate_grpo_parameter_update \
-  --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_official_base_smoke_1gpu.yaml
+  --config configs/train_rl_5b_rule.yaml \
+  --one-gpu-smoke \
+  --model-path storage/models/Wan2.2-TI2V-5B-Diffusers \
+  --dataset-json storage/smoke/i2v_512x512x81/dataset.json \
+  --output-dir storage/smoke/checkpoints/rl_5b_update
 ```
 
 This bounded smoke uses LoRA and the model-internal `neg_loss` reward. It
@@ -190,12 +194,12 @@ Single-machine RL uses `scripts/train/grpo.fish`:
 
 ```fish
 fish scripts/train/grpo.fish --nproc 8 \
-  --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_official_base_smoke_1gpu.yaml
+  --config configs/train_rl_a14b_rule.yaml
 ```
 
-The one-GPU config above is a smoke config; pass `--nproc 1` when running it
-through the Fish launcher. Production configs are topology-specific reference
-configs and must be reviewed before launch.
+The A14B reference uses TP2 plus four-way FSDP on one eight-GPU machine.
+For the one-GPU LoRA smoke, use the bounded validator in [Quick Start](#quick-start).
+Production configs are topology-specific and must be reviewed before launch.
 
 For multiple machines, run the same command on every machine with the
 scheduler-provided rendezvous values:
@@ -206,7 +210,7 @@ MASTER_PORT=29500 \
 WORLD_SIZE=<machine-count> \
 RANK=<machine-rank> \
 fish scripts/train/grpo_multinode.fish --nproc 8 -- \
-  --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_rule_cps_from_nsft_bs_32_lr_5e-6_manifest_rl.yaml
+  --config configs/train_rl_5b_rule.yaml
 ```
 
 `WORLD_SIZE` is the machine count; `--nproc` is the number of local training

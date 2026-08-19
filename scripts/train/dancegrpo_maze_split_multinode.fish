@@ -21,7 +21,7 @@
 #       --train-nodes 2 --config configs/<reviewed-split-rl-config>.yaml
 #   WORLD_SIZE=1 RANK=0 MASTER_ADDR=127.0.0.1 \
 #       fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8 \
-#       --train-ranks 4 --config configs/train_dancegrpo_maze_split_async_smoke_lora.yaml
+#       --train-ranks 4 --config configs/<split-rl-config>.yaml
 
 set -l nproc 8
 set -l train_node_count auto

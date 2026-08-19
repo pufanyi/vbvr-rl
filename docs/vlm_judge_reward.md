@@ -243,7 +243,7 @@ MASTER_PORT=29500 \
 WORLD_SIZE=<machine-count> \
 RANK=<machine-rank> \
 fish scripts/train/grpo_vlm_eval_multinode.fish --nproc 8 -- \
-  --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_vlm_qwen36_cps_from_nsft_bs_32_lr_5e-6_manifest_rl_multinode.yaml
+  --config configs/train_rl_5b_vlm.yaml
 ```
 
 The default service uses the same visible GPUs as training with a configured

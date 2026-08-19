@@ -37,6 +37,10 @@
 - The release does not bundle model weights, datasets, evaluator source, OCR
   weights, or generated outputs. Store all such artifacts beneath ignored
   paths such as `storage/`, `wandb/`, `logs/`, and `tmp/`.
+- Keep the checked-in DanceGRPO surface to exactly three production references:
+  `configs/train_rl_5b_rule.yaml`, `configs/train_rl_5b_vlm.yaml`, and
+  `configs/train_rl_a14b_rule.yaml`. Derive bounded smoke parameters in the
+  validator instead of adding experiment-specific RL YAMLs.
 - `third_party/VBVR-EvalKit` is intentionally absent. The supported public
   rule-evaluation path is `scripts/eval/vbvr_pro/` plus helpers in `src/eval/`.
   Do not restore a vendored or implicit evaluator fallback.
@@ -83,8 +87,10 @@
   with the same base family and preprocessing contract used by training.
 - When raw production data is unavailable,
   `scripts/dev/create_i2v_smoke_dataset.py` creates a deterministic ignored
-  H.264/PNG/Parquet fixture. The matching config is
-  `configs/train_dancegrpo_vbvr_pro_5b_512x512x81_official_base_smoke_1gpu.yaml`.
+  H.264/PNG/Parquet fixture. Derive the matching bounded single-GPU profile
+  from `configs/train_rl_5b_rule.yaml` with
+  `scripts/dev/validate_grpo_parameter_update.py --one-gpu-smoke`; do not add a
+  separate checked-in smoke YAML.
 
 ## Public VBVR-Pro RL Snapshot
 
@@ -169,6 +175,11 @@
 - For stochastic `neg_loss` smokes, evaluate multiple group members together.
   Reward calls preserve/restore RNG, so repeated one-sample calls can receive
   identical values and yield zero advantages.
+- The release-derived TI2V-5B single-GPU smoke completed on an H800 with
+  512x512x81, G=2, T=2, Flow-CPS, LoRA-r16, and `neg_loss`: reward
+  `-0.1609 +/- 0.0060`, grad norm `0.0003`, 240 changed tensors, and 22.6/23.0
+  GiB allocated/reserved peak. This proves the bounded update path, not the
+  production distributed topology or external reward quality.
 
 ## Checkpoints
 

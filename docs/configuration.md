@@ -260,20 +260,18 @@ matters.
 
 ## Reference Config Selection
 
-Use filenames as a first filter, then inspect content. The most useful public
-starting points are:
+The release intentionally ships three RL configs:
 
 | Config | Intended use |
 | --- | --- |
-| `train_dancegrpo_vbvr_pro_5b_512x512x81_official_base_smoke_1gpu.yaml` | Bounded one-GPU plumbing and update test |
-| `train_dancegrpo_vbvr_pro_5b_*manifest_rl*.yaml` | Raw public VBVR-Pro manifest training references |
-| `train_dancegrpo_vbvr_pro_a14b_*full_tp2_fsdp4.yaml` | A14B RL with tensor parallel plus FSDP |
-| `train_dancegrpo_vbvr_pro_a14b_*lora_r32.yaml` | A14B LoRA plus HSDP reference |
-| `train_sft_vbvr_5b_*.yaml` | TI2V-5B latent SFT references |
+| `train_rl_5b_rule.yaml` | TI2V-5B, 512x512x81, HSDP, rule reward |
+| `train_rl_5b_vlm.yaml` | TI2V-5B, 512x512x81, HSDP, co-hosted Qwen VLM reward |
+| `train_rl_a14b_rule.yaml` | A14B, 256x256x161, TP2 plus FSDP4, rule reward |
 
-Names encode historical experiment choices; they do not guarantee the files
-referenced by `model_path`, `dataset_json`, or `resume_from` are present in a
-fresh checkout.
+The single-GPU update check derives temporary LoRA/`neg_loss` overrides from
+`train_rl_5b_rule.yaml`; it is not a fourth training config. None of these
+files guarantees that the external paths referenced by `model_path`,
+`dataset_json`, `resume_from`, or evaluator settings exist in a fresh checkout.
 
 ## Preflight Checklist
 

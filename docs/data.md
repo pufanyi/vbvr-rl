@@ -63,8 +63,9 @@ mounted but the complete raw data path still needs validation:
 ```
 
 It writes H.264 MP4s, first-frame PNGs, `samples.parquet`, and `dataset.json`
-under the ignored `storage/` tree. The resulting descriptor is consumed by
-`configs/train_dancegrpo_vbvr_pro_5b_512x512x81_official_base_smoke_1gpu.yaml`.[^smoke-data]
+under the ignored `storage/` tree. Pass the resulting descriptor to the
+single-GPU profile derived from `configs/train_rl_5b_rule.yaml` by
+`scripts/dev/validate_grpo_parameter_update.py`.[^smoke-data]
 
 ## Latent WebDataset
 
@@ -165,7 +166,7 @@ loader. Download only the video archives:
 ```
 
 Restore a flat VBVR-Pro tree and generate the descriptor consumed by the
-checked-in manifest-RL configs:
+checked-in RL configs:
 
 ```bash
 .venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
