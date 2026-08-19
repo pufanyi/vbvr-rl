@@ -1,10 +1,10 @@
-# VBVR-Pro `main_v2` Evaluation
+# VBVR-Pro Rule Evaluation
 
 This is the detailed operator reference for the manifest-locked, rule-based
-VBVR-Pro evaluation pipeline. The shared Fish launcher is:
+VBVR-Pro evaluation pipeline. The stable public launcher is:
 
 ```text
-scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish
+scripts/eval/vbvr_pro/run.fish
 ```
 
 It is designed to fail closed when model, data, media, evaluator, or runtime
@@ -20,7 +20,8 @@ The repository includes:
 - ODE and Flow-CPS generation entrypoints;
 - frame-preserving video preparation;
 - a parallel adapter for external EvalKit;
-- stage provenance, completion checks, sweep wrappers, and result summaries.
+- stage provenance, completion checks, a sampler sweep, and generic result
+  summaries.
 
 It does not include model weights, VBVR-Pro evaluation data, evaluator source,
 EasyOCR weights, or generated results.
@@ -86,115 +87,106 @@ The launcher repeats this check and records the full runtime report.
 Inspect the resolved top-level selections without cloning evaluator source,
 loading weights, or touching outputs:
 
-```bash
-DRY_RUN=1 \
-CHECKPOINT=storage/checkpoints/<run>/checkpoint-100 \
-BASE_MODEL=storage/models/Wan2.2-TI2V-5B-Diffusers \
-CONVERTED_MODEL=storage/models/converted/<run>-checkpoint-100 \
-GT_BASE=storage/datasets/vbvr-pro-eval-500 \
-EVALKIT_DIR=storage/evalkits/<compatible-checkout> \
-OUTPUT_ROOT=storage/eval_out/<run>/checkpoint-100-unipc \
-fish scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish
+```fish
+fish scripts/eval/vbvr_pro/run.fish \
+  --checkpoint storage/checkpoints/<run>/checkpoint-100 \
+  --converted-model storage/models/converted/<run>-checkpoint-100 \
+  --output-root storage/eval_out/<run>/checkpoint-100/unipc \
+  --sampler unipc \
+  --dry-run
 ```
 
-Always dry-run a wrapper after changing environment variables. A dry run does
-not prove that paths exist or fingerprints match; those checks occur in the
-real pipeline.
+Always dry-run after changing model, sampler, media, evaluator, or output
+arguments. A dry run does not prove that paths exist or fingerprints match;
+those checks occur in the real pipeline.
 
-## Core Environment Variables
+## Public CLI Contract
 
 ### Model and data
 
-| Variable | Meaning |
+| Option | Meaning |
 | --- | --- |
-| `CHECKPOINT` | DCP checkpoint directory when conversion is required |
-| `BASE_MODEL` | Base Diffusers model used to interpret the checkpoint |
-| `CONVERTED_MODEL` | Stable Diffusers output or preconverted input |
-| `PRECONVERTED_MODEL` | `1` to skip DCP conversion after validating the model and its provenance |
-| `CONVERSION_PROVENANCE` | Conversion/import manifest; default depends on preconverted mode |
-| `GT_BASE` | Flattened VBVR-Pro evaluation tree |
-| `SPLIT_MANIFEST` | Exact bench selection, default `<GT_BASE>/split_manifest.json` |
-| `EXPECTED_VIDEOS` | Required number of samples and outputs |
+| `--checkpoint PATH` | DCP checkpoint; mutually exclusive with `--model` |
+| `--model PATH` | Preconverted Diffusers model; mutually exclusive with `--checkpoint` |
+| `--base-model PATH` | Base Diffusers model used to interpret a DCP checkpoint |
+| `--converted-model PATH` | Stable conversion output, required with `--checkpoint` |
+| `--conversion-provenance PATH` | Immutable import record for a preconverted model |
+| `--gt-base PATH` | Flattened VBVR-Pro evaluation tree |
+| `--split-manifest PATH` | Exact bench selection; default `<gt-base>/split_manifest.json` |
+| `--expected-videos N` | Exact required sample and output count |
 
 ### Evaluator and OCR
 
-| Variable | Meaning |
+| Option | Meaning |
 | --- | --- |
-| `EVALKIT_DIR` | External checkout path |
-| `EVALKIT_REPO` | Optional Git source used only when `EVALKIT_DIR` is missing |
-| `EVALKIT_REV` | Exact Git revision required by the run |
-| `EVALKIT_SOURCE_SHA256` | Complete source-contract fingerprint |
-| `EASYOCR_SOURCE_MODELS` | Directory containing pre-populated OCR weight files |
-| `EASYOCR_ROOT` | Runtime EasyOCR root exposed to scorer workers |
-| `SCORE_WORKERS` | CPU scorer process count |
-| `SCORE_THREADS_PER_WORKER` | Native threads allowed inside each scorer process |
+| `--evalkit-dir PATH` | External checkout path |
+| `--evalkit-repo URL` | Optional Git source used only when the checkout is absent |
+| `--evalkit-revision REV` | Exact Git revision required by the run |
+| `--evalkit-source-sha256 HASH` | Complete source-contract fingerprint |
+| `--easyocr-model-dir PATH` | Directory containing pre-populated OCR weights |
+| `--easyocr-root PATH` | Runtime EasyOCR root exposed to scorer workers |
+| `--score-workers N` | CPU scorer process count |
+| `--score-threads N` | Native threads allowed inside each scorer process |
 
 The launcher creates `EVALKIT_DIR/easyocr_models` as a symlink to the staged
 OCR model directory. It refuses to replace a real directory at that path.
 
 ### Generation
 
-| Variable | Meaning |
+| Option | Meaning |
 | --- | --- |
-| `NUM_GPUS` | Local data-parallel generation process count |
-| `CUDA_DEVICES` | Visible CUDA device list for generation/conversion |
-| `HEIGHT`, `WIDTH` | Generated spatial size |
-| `NUM_FRAMES` | Fixed generated frame count |
-| `INFER_FPS` | Encoded generation FPS |
-| `NUM_INFERENCE_STEPS` | Denoising step count |
-| `GUIDANCE_SCALE` | Classifier-free guidance scale |
-| `SEED` | Deterministic base seed |
-| `GENERATION_MODE` | `ode` or `cps` |
-| `ODE_SOLVER` | `unipc` or `euler` when `GENERATION_MODE=ode` |
-| `CPS_NOISE_LEVEL` | Flow-CPS coefficient in `[0, 1]` |
-| `USE_ITEM_NUM_FRAMES` | `1` to derive a GT-duration-matched length per sample |
-| `TEMPORAL_ALIGNMENT` | Temporal alignment used for per-item frame lengths |
+| `--sampler NAME` | `unipc`, `euler`, or `cps` |
+| `--cps-noise FLOAT` | Required Flow-CPS coefficient in `[0, 1]` |
+| `--num-gpus N` | Local data-parallel generation process count |
+| `--cuda-devices LIST` | Visible CUDA device list for generation/conversion |
+| `--height N`, `--width N` | Generated spatial size |
+| `--num-frames N`, `--fps N` | Fixed generated media contract |
+| `--steps N` | Denoising step count |
+| `--guidance-scale FLOAT` | Classifier-free guidance scale |
+| `--seed N` | Deterministic base seed |
+| `--match-gt-duration` | Derive each ODE sample's frame count from GT duration |
+| `--temporal-alignment N` | Alignment used for duration-matched frame lengths |
 
 ### Preparation and outputs
 
-| Variable | Meaning |
+| Option | Meaning |
 | --- | --- |
-| `OUTPUT_ROOT` | Unique root for the complete evaluation cell |
-| `EVAL_JSON` | Generated manifest-validated item list |
-| `GENERATED_DIR` | Raw generated video tree |
-| `PREPARED_DIR` | Rule-ready video tree |
-| `SCORE_DIR` | Result JSON directory |
-| `PREPARED_HEIGHT`, `PREPARED_WIDTH` | Rule scorer canvas |
-| `MAX_DURATION` | Maximum prepared-video duration |
-| `PREP_CRF` | H.264 preparation quality setting |
-| `PREP_WORKERS` | Parallel FFmpeg preparation workers |
+| `--output-root PATH` | Unique root for the complete evaluation cell; required |
+| `--prepared-height N`, `--prepared-width N` | Rule scorer canvas |
+| `--max-duration SECONDS` | Maximum prepared-video duration |
+| `--prep-crf N` | H.264 preparation quality setting |
+| `--prep-workers N` | Parallel FFmpeg preparation workers |
 
-Paths default beneath `storage/`, but wrappers may override them. An output
-root must identify the checkpoint, sampler, generation shape, manifest, and
-scorer contract well enough to avoid accidental reuse.
+Artifact defaults live beneath ignored `storage/`. An output root must identify
+the model, sampler, generation shape, manifest, and scorer contract well enough
+to avoid accidental reuse. Run `run.fish --help` for defaults and the complete
+option list.
 
 ## Run a Complete Cell
 
 Example ODE evaluation:
 
-```bash
-CHECKPOINT=storage/checkpoints/<run>/checkpoint-100 \
-BASE_MODEL=storage/models/Wan2.2-TI2V-5B-Diffusers \
-CONVERTED_MODEL=storage/models/converted/<run>-checkpoint-100 \
-GT_BASE=storage/datasets/vbvr-pro-eval-500 \
-EVALKIT_DIR=storage/evalkits/<compatible-checkout> \
-EVALKIT_REV=<revision> \
-EVALKIT_SOURCE_SHA256=<64-hex-digest> \
-EASYOCR_SOURCE_MODELS=storage/evalkits/easyocr-shared/model \
-OUTPUT_ROOT=storage/eval_out/<run>/checkpoint-100-unipc \
-GENERATION_MODE=ode \
-ODE_SOLVER=unipc \
-NUM_GPUS=8 \
-fish scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish
+```fish
+fish scripts/eval/vbvr_pro/run.fish \
+  --checkpoint storage/checkpoints/<run>/checkpoint-100 \
+  --converted-model storage/models/converted/<run>-checkpoint-100 \
+  --output-root storage/eval_out/<run>/checkpoint-100/unipc \
+  --gt-base storage/datasets/vbvr-pro-eval-500 \
+  --evalkit-dir storage/evalkits/<compatible-checkout> \
+  --evalkit-revision <revision> \
+  --evalkit-source-sha256 <64-hex-digest> \
+  --sampler unipc \
+  --num-gpus 8
 ```
 
 Flow-CPS changes the sampler and therefore requires a different output root:
 
-```bash
-OUTPUT_ROOT=storage/eval_out/<run>/checkpoint-100-cps-0.7 \
-GENERATION_MODE=cps \
-CPS_NOISE_LEVEL=0.7 \
-fish scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish
+```fish
+fish scripts/eval/vbvr_pro/run.fish \
+  --model storage/models/converted/<run>-checkpoint-100 \
+  --output-root storage/eval_out/<run>/checkpoint-100/cps-noise-0.7 \
+  --sampler cps \
+  --cps-noise 0.7
 ```
 
 Do not compare an ODE cell and a CPS cell unless inference steps, sigma grid,
@@ -233,14 +225,15 @@ Concurrent jobs targeting the same converted model wait for the lock and then
 reuse a complete validated result. An incomplete directory or incompatible
 provenance fails instead of being silently repaired from different inputs.
 
-Set `CONVERSION_ONLY=1` to stop after successful conversion and provenance
-promotion.
+For conversion without evaluation preflight, use
+`src.cli.convert_dcp_to_diffusers` directly as documented in
+[Checkpoints](checkpoints.md).
 
 ### Preconverted models
 
-Set `PRECONVERTED_MODEL=1` only for a complete Diffusers directory. It must
-carry its own immutable `conversion_metadata.json` or an explicitly selected
-`CONVERSION_PROVENANCE`. The launcher validates structure, fingerprints the
+Pass `--model` only for a complete Diffusers directory. It must carry its own
+immutable `conversion_metadata.json`, or pass `--conversion-provenance` with an
+equivalent import record. The launcher validates structure, fingerprints the
 tree, and checks that it remains stable during the validation interval.
 
 ## Stage 3: Manifest Construction
@@ -253,13 +246,13 @@ In-Domain_50/<task>/<index>
 Out-of-Domain_50/<task>/<index>
 ```
 
-The item count must equal `EXPECTED_VIDEOS`. The generation JSON contains
+The item count must equal `--expected-videos`. The generation JSON contains
 absolute first-frame paths and prompts, avoiding dependence on a later working
 directory.
 
-When `USE_ITEM_NUM_FRAMES=1`, the builder probes each ground-truth video and
-selects the closest legal `alignment * k + 1` generation length at
-`INFER_FPS`. This mode currently requires ODE generation.
+With `--match-gt-duration`, the builder probes each ground-truth video and
+selects the closest legal `alignment * k + 1` generation length at the selected
+FPS. This mode currently requires ODE generation.
 
 ## Stage 4: Video Generation
 
@@ -275,8 +268,8 @@ Generation is local multi-GPU data parallel. Every expected path is derived
 from the eval JSON; extra, missing, duplicate, corrupt, wrong-size,
 wrong-frame-count, or wrong-FPS outputs fail exact-set validation.
 
-Set `FORCE_REGENERATE=1` only when you intentionally want to replace a tree
-whose provenance differs. Prefer a fresh `OUTPUT_ROOT` for a changed contract.
+Use `--force-regenerate` only when you intentionally want to replace a tree
+whose provenance differs. Prefer a fresh output root for a changed contract.
 
 ## Stage 5: Frame-Preserving Preparation
 
@@ -286,13 +279,13 @@ whose provenance differs. Prefer a fresh `OUTPUT_ROOT` for a changed contract.
 2. scales to fit the configured canvas without cropping;
 3. pads the remaining area;
 4. retains every frame;
-5. raises FPS when needed to satisfy `MAX_DURATION`;
+5. raises FPS when needed to satisfy `--max-duration`;
 6. writes H.264 through a temporary file and validates it before promotion.
 
-The prepared output must contain exactly `EXPECTED_VIDEOS`. Preparation input,
+The prepared output must contain exactly the expected video count. Preparation input,
 parameters, implementation source, and full output tree are fingerprinted.
 
-Set `FORCE_REPREPARE=1` only for an intentional rewrite. Regenerating videos
+Use `--force-reprepare` only for an intentional rewrite. Regenerating videos
 automatically invalidates downstream preparation.
 
 ## Stage 6: Rule Scoring
@@ -307,10 +300,11 @@ scorer workers. The adapter:
 - writes domain and overall aggregates;
 - preserves sample errors instead of dropping them.
 
-The result file name is derived from the prepared directory. The launcher
-deletes stale score/provenance files before the scoring stage because partial
-score reuse is not safe. It promotes score provenance only when sample count is
-exact and no record contains an error.
+The result file name is derived from the prepared directory. A complete score
+file is reused only when its provenance and exact sample set still validate.
+Otherwise the launcher deletes the stale or partial score state and starts
+scoring cleanly. It promotes score provenance only when sample count is exact
+and no record contains an error.
 
 ## Output and Provenance Layout
 
@@ -323,7 +317,7 @@ exact and no record contains an error.
   generated_<shape>/
     In-Domain_50/<task>/<index>.mp4
     Out-of-Domain_50/<task>/<index>.mp4
-  eval_<shape-and-duration>/
+  prepared_<shape-and-duration>/
     ... mirrored MP4 tree ...
   scores/
     <prepared-name>_vbvr_results.json
@@ -344,35 +338,52 @@ Safe automatic resume applies to:
 - a complete matching converted model;
 - individual generated videos that pass exact media validation under matching
   generation inputs;
-- individual prepared videos under matching preparation inputs.
+- individual prepared videos under matching preparation inputs;
+- a complete, error-free score result with matching scorer provenance.
 
-Scoring starts from a clean result because merging arbitrary partial evaluator
-outputs can hide contract changes or missing errors.
+A complete matching score is reused. Any incomplete or mismatched score starts
+from a clean result because merging arbitrary partial evaluator outputs can hide
+contract changes or missing errors.
 
 If an output tree exists without compatible provenance, the launcher stops and
-asks for an explicit force variable or a fresh namespace. A fresh namespace is
+asks for an explicit force option or a fresh namespace. A fresh namespace is
 the recommended response to any semantic change.
 
 ## Checkpoint and Sampler Sweeps
 
-Wrapper scripts under `scripts/eval/vbvr_pro/` set checkpoint- and
-sampler-specific environment variables, then delegate to the shared launcher.
-They should contain no independent scoring logic.
+Use one parameterized sweep instead of creating checkpoint-by-sampler wrapper
+scripts:
 
-When adding a sweep:
+```fish
+fish scripts/eval/vbvr_pro/sweep.fish \
+  --output-base storage/eval_out/<run>/checkpoint-100 \
+  --samplers unipc,euler,cps:0.3,cps:0.7 \
+  -- \
+  --checkpoint storage/checkpoints/<run>/checkpoint-100 \
+  --converted-model storage/models/converted/<run>-checkpoint-100 \
+  --steps 30 \
+  --guidance-scale 1.0
+```
 
-1. keep the split manifest and scoring contract fixed;
-2. assign a unique converted-model and output path to every checkpoint;
-3. encode ODE/CPS solver and coefficient in the cell name;
-4. dry-run every cell;
-5. run cells independently so one failure is visible;
-6. aggregate only complete score JSON files with matching provenance.
+The sweep assigns a separate output root to every sampler and reuses the same
+locked, provenance-bound conversion. It runs cells sequentially on one machine.
+For several machines, pass identical arguments with `--world-size N --rank R`;
+`--assignment-only` prints the deterministic round-robin assignment without
+starting work.
 
-Use
-[`scripts/eval/vbvr_pro/summarize_vbvr_pro_results.fish`](../scripts/eval/vbvr_pro/summarize_vbvr_pro_results.fish)
-to summarize completed rule-result trees. Presentation builders and static
-result explorers are optional reporting tools; they do not define the scoring
-contract.
+Invoke the same sweep once per checkpoint with a distinct conversion path and
+output base. Keep manifest, media, and scorer settings fixed when comparing
+cells. Summarize only complete results that share one evaluator fingerprint:
+
+```fish
+fish scripts/eval/vbvr_pro/summarize.fish \
+  --root storage/eval_out/<run>/checkpoint-100 \
+  --expected-samples 500 \
+  --expected-evalkit-source-sha256 <64-hex-digest>
+```
+
+The summary command discovers the result filename from score provenance and
+writes `vbvr_pro_summary.xlsx`, `vbvr_pro_summary.json`, and `final_scores.txt`.
 
 ## Training Reward Parity
 
@@ -411,7 +422,7 @@ rerun conversion. Never replace a complete model behind matching provenance.
 ### Generated set validation failure
 
 Read the reported paths and media mismatch. Rerunning normally repairs missing
-or invalid files under matching provenance. Use `FORCE_REGENERATE=1` only when
+or invalid files under matching provenance. Use `--force-regenerate` only when
 the entire prior generation contract is intentionally superseded.
 
 ### Preparation failure
@@ -449,6 +460,6 @@ Before publishing a number, verify:
 - [ ] generation, preparation, and score provenance are complete;
 - [ ] all launcher processes exited successfully.
 
-Retain the config, launcher environment, score JSON, and provenance manifests
-with any reported aggregate. Generated videos may be stored separately, but
-their complete tree fingerprint must remain auditable.
+Retain the launcher arguments, score JSON, and provenance manifests with any
+reported aggregate. Generated videos may be stored separately, but their
+complete tree fingerprint must remain auditable.

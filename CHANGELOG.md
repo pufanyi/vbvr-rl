@@ -22,6 +22,8 @@ Initial public source release.
 - A focused training configuration surface: one A14B SFT reference, plus
   TI2V-5B rule reward, TI2V-5B VLM reward, and A14B rule reward, with a
   code-derived one-GPU RL smoke profile.
+- A parameterized VBVR-Pro evaluation surface for UniPC, Euler, and Flow-CPS,
+  including deterministic sampler sweeps and provenance-driven summaries.
 
 ### Release boundaries
 

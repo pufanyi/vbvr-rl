@@ -54,12 +54,13 @@ fish scripts/train/grpo_multinode.fish --nproc 8 -- \
 
 Evaluate a VBVR-Pro checkpoint:
 
-```bash
-DRY_RUN=1 \
-CHECKPOINT=storage/checkpoints/<run>/checkpoint-100 \
-GT_BASE=storage/datasets/vbvr-pro-eval-500 \
-EVALKIT_DIR=storage/evalkits/<compatible-checkout> \
-fish scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish
+```fish
+fish scripts/eval/vbvr_pro/run.fish \
+  --checkpoint storage/checkpoints/<run>/checkpoint-100 \
+  --converted-model storage/models/converted/<run>-checkpoint-100 \
+  --output-root storage/eval_out/<run>/checkpoint-100/unipc \
+  --sampler unipc \
+  --dry-run
 ```
 
 Convert a DCP checkpoint:

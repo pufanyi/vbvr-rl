@@ -297,7 +297,7 @@ Strictly summarize already complete cells:
 The convenience wrapper can start and stop a local judge service automatically:
 
 ```fish
-fish scripts/eval/vbvr_pro/dancegrpo_vlm_qwen36_512x512x81/evaluate_vlm_judge_multinode.fish \
+fish scripts/eval/vbvr_pro/vlm_judge.fish \
   score \
   --input-root storage/eval_out/<matrix> \
   --output-root storage/eval_out/<matrix>-vlm-judge

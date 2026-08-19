@@ -47,6 +47,10 @@
 - `third_party/VBVR-EvalKit` is intentionally absent. The supported public
   rule-evaluation path is `scripts/eval/vbvr_pro/` plus helpers in `src/eval/`.
   Do not restore a vendored or implicit evaluator fallback.
+- Keep the public VBVR-Pro launcher surface parameterized: `run.fish` owns one
+  UniPC/Euler/Flow-CPS cell, `sweep.fish` expands sampler cells, and
+  `summarize.fish` verifies their provenance. Do not add checkpoint-, cluster-,
+  resolution-, or sampler-specific wrapper scripts or checked-in result viewers.
 
 ## Environment
 
@@ -214,10 +218,14 @@
 - Online and offline rule paths share `src.eval.vbvr_runtime`, which pins and
   probes scientific/media dependencies. Validate it before model loading and
   record its digest in score provenance.
-- The supported end-to-end launcher is
-  `scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish`. It validates conversion,
-  split manifest, generated paths/media, frame-preserving preparation, exact
-  scorer source/runtime, sample errors, and stage provenance.
+- The supported end-to-end launcher is `scripts/eval/vbvr_pro/run.fish`; its
+  internal pipeline lives under `scripts/eval/vbvr_pro/lib/`. It validates
+  conversion, split manifest, generated paths/media, frame-preserving
+  preparation, exact scorer source/runtime, sample errors, and stage
+  provenance.
+- Rule evaluation may reuse a complete score only when both the exact sample
+  set and score provenance still validate. Partial or mismatched scoring state
+  is discarded and recomputed; never merge arbitrary partial evaluator output.
 
 ## VLM Reward
 

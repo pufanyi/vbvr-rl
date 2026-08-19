@@ -11,6 +11,7 @@ from src.eval.vbvr_vlm_offline import (
     JudgeOutcome,
     OfflineJudgeConfig,
     OfflineTaskVLMJudge,
+    _cell_attributes,
     aggregate_complete_cells,
     cell_is_complete,
     load_eval_cell,
@@ -47,6 +48,14 @@ obstacle_multiplier_weight: 20
 bg_preservation_weight: 5
 total_score: 80
 reason: The path is mostly correct."""
+
+
+@pytest.mark.parametrize(
+    ("name", "sampler"),
+    [("unipc", "UniPC ODE"), ("euler", "Euler ODE"), ("cps-noise-0.7", "CPS 0.7")],
+)
+def test_generic_release_cell_names_have_sampler_labels(name: str, sampler: str) -> None:
+    assert _cell_attributes(name)["sampler"] == sampler
 
 
 def _sample_tree(tmp_path: Path):

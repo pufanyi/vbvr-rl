@@ -6,9 +6,11 @@ generates videos, validates every expected path, prepares media for the rule
 contract, scores through an external pinned evaluator, and records provenance
 for every stage.
 
-Use [`scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish`](../scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish)
-for complete rule-based evaluation. Lower-level commands are documented here
-for inspection and debugging, not as a substitute for provenance checks.
+Use [`scripts/eval/vbvr_pro/run.fish`](../scripts/eval/vbvr_pro/run.fish) for
+one complete rule-based evaluation cell and
+[`sweep.fish`](../scripts/eval/vbvr_pro/sweep.fish) for sampler comparisons.
+Lower-level commands are documented here for inspection and debugging, not as
+a substitute for provenance checks.
 
 ## Inputs
 
@@ -54,16 +56,17 @@ resumed only when they match the current provenance contract.
 
 ## Inspect a Run Without Loading Weights
 
-Set the artifact paths and use `DRY_RUN=1`:
+Pass the artifact paths and `--dry-run`:
 
-```bash
-DRY_RUN=1 \
-CHECKPOINT=storage/checkpoints/<run>/checkpoint-100 \
-BASE_MODEL=storage/models/Wan2.2-TI2V-5B-Diffusers \
-GT_BASE=storage/datasets/vbvr-pro-eval-500 \
-EVALKIT_DIR=storage/evalkits/<compatible-checkout> \
-OUTPUT_ROOT=storage/eval_out/<run>/checkpoint-100 \
-fish scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish
+```fish
+fish scripts/eval/vbvr_pro/run.fish \
+  --checkpoint storage/checkpoints/<run>/checkpoint-100 \
+  --converted-model storage/models/converted/<run>-checkpoint-100 \
+  --output-root storage/eval_out/<run>/checkpoint-100/unipc \
+  --gt-base storage/datasets/vbvr-pro-eval-500 \
+  --evalkit-dir storage/evalkits/<compatible-checkout> \
+  --sampler unipc \
+  --dry-run
 ```
 
 The dry run prints model, output, sampler, and evaluator selections. For a

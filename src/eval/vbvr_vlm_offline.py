@@ -763,10 +763,10 @@ def _cell_attributes(name: str) -> dict[str, Any]:
     elif "cps0p7" in name:
         sampler = "CPS 0.7"
         sampler_order = 7
-    elif "euler-ode" in name:
+    elif name == "euler" or "euler-ode" in name:
         sampler = "Euler ODE"
         sampler_order = 100
-    elif "unipc-ode" in name:
+    elif name == "unipc" or "unipc-ode" in name:
         sampler = "UniPC ODE"
         sampler_order = 101
     else:

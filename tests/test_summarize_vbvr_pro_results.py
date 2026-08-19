@@ -2,13 +2,21 @@ import json
 from pathlib import Path
 
 from openpyxl import load_workbook
-from pytest import approx, raises
+from pytest import raises
 
-from src.cli.summarize_vbvr_pro_results import RESULT_RELATIVE_PATH, _load_run, generate_reports
+from src.cli.summarize_vbvr_pro_results import _load_run, discover_runs, generate_reports
 from src.eval.evaluation_provenance import build_manifest, write_manifest
 
 
-def _write_result(root: Path, run_name: str, task_a: tuple[float, float], task_b: tuple[float, float]) -> None:
+def _write_result(
+    root: Path,
+    run_name: str,
+    task_a: tuple[float, float],
+    task_b: tuple[float, float],
+    *,
+    result_name: str = "prepared_1024x1024_max5s_vbvr_results.json",
+    scorer_hash: str = "b" * 64,
+) -> Path:
     samples = []
     for task_name, split, category, scores in (
         ("G-1_task", "In_Domain", "Abstraction", task_a),
@@ -41,89 +49,76 @@ def _write_result(root: Path, run_name: str, task_a: tuple[float, float], task_b
             },
         },
     }
-    path = root / run_name / RESULT_RELATIVE_PATH
+    run_dir = root / run_name
+    path = run_dir / "scores" / result_name
     path.parent.mkdir(parents=True)
-    path.write_text(json.dumps(result))
+    path.write_text(json.dumps(result), encoding="utf-8")
     provenance = build_manifest(
         stage="vbvr-pro-score",
         values={
             "state": "complete",
             "evalkit_revision": "a" * 40,
-            "evalkit_source_sha256": "b" * 64,
+            "evalkit_source_sha256": scorer_hash,
         },
         files={},
         trees={},
         output_files={"result": str(path)},
     )
-    write_manifest(root / run_name / "score-provenance.json", provenance)
+    write_manifest(run_dir / "score-provenance.json", provenance)
+    return path
 
 
 def test_load_run_rejects_result_replaced_after_provenance(tmp_path: Path) -> None:
     root = tmp_path / "results"
-    run_name = "dancegrpo_vbvr_pro_5b_checkpoint-300"
-    _write_result(root, run_name, (0.2, 0.4), (0.6, 0.8))
-    result_path = root / run_name / RESULT_RELATIVE_PATH
-    result_path.write_text(result_path.read_text() + "\n")
+    result_path = _write_result(root, "unipc", (0.2, 0.4), (0.6, 0.8))
+    result_path.write_text(result_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
 
     with raises(ValueError, match="recorded artifact changed"):
-        _load_run(root / run_name, expected_samples=4)
+        _load_run(root / "unipc", expected_samples=4)
 
 
-def test_generate_reports(tmp_path: Path) -> None:
+def test_generate_reports_accepts_dynamic_result_names_and_generic_cells(tmp_path: Path) -> None:
     root = tmp_path / "results"
-    _write_result(root, "sft_vbvr_5b_checkpoint-epoch1", (0.4, 0.6), (0.5, 0.7))
-    _write_result(root, "dancegrpo_vbvr_pro_5b_checkpoint-300", (0.2, 0.4), (0.6, 0.8))
-    _write_result(root, "dancegrpo_vbvr_pro_5b_checkpoint-300-cps-noise-0.3", (0.5, 0.7), (0.4, 0.6))
-    _write_result(root, "dancegrpo_vbvr_pro_5b_checkpoint-300-cps-noise-0.7", (0.6, 0.8), (0.3, 0.5))
-    _write_result(root, "dancegrpo_vbvr_pro_5b_checkpoint-600", (0.3, 0.5), (0.7, 0.9))
-    (root / "dancegrpo_vbvr_pro_5b_checkpoint-600-cps-noise-0.3").mkdir(parents=True)
+    _write_result(root, "unipc", (0.4, 0.6), (0.5, 0.7), result_name="unipc_vbvr_results.json")
+    _write_result(root, "euler", (0.2, 0.4), (0.6, 0.8), result_name="euler_vbvr_results.json")
+    _write_result(root, "cps-noise-0.7", (0.6, 0.8), (0.3, 0.5))
+    (root / "cps-noise-0.3" / "scores").mkdir(parents=True)
     output = tmp_path / "reports"
 
-    all_runs, cps, ode, cps_trend, cps_0p7_trend, complete_count, skipped_count = generate_reports(
+    workbook_path, json_path, text_path, complete_count, skipped_count = generate_reports(
         root, output, expected_samples=4
     )
 
-    assert complete_count == 5
-    assert skipped_count == 1
-    all_book = load_workbook(all_runs, data_only=True)
-    assert all_book["All Runs"].max_row == 6
-    assert all_book["Skipped"].max_row == 2
+    assert (complete_count, skipped_count) == (3, 1)
+    workbook = load_workbook(workbook_path, data_only=True)
+    assert workbook.sheetnames == ["Runs", "Task Scores", "Skipped"]
+    run_rows = list(workbook["Runs"].iter_rows(min_row=2, values_only=True))
+    assert [row[0] for row in run_rows] == ["cps-noise-0.7", "euler", "unipc"]
+    assert workbook["Task Scores"].max_row == 7
+    assert workbook["Skipped"]["A2"].value == "cps-noise-0.3"
 
-    cps_book = load_workbook(cps, data_only=True)
-    assert cps_book.sheetnames == ["All Deltas", "Noise 0.3", "Noise 0.7", "Coverage"]
-    first_delta = list(cps_book["All Deltas"].iter_rows(min_row=2, max_row=2, values_only=True))[0]
-    assert first_delta[6:] == approx((0.3, 0.6, 0.3))
-    coverage = list(cps_book["Coverage"].iter_rows(min_row=2, values_only=True))
-    assert any(row[0].endswith("checkpoint-600-cps-noise-0.3") and row[3] != "complete" for row in coverage)
+    summary = json.loads(json_path.read_text(encoding="utf-8"))
+    assert summary["run_count"] == 3
+    assert summary["skipped_count"] == 1
+    assert summary["evalkit_source_sha256"] == "b" * 64
+    assert [run["name"] for run in summary["runs"]] == ["cps-noise-0.7", "euler", "unipc"]
+    assert text_path.read_text(encoding="utf-8").startswith("Run\tOverall\tIn-Domain")
 
-    ode_book = load_workbook(ode, data_only=True)
-    rows = list(ode_book["ODE by Step"].iter_rows(min_row=2, values_only=True))
-    assert [row[0] for row in rows] == [300, 600]
-    assert rows[0][4] is None
-    assert rows[1][4] == approx(0.1)
 
-    cps_trend_book = load_workbook(cps_trend, data_only=True)
-    assert cps_trend_book.sheetnames == [
-        "Task Scores",
-        "Delta vs Baseline",
-        "Delta vs Previous",
-        "Task Summary",
-        "Aggregate",
-    ]
-    task_score = next(cps_trend_book["Task Scores"].iter_rows(min_row=2, max_row=2, values_only=True))
-    assert task_score[:3] == ("In-Domain", "Abstraction", "G-1_task")
-    assert task_score[3:] == approx((0.5, 0.6))
-    baseline_delta = next(cps_trend_book["Delta vs Baseline"].iter_rows(min_row=2, max_row=2, values_only=True))
-    assert baseline_delta[3:] == approx((0.1,))
-    task_summary = next(cps_trend_book["Task Summary"].iter_rows(min_row=2, max_row=2, values_only=True))
-    assert task_summary[3:9] == approx((0.5, 0.6, 300, 0.1, 0.6, 0.1))
-    trend_rows = list(cps_trend_book["Aggregate"].iter_rows(min_row=2, values_only=True))
-    assert [row[0] for row in trend_rows] == [0, 300]
-    assert trend_rows[0][2:4] == ("ODE baseline", None)
-    assert trend_rows[1][2:4] == ("CPS", 0.3)
-    assert trend_rows[1][8] == approx(0.0)
+def test_discover_runs_refuses_mixed_scorer_contracts(tmp_path: Path) -> None:
+    root = tmp_path / "results"
+    _write_result(root, "unipc", (0.2, 0.4), (0.6, 0.8), scorer_hash="b" * 64)
+    _write_result(root, "euler", (0.2, 0.4), (0.6, 0.8), scorer_hash="c" * 64)
 
-    cps_0p7_book = load_workbook(cps_0p7_trend, data_only=True)
-    trend_0p7_rows = list(cps_0p7_book["Aggregate"].iter_rows(min_row=2, values_only=True))
-    assert [row[0] for row in trend_0p7_rows] == [0, 300]
-    assert trend_0p7_rows[1][2:4] == ("CPS", 0.7)
+    with raises(ValueError, match="multiple scorer fingerprints"):
+        discover_runs(root, expected_samples=4)
+
+
+def test_discover_runs_accepts_one_run_as_root(tmp_path: Path) -> None:
+    root = tmp_path / "results"
+    _write_result(root, "unipc", (0.2, 0.4), (0.6, 0.8))
+
+    runs, skipped = discover_runs(root / "unipc", expected_samples=4)
+
+    assert [run.name for run in runs] == ["unipc"]
+    assert skipped == []

@@ -232,21 +232,26 @@ The shared launcher performs:
 2. exact-manifest video generation;
 3. frame-preserving resize/pad/retime preparation;
 4. CPU rule scoring through an external pinned EvalKit checkout;
-5. provenance validation and aggregate export.
+5. provenance validation and domain/overall aggregate reporting.
 
-Inspect a configured run without loading weights:
+Inspect a configured run without loading weights or reading artifacts:
 
-```bash
-DRY_RUN=1 \
-CHECKPOINT=storage/checkpoints/<run>/checkpoint-100 \
-GT_BASE=storage/datasets/vbvr-pro-eval-500 \
-EVALKIT_DIR=storage/evalkits/<checkout> \
-fish scripts/eval/vbvr_pro/vbvr_pro_5b_main_v2.fish
+```fish
+fish scripts/eval/vbvr_pro/run.fish \
+  --checkpoint storage/checkpoints/<run>/checkpoint-100 \
+  --converted-model storage/models/converted/<run>-checkpoint-100 \
+  --output-root storage/eval_out/<run>/checkpoint-100/unipc \
+  --gt-base storage/datasets/vbvr-pro-eval-500 \
+  --evalkit-dir storage/evalkits/<checkout> \
+  --sampler unipc \
+  --dry-run
 ```
 
 For a real run, also provide a compatible evaluator source through either an
-existing `EVALKIT_DIR` or `EVALKIT_REPO`, and use an output directory dedicated
-to that model, sampler, media, manifest, and scorer contract.
+existing `--evalkit-dir` or `--evalkit-repo`, and use an output directory
+dedicated to that model, sampler, media, manifest, and scorer contract. Use
+`scripts/eval/vbvr_pro/sweep.fish` to compare UniPC, Euler, and Flow-CPS without
+adding experiment-specific wrappers.
 
 The full procedure and completion criteria are documented in
 [Evaluation](docs/evaluation.md) and
