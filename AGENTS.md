@@ -20,6 +20,9 @@
 - Use repository-relative examples. Never commit credentials, private
   endpoints, scheduler settings, machine-specific paths, or generated model,
   data, video, checkpoint, W&B, log, and cache artifacts.
+- Keep `docs/` limited to durable public guides for released interfaces. Do
+  not commit dated experiment reports, presentation or email drafts, internal
+  roadmaps, one-off generation plans, generated media, or private runbooks.
 
 ## Release Shape
 

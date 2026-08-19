@@ -49,8 +49,9 @@ smoke that demonstrates the intended optimizer behavior.
 ## Documentation
 
 Public guides should use repository-relative paths and generic distributed
-terminology. Dated measurements and experiment narratives belong under
-`docs/reports/`; they are evidence, not the current interface contract.
+terminology. Do not commit experiment diaries, presentation material, email
+drafts, generated media, private planning notes, or machine-specific runbooks.
+Promote only durable, reusable conclusions into the relevant public guide.
 
 Use descriptive Markdown links for repository files and verify that local
 links resolve. Document external prerequisites and licenses without implying

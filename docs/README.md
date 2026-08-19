@@ -28,15 +28,13 @@ under the ignored `storage/` tree.
 | [Qwen VLM Reward](vlm_judge_reward.md) | Host the optional Qwen judge, train with `vbvr_vlm`, or score existing videos. |
 | [Async Rollout Design](dancegrpo_async_rollout_design.md) | Understand the split actor/trainer queue and weight synchronization design. |
 
-## Supplemental Material
+## Documentation Scope
 
-- [Maze generation](maze_generation_100k.md) documents the synthetic maze data
-  generator used by auxiliary experiments.
-- [Improvement notes](improvements/README.md) collect design proposals. They
-  are not promises of implemented behavior.
-- `docs/reports/` contains dated experiment reports and presentation source.
-  Reports preserve historical evidence; current commands and contracts are
-  defined by the guides above and the checked-in configs.
+This directory contains durable public guides for released code paths. It does
+not contain experiment diaries, presentation material, email drafts, generated
+media, machine-specific runbooks, or private planning notes. Reusable findings
+from development should be incorporated into the relevant guide as a stable
+contract or troubleshooting note.
 
 ## Documentation Conventions
 
@@ -57,8 +55,7 @@ When text and code differ, use this order:
 1. Pydantic config validation in `src/trainer/config.py`;
 2. the selected CLI or launcher;
 3. the runnable YAML config;
-4. these guides;
-5. dated reports.
+4. these guides.
 
 Please report stale commands or broken links through the repository issue
 tracker. See [Contributing](../CONTRIBUTING.md) before submitting a patch.

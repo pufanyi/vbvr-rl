@@ -58,6 +58,25 @@ def test_only_vbvr_pro_evaluation_surface_is_shipped():
     assert not (_REPO_ROOT / "src/cli/eval_vbvr.py").exists()
 
 
+def test_docs_contains_only_indexed_public_guides():
+    docs_root = _REPO_ROOT / "docs"
+    for relative in (
+        "reports",
+        "improvements",
+        "maze_generation_100k.md",
+        "vbvr_lmms_eval.md",
+    ):
+        assert not (docs_root / relative).exists()
+
+    index = (docs_root / "README.md").read_text(encoding="utf-8")
+    unlisted = [
+        str(path.relative_to(docs_root))
+        for path in sorted(docs_root.rglob("*.md"))
+        if path.name != "README.md" and path.relative_to(docs_root).as_posix() not in index
+    ]
+    assert not unlisted, f"public guides missing from docs/README.md: {unlisted}"
+
+
 def test_release_uses_the_official_vbvr_pro_rl_dataset():
     sources = [
         *_release_documents(),

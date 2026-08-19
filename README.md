@@ -299,7 +299,7 @@ src/eval/         VBVR-Pro scoring, provenance, and reporting helpers
 configs/          reference experiment and smoke configs
 scripts/          Fish launchers and operator utilities
 tests/            focused unit and contract tests
-docs/             public guides and historical research reports
+docs/             public guides and technical references
 ```
 
 ## Documentation
