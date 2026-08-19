@@ -1,7 +1,8 @@
 """Wan2.2 I2V DanceGRPO training entry point.
 
 Usage:
-    .venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_grpo --config configs/train_dancegrpo_maze.yaml
+    .venv/bin/torchrun --nproc_per_node=1 -m src.cli.train_grpo \
+        --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_official_base_smoke_1gpu.yaml
 """
 
 import argparse

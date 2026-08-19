@@ -18,7 +18,7 @@ Fish launcher or Python CLI
 
 ```text
 src/cli/          user-facing training, generation, conversion, and evaluation CLIs
-src/models/       Wan model wrapper, COS paths, LoRA integration
+src/models/       Wan model wrapper and LoRA integration
 src/data/         raw Parquet, latent WebDataset, and remote-I/O loaders
 src/trainer/      configs, trainers, rewards, sharding, optimizers, checkpoints
 src/precompute/   video/prompt latent builders and synthetic data generation
@@ -35,8 +35,7 @@ that logic rather than duplicate algorithm or scoring implementations.
 
 | Entry point | Purpose |
 | --- | --- |
-| `src.cli.train_i2v` | Dispatch SFT or COS from `SFTConfig.trainer` |
-| `src.cli.train_i2v_correction` | Run supervised teacher-rollout correction |
+| `src.cli.train_i2v` | Run supervised flow-matching training |
 | `src.cli.train_grpo` | Run DanceGRPO rollout, reward, and replay |
 | `src.cli.eval_i2v` | Batch UniPC generation and exact output validation |
 | `src.cli.eval_i2v_euler` | Deterministic Euler generation |
@@ -56,14 +55,13 @@ arguments. The Python entrypoints remain usable directly.
 ```text
 TrainConfig
   SFTConfig
-  CorrectionConfig
   RLConfig
 ```
 
 `TrainConfig` owns model, data, optimizer, precision, distributed, checkpoint,
-and logging fields. Subclasses add COS, correction, rollout, replay, and reward
-settings. Entry points merge defaults, YAML, and CLI overrides before
-constructing a validated config.
+and logging fields. `SFTConfig` selects supervised training, while `RLConfig`
+adds rollout, replay, and reward settings. Entry points merge defaults, YAML,
+and CLI overrides before constructing a validated config.
 
 Runtime topology validation also occurs in the trainers because some
 constraints depend on the initialized world size and device mesh. See
@@ -95,8 +93,6 @@ Supervised modes share one base:
 ```text
 BaseTrainer
   I2VTrainer
-  COSTrainer
-  I2VCorrectionTrainer
 ```
 
 The RL side is separate because it owns rollout policy state, reference-policy
@@ -118,7 +114,7 @@ in both stacks.
 Raw media:
 
 ```text
-dataset JSON -> Parquet row -> image + video(s) + prompt
+dataset JSON -> Parquet row -> image + target video + prompt
   -> UMT5 prompt embeddings
   -> VAE video latent and first-frame condition
   -> trainer or rollout
@@ -133,10 +129,10 @@ shard-*.tar -> {key}.safetensors + {key}.json
   -> trainer or rollout
 ```
 
-The raw loader supports a single target or an ordered COS chain. The latent
-loader pads/truncates text embeddings and passes non-reserved tensors through
-to rewards. Iterable latent datasets require an exact `dataset_size` to keep
-rank-local epochs synchronized.
+The raw loader uses one target video per row. The latent loader pads/truncates
+text embeddings and passes non-reserved tensors through to rewards. Iterable
+latent datasets require an exact `dataset_size` to keep rank-local epochs
+synchronized.
 
 ## Distributed Execution
 

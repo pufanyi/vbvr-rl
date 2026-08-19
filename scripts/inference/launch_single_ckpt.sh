@@ -3,7 +3,8 @@
 # sharding 32 samples in contiguous blocks of 4. Run with bash (not zsh) so
 # array indexing and word-splitting behave.
 #
-#   CKPT=... NAME=... CONFIGS="ode:0" ROUNDS=1 bash scripts/inference/launch_single_ckpt.sh
+#   CKPT=... NAME=... LATENTS=... CONFIGS="ode:0" ROUNDS=1 \
+#     bash scripts/inference/launch_single_ckpt.sh
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -13,7 +14,7 @@ CONFIGS="${CONFIGS:-ode:0}"
 ROUNDS="${ROUNDS:-1}"
 STEPS="${STEPS:-50}"
 OUT_ROOT="${OUT_ROOT:-storage/outputs/noise_coeff_sweep}"
-LATENTS="${LATENTS:-storage/latents/maze_5b_line_to_ball_v1/webdataset/rl}"
+LATENTS="${LATENTS:?set LATENTS to a latent WebDataset directory}"
 N="${N:-32}"            # total samples
 STAGGER="${STAGGER:-12}"  # seconds between launches, eases concurrent DCP-read I/O
 

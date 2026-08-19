@@ -15,15 +15,17 @@
 #   RANK         — this node's rank (0-indexed)
 #
 # Usage:
-#   fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8
-#   fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8 --train-nodes 2
-#   WORLD_SIZE=1 RANK=0 MASTER_ADDR=127.0.0.1 fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8 --train-ranks 4
-#   fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8 -- --config configs/train_dancegrpo_maze_split.yaml
+#   fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8 \
+#       --config configs/<reviewed-split-rl-config>.yaml
+#   fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8 \
+#       --train-nodes 2 --config configs/<reviewed-split-rl-config>.yaml
+#   WORLD_SIZE=1 RANK=0 MASTER_ADDR=127.0.0.1 \
+#       fish scripts/train/dancegrpo_maze_split_multinode.fish --nproc 8 \
+#       --train-ranks 4 --config configs/train_dancegrpo_maze_split_async_smoke_lora.yaml
 
 set -l nproc 8
 set -l train_node_count auto
 set -l train_rank_count 0
-set -l default_config configs/train_dancegrpo_maze_split.yaml
 
 set -l train_args
 set -l parsing_launcher true
@@ -124,7 +126,8 @@ if not string match -qr '^[0-9]+$' -- "$train_rank_count"
 end
 
 if test "$saw_config" = false
-    set -p train_args --config $default_config
+    echo "ERROR: --config is required; choose a reviewed split-RL config" >&2
+    exit 1
 end
 
 set -l master_port (set -q MASTER_PORT; and echo $MASTER_PORT; or echo 29500)

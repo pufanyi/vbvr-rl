@@ -60,8 +60,8 @@ def combine_sample(root: Path, ckpt_a: str, ckpt_b: str, sample_index: int, out_
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--root", default="storage/outputs/noise_coeff_sweep")
-    p.add_argument("--ckpt_a", default="cos_maze_epoch4")
-    p.add_argument("--ckpt_b", default="sft_direct_3000")
+    p.add_argument("--ckpt_a", required=True, help="First checkpoint subdirectory")
+    p.add_argument("--ckpt_b", required=True, help="Second checkpoint subdirectory")
     p.add_argument("--num_samples", type=int, default=32)
     args = p.parse_args()
 

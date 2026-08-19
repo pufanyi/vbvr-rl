@@ -17,19 +17,14 @@ _DeviceMesh.size = _device_mesh_size_patched
 from src.trainer.base_grpo_trainer import BaseGRPOTrainer  # noqa: E402
 from src.trainer.base_rl_trainer import BaseRLTrainer  # noqa: E402
 from src.trainer.checkpoint import TrainState  # noqa: E402
-from src.trainer.config import CorrectionConfig, RLConfig, SFTConfig, TrainConfig  # noqa: E402
-from src.trainer.cos_trainer import COSTrainer  # noqa: E402
+from src.trainer.config import RLConfig, SFTConfig, TrainConfig  # noqa: E402
 from src.trainer.dancegrpo_trainer import DanceGRPOTrainer  # noqa: E402
-from src.trainer.i2v_correction_trainer import I2VCorrectionTrainer  # noqa: E402
 from src.trainer.i2v_trainer import I2VTrainer  # noqa: E402
 
 __all__ = [
     "BaseGRPOTrainer",
     "BaseRLTrainer",
-    "COSTrainer",
-    "CorrectionConfig",
     "DanceGRPOTrainer",
-    "I2VCorrectionTrainer",
     "I2VTrainer",
     "RLConfig",
     "SFTConfig",

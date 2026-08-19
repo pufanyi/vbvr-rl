@@ -1,20 +1,20 @@
 from types import SimpleNamespace
 
+import pytest
 import torch
+from pydantic import ValidationError
 
 from src.models.wan_i2v import _make_autocast_checkpoint_func
-from src.trainer.i2v_trainer import I2VTrainer, _final_video_latents
+from src.trainer.config import SFTConfig
+from src.trainer.i2v_trainer import I2VTrainer
 
 
-def test_final_video_latents_selects_chain_final_target():
-    first = torch.zeros(1)
-    final = torch.ones(1)
-
-    assert _final_video_latents([first, final]) is final
-    assert _final_video_latents(final) is final
+def test_sft_config_rejects_removed_trainer_modes():
+    with pytest.raises(ValidationError):
+        SFTConfig(trainer="cos")
 
 
-def test_i2v_train_step_uses_final_latent_from_cos_chain_batch():
+def test_i2v_train_step_uses_single_target_latent():
     class _Model:
         def compute_loss(self, video_latents, condition, prompt_embeds, prompt_dropout=0.0):
             self.video_latents = video_latents
@@ -28,18 +28,17 @@ def test_i2v_train_step_uses_final_latent_from_cos_chain_batch():
     trainer.cfg = SimpleNamespace(prompt_dropout=0.25)
     trainer.model = _Model()
 
-    first = torch.zeros(2, 3, 4, 5, 6)
-    final = torch.ones(2, 3, 4, 5, 6)
+    target = torch.ones(2, 3, 4, 5, 6)
     batch = {
         "prompt_embeds": torch.zeros(2, 8, 16),
-        "video_latents": [first, final],
+        "video_latents": target,
         "condition": torch.zeros(2, 3, 4, 5, 6),
     }
 
     loss = trainer._train_step(batch)
 
     assert loss.item() == 1.0
-    assert trainer.model.video_latents is final
+    assert trainer.model.video_latents is target
     assert trainer.model.prompt_dropout == 0.25
 
 

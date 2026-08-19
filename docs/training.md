@@ -1,10 +1,9 @@
 # Training
 
-VBVR-RL provides four training modes for Wan2.2 image-to-video models:
-standard supervised flow matching, Chain-of-Step (COS), supervised on-policy
-correction, and DanceGRPO-style reinforcement learning. They share model and
-data contracts but differ in rollout cost, distributed constraints, and
-checkpoint semantics.
+VBVR-RL provides two training modes for Wan2.2 image-to-video models: standard
+supervised flow matching and DanceGRPO-style reinforcement learning. They
+share model, data, distributed, and checkpoint infrastructure while using
+different objectives and rollout lifecycles.
 
 Start with [Getting Started](getting_started.md), then review
 [Configuration](configuration.md) and the selected YAML in full. Reference
@@ -16,8 +15,6 @@ external artifacts automatically.
 | Mode | Entry point | Config selector | Main use |
 | --- | --- | --- | --- |
 | SFT | `src.cli.train_i2v` | `trainer: i2v` | Standard flow-matching supervision |
-| COS | `src.cli.train_i2v` | `trainer: cos` | Piecewise paths through intermediate videos |
-| Correction | `src.cli.train_i2v_correction` | `CorrectionConfig` | EMA-teacher rollout plus supervised correction |
 | DanceGRPO | `src.cli.train_grpo` | `trainer: dancegrpo` | Grouped on-policy rollout and clipped replay |
 
 All commands below run from the repository root and use the locked `.venv`.
@@ -42,8 +39,9 @@ encoder, tokenizer, and transformer metadata expected by the wrapper.
 ### Raw Parquet input
 
 `dataset_json` identifies one or more Parquet sources. A row contains a
-`prompt`, an optional `image`, and either one `video` or an ordered `videos`
-chain. Raw training loads media, then runs T5 and VAE encoding online.
+`prompt`, an optional `image`, and one target `video`. Older manifests may use
+a `videos` list; the loader uses only its final entry. Raw training loads
+media, then runs T5 and VAE encoding online.
 
 Use raw input when source media is convenient, augmentations or dimensions may
 change, or a pixel-domain reward needs source files and metadata. It has higher
@@ -107,76 +105,6 @@ fish scripts/train/i2v.fish --nproc 8 -- \
 keeps base transformer weights frozen. When changing between full tuning and
 LoRA, review `transformer_load_dtype`, optimizer memory, checkpoint loading,
 and learning rate rather than changing only `lora_rank`.
-
-## Chain-of-Step Training
-
-COS trains a piecewise flow path through intermediate target videos. Set
-`trainer: cos` and provide a sample chain with one final target plus one or
-more intermediate videos.
-
-```yaml
-trainer: cos
-cos_tau_sigma: [0.7, 0.35]
-cos_path_type: target_cosine
-cos_boundary_noise_std: 0.02
-```
-
-The number of boundaries must equal the number of intermediate targets:
-
-```text
-len(cos_tau_sigma) == len(video_latents) - 1
-```
-
-`cos_tau_sigma` is in descending sigma order. Current N-step paths are
-`linear`, `target_cosine`, and `target_sigmoid`; legacy path types are limited
-to two-step data. `target_sigmoid` additionally uses
-`cos_sigmoid_steepness`.
-
-For raw chains, use the ordered `videos` Parquet column. For latent chains,
-precompute every waypoint with `--encode_all_videos` so the sample contains
-`latents_0`, `latents_1`, and so on.
-
-Launch COS through the same SFT entrypoint:
-
-```fish
-fish scripts/train/i2v.fish --nproc 8 -- \
-  --config configs/<reviewed-cos-config>.yaml
-```
-
-## Supervised On-Policy Correction
-
-Correction training combines the standard supervised flow-matching loss with
-a correction term built from an EMA-teacher rollout. The teacher generates an
-estimate from noise; the correction target re-aims the student's velocity
-toward the ground truth.
-
-Key fields are:
-
-```yaml
-correction_weight: 0.1
-correction_num_teacher_steps: 4
-correction_use_sde: true
-correction_sde_sigma_max: 1.0
-correction_cfg_scale: 1.0
-correction_sigma_lo: 0.05
-correction_sigma_hi: 0.9
-correction_every_n_steps: 1
-ema_decay: 0.9999
-expert_parallel: false
-```
-
-The lower sigma bound avoids division instability in the correction target.
-`correction_every_n_steps` amortizes teacher rollout cost. Correction training
-does not support expert parallelism because its sequential rollout activates
-only one A14B expert at a time.
-
-Launch directly:
-
-```bash
-.venv/bin/torchrun --standalone --nproc_per_node=8 \
-  -m src.cli.train_i2v_correction \
-  --config configs/train_correction_vbvr.yaml
-```
 
 ## DanceGRPO Overview
 
@@ -300,14 +228,14 @@ FSDP2 shards trainable modules. HSDP shards within a machine and replicates
 across machines. All ranks in a wrapped group must follow the same high/low
 expert routing and replay timestep sequence.
 
-### Expert parallel SFT/COS
+### Expert parallel SFT
 
 A14B expert parallel assigns high- and low-noise experts to separate groups.
 It requires `train_experts: both`, FSDP, and an even world size.
 `expert_parallel_data_mode: duplicate` gives both expert groups the same data
 stream; `split` shards data across all ranks for global throughput.
 
-DanceGRPO and correction training reject expert parallelism.
+DanceGRPO rejects expert parallelism.
 
 ### Tensor parallel A14B RL
 

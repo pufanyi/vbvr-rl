@@ -11,7 +11,7 @@ no model reload) and produces, under ``<root>/compare_ode/``:
 Usage:
     .venv/bin/python scripts/inference/compare_ode_checkpoints.py \
         --root storage/outputs/noise_coeff_sweep \
-        --ckpts cos_maze_epoch4 sft_direct_3000 tracker_cps_100
+        --ckpts checkpoint_a checkpoint_b checkpoint_c
 """
 
 import argparse

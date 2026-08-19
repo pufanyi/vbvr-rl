@@ -28,7 +28,7 @@ from src.models.wan_i2v import WanI2VForTraining
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--config", default="configs/train_dancegrpo_maze_5b_rl_mse.yaml")
+    p.add_argument("--config", required=True, help="RL config shared by the checkpoints")
     p.add_argument("--checkpoint_root", default=None)
     p.add_argument("--checkpoint", action="append", default=None, help="Specific checkpoint path; repeatable")
     p.add_argument("--output_dir", required=True)
@@ -88,16 +88,13 @@ def _save_references(
     video_latents = sample.get("video_latents")
     if video_latents is None:
         return reference_paths
-    if not isinstance(video_latents, list):
-        video_latents = [video_latents]
-    for idx, ref_latents in enumerate(video_latents):
-        ref_path = out_dir / f"reference_latent{idx}.mp4"
-        if force or not ref_path.exists():
-            ref_video = _decode_latents_to_uint8(model, ref_latents.unsqueeze(0).to(device))
-            _export_uint8_video(ref_video, ref_path, fps)
-            del ref_video
-            torch.cuda.empty_cache()
-        reference_paths.append(str(ref_path))
+    ref_path = out_dir / "reference_latent0.mp4"
+    if force or not ref_path.exists():
+        ref_video = _decode_latents_to_uint8(model, video_latents.unsqueeze(0).to(device))
+        _export_uint8_video(ref_video, ref_path, fps)
+        del ref_video
+        torch.cuda.empty_cache()
+    reference_paths.append(str(ref_path))
     return reference_paths
 
 

@@ -132,69 +132,7 @@ class TrainConfig(BaseModel):
 class SFTConfig(TrainConfig):
     """SFT training configuration."""
 
-    # Trainer selection
-    trainer: Literal["i2v", "cos"] = "i2v"
-
-    # COS (Chain-of-Step) piecewise flow matching
-    cos_tau_sigma: list[float] = [0.5]  # piecewise boundaries in sigma space (descending); len = num_intermediates
-    cos_boundary_noise_std: float = 0.02  # Gaussian perturbation std for x_tau in low stage
-    cos_use_standard_formula: bool = False  # ablation: use standard sigma formula per segment (discontinuous)
-    cos_path_type: Literal[
-        "linear",
-        "cosine",
-        "cubic_hermite",
-        "smooth_blend",
-        "quadratic_bezier",
-        "target_linear",
-        "target_cosine",
-        "target_sigmoid",
-    ] = "linear"
-    cos_smooth_blend_delta: float = 0.05  # half-width of blending window (only for smooth_blend path)
-    cos_sigmoid_steepness: float = 10.0  # logistic steepness (only for target_sigmoid path)
-
-    @field_validator("cos_tau_sigma", mode="before")
-    @classmethod
-    def _wrap_tau_sigma(cls, v):
-        if isinstance(v, (int, float)):
-            return [float(v)]
-        return v
-
-    @field_validator("cos_sigmoid_steepness")
-    @classmethod
-    def _validate_cos_sigmoid_steepness(cls, v: float):
-        if v <= 0.0:
-            raise ValueError(f"cos_sigmoid_steepness must be positive, got {v}")
-        return v
-
-
-class CorrectionConfig(TrainConfig):
-    """On-policy correction training configuration.
-
-    Supervised FM loss on the standard (ε, x_GT) line, plus a correction term
-    trained on the line (ε, x̂) where x̂ is an EMA-teacher rollout from ε.
-    The correction target is (x_σ - x_GT) / σ, which re-aims the velocity at
-    the true GT even when the teacher's generation drifts away.
-
-    Expert parallel is unsupported here: the teacher rollout is sequential
-    and keeps a whole batch at one σ per step, so only one MoE expert is
-    active at a time — EP would idle half the GPUs.
-    """
-
-    # Loss balance
-    correction_weight: float = 0.1  # λ on the correction term
-
-    # Teacher rollout
-    correction_num_teacher_steps: int = 4
-    correction_use_sde: bool = True  # False -> deterministic ODE
-    correction_sde_sigma_max: float = 1.0
-    correction_cfg_scale: float = 1.0
-
-    # σ sampling clip for constructing training points (avoid 1/σ blow-up)
-    correction_sigma_lo: float = 0.05
-    correction_sigma_hi: float = 0.9
-
-    # Amortize rollout cost: only run the correction term every N optimizer micro-steps
-    correction_every_n_steps: int = 1
+    trainer: Literal["i2v"] = "i2v"
 
 
 class RLConfig(TrainConfig):

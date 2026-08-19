@@ -10,8 +10,7 @@
 #   MASTER_PORT  — port on master node (default: 29500)
 #
 # Usage: fish scripts/train/grpo_multinode.fish [--nproc N] [training args...]
-#   e.g. fish scripts/train/grpo_multinode.fish --config configs/train_dancegrpo_maze.yaml
-#   e.g. fish scripts/train/grpo_multinode.fish --nproc 8 --config configs/train_dancegrpo_maze.yaml
+#   e.g. fish scripts/train/grpo_multinode.fish --nproc 8 --config configs/<reviewed-rl-config>.yaml
 
 set -l nproc 8
 

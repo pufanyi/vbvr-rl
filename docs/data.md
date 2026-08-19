@@ -21,12 +21,18 @@ The raw dataset is configured by a JSON file whose entries point to Parquet file
 
 The Parquet schema is intentionally small:
 
-- `videos: list<string>`: ordered video chain, used by COS and multi-step training.
-- `video: string`: single target video, used when `videos` is absent.
+- `video: string`: target video.
+- `videos: list<string>`: compatibility form accepted by older manifests; only
+  its final entry is used as the target.
 - `prompt: string`: text prompt.
-- `image: string`: optional reference image; if absent, the first frame of the final video is used.[^i2v-dataset]
+- `image: string`: optional reference image; if absent, the first frame of the
+  target video is used.[^i2v-dataset]
 
-Paths are resolved against `root`, or against the Parquet parent if `root` is absent. Resolution is either fixed by config (`height` + `width`) or computed from `max_area` and the final video's aspect ratio. The result is rounded down to a multiple of 16, matching Wan2.2 VAE spatial scale and transformer patching assumptions.[^i2v-dataset]
+Paths are resolved against `root`, or against the Parquet parent if `root` is
+absent. Resolution is either fixed by config (`height` + `width`) or computed
+from `max_area` and the target video's aspect ratio. The result is rounded down
+to a multiple of 16, matching Wan2.2 VAE spatial scale and transformer patching
+assumptions.[^i2v-dataset]
 
 ## Raw Batch Contract
 
@@ -35,13 +41,15 @@ Paths are resolved against `root`, or against the Parquet parent if `root` is ab
 ```python
 {
     "index": idx,
-    "videos": [video_0, ..., final_video],  # each (C, T, H, W), uint8
+    "videos": [target_video],  # target is (C, T, H, W), uint8
     "image": image,  # (C, H, W), uint8
     "prompt": prompt,
 }
 ```
 
-The common `collate` stacks tensor fields and keeps `videos` as a list of batched tensors, preserving chain order for COS.[^trainer-utils]
+The one-element `videos` list is retained as a batch-interface compatibility
+detail. The common `collate` stacks its target tensor along the batch
+dimension.[^trainer-utils]
 
 ## Local Raw Smoke Fixture
 
@@ -71,7 +79,10 @@ The safetensors payload must contain:
 
 - `prompt_embeds`: variable or fixed length text embeddings;
 - `condition`: first-frame condition tensor;
-- either `latents` for normal SFT/GRPO/correction, or `latents_0`, `latents_1`, ... for COS chains.
+- `latents`: one target video latent tensor.
+
+Numbered multi-target keys such as `latents_0` are rejected. Rebuild older
+shards with the single-target schema before using this release.
 
 The loader pads/truncates prompt embeddings to 512 tokens and passes through non-reserved tensor keys. The pass-through path is used by MazeReward for tensors such as `maze_grid`, `maze_frame_positions_pix`, `maze_goal`, and `maze_ball_rgb`.[^latent-dataset][^maze-reward]
 
@@ -89,15 +100,6 @@ Example:
   --output_dir data/maze/latents/webdataset \
   --batch_size 4 \
   --samples_per_shard 1000
-```
-
-For COS, include every chain waypoint:
-
-```bash
-.venv/bin/torchrun --nproc_per_node=8 -m src.precompute.i2v_latent_webdataset \
-  --config configs/train_cos_maze_cos_path_all_bfs_w_color.yaml \
-  --output_dir data/maze_cos/latents/webdataset \
-  --encode_all_videos
 ```
 
 The precompute script writes `dataset_info.json` with recommended `latent_webdataset_dir` and `dataset_size` fields.[^i2v-latent-precompute]
@@ -192,7 +194,6 @@ publication assets, not the tensor schema accepted by
 The current design makes GPU training fast by moving expensive VAE/T5 work offline. The cost is a stricter data contract:
 
 - latent shards must be regenerated when video resolution, number of frames, prompt cleaning, VAE normalization, or condition construction changes;
-- COS requires all chain latents, not just the final latent;
 - rewards that need pixels still need the VAE loaded at training time;
 - WebDataset exact epoch sizing must be managed explicitly with `dataset_size`.
 

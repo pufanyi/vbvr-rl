@@ -29,11 +29,11 @@ Create a deterministic raw-media fixture:
   --samples 4 --frames 81 --height 512 --width 512 --fps 16
 ```
 
-Launch SFT/COS:
+Launch SFT:
 
 ```fish
 fish scripts/train/i2v.fish --nproc 8 -- \
-  --config configs/<reviewed-sft-or-cos-config>.yaml
+  --config configs/<reviewed-sft-config>.yaml
 ```
 
 Launch DanceGRPO:

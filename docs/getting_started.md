@@ -152,7 +152,7 @@ See [Configuration](configuration.md) for field semantics.
 
 ## 8. Launch Training
 
-Single-machine SFT or COS:
+Single-machine SFT:
 
 ```fish
 fish scripts/train/i2v.fish --nproc 8 -- \

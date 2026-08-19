@@ -210,8 +210,7 @@ class BaseTrainer(CheckpointRuntimeMixin):
     def _get_expert_parallel_sampler_seed(self, cfg: TrainConfig) -> int:
         """Sampler seed for expert-parallel mode.
 
-        Default: same seed -> both groups iterate the same data (SFT behavior).
-        Override in subclass for per-group independent data (COS behavior).
+        Both expert groups use the same seed when duplicate-data mode is active.
         """
         return cfg.seed
 

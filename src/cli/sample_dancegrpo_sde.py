@@ -40,11 +40,8 @@ class LoadedSample:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--config", default="configs/train_dancegrpo_maze_5b_line_to_ball_rl.yaml")
-    p.add_argument(
-        "--checkpoint",
-        default="storage/checkpoints/dancegrpo_maze_5b_line_to_ball_rl_shared_prompt/checkpoint-5000",
-    )
+    p.add_argument("--config", required=True, help="RL config used by the checkpoint")
+    p.add_argument("--checkpoint", required=True, help="DCP checkpoint directory")
     p.add_argument("--output_dir", default="storage/outputs/dancegrpo_5b_sde_group")
     p.add_argument("--sample_index", type=int, default=0, help="Ordinal sample index across sorted shard tar files")
     p.add_argument("--group_size", type=int, default=None, help="Override cfg.grpo_group_size")
@@ -344,17 +341,14 @@ def main() -> int:
 
     reference_paths: list[str] = []
     if not args.no_reference and "video_latents" in sample:
-        video_latents = sample["video_latents"]
-        if not isinstance(video_latents, list):
-            video_latents = [video_latents]
-        for idx, ref_latents in enumerate(video_latents):
-            ref_path = output_dir / f"reference_latent{idx}.mp4"
-            if args.force or not ref_path.exists():
-                ref_video = _decode_latents_to_uint8(model, ref_latents.unsqueeze(0).to(device))
-                _export_uint8_video(ref_video, ref_path, fps)
-                del ref_video
-                torch.cuda.empty_cache()
-            reference_paths.append(str(ref_path))
+        ref_path = output_dir / "reference_latent0.mp4"
+        if args.force or not ref_path.exists():
+            ref_latents = sample["video_latents"]
+            ref_video = _decode_latents_to_uint8(model, ref_latents.unsqueeze(0).to(device))
+            _export_uint8_video(ref_video, ref_path, fps)
+            del ref_video
+            torch.cuda.empty_cache()
+        reference_paths.append(str(ref_path))
 
     init_generator = torch.Generator(device=device).manual_seed(seed + 17)
     shared_initial_latent = None

@@ -16,7 +16,7 @@ Usage:
     # With checkpoint
     .venv/bin/torchrun --nproc_per_node=8 -m src.cli.eval_maze \
         --eval_json /path/to/test.json --output_dir eval_out/ \
-        --checkpoint storage/checkpoints/cos_maze/checkpoint-1000
+        --checkpoint storage/checkpoints/<run>/checkpoint-1000
 
 Output structure:
     output_dir/

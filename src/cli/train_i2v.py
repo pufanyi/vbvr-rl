@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 
-from src.trainer import COSTrainer, I2VTrainer, SFTConfig
+from src.trainer import I2VTrainer, SFTConfig
 
 
 def main():
@@ -37,8 +37,7 @@ def main():
             cfg_dict[name] = v
 
     cfg = SFTConfig(**cfg_dict)
-    trainer_cls = COSTrainer if cfg.trainer == "cos" else I2VTrainer
-    trainer = trainer_cls(cfg)
+    trainer = I2VTrainer(cfg)
     trainer.train()
 
 

@@ -41,12 +41,9 @@ def _load_render_config(path: str) -> Any:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--config", default="configs/train_dancegrpo_maze_5b_line_to_ball_rl.yaml")
-    p.add_argument(
-        "--checkpoint",
-        default="storage/checkpoints/cos_maze_5b_line_to_ball_100k_tau_0.9/checkpoint-epoch3",
-    )
-    p.add_argument("--output_dir", default="storage/outputs/maze_5b_line_to_ball_rl_start_sde_steps_group00")
+    p.add_argument("--config", required=True, help="SFT or RL config used by the checkpoint")
+    p.add_argument("--checkpoint", required=True, help="DCP checkpoint directory")
+    p.add_argument("--output_dir", default="storage/outputs/dancegrpo_sde_steps")
     p.add_argument("--sample_index", type=int, default=0, help="Ordinal sample index across sorted shard tar files")
     p.add_argument("--group_index", type=int, default=0, help="Rollout group index to reproduce/render")
     p.add_argument("--num_sampling_steps", type=int, default=None, help="Override cfg.grpo_num_sampling_steps")
@@ -316,17 +313,14 @@ def main() -> int:
 
     reference_paths: list[str] = []
     if "video_latents" in sample:
-        video_latents = sample["video_latents"]
-        if not isinstance(video_latents, list):
-            video_latents = [video_latents]
-        for ref_idx, ref_latents in enumerate(video_latents):
-            ref_path = output_dir / f"reference_latent{ref_idx}.mp4"
-            if args.force or not ref_path.exists():
-                ref_video = _decode_latents_to_uint8(model, ref_latents.unsqueeze(0).to(device))
-                _export_uint8_video(ref_video, ref_path, fps)
-                del ref_video
-                torch.cuda.empty_cache()
-            reference_paths.append(str(ref_path))
+        ref_path = output_dir / "reference_latent0.mp4"
+        if args.force or not ref_path.exists():
+            ref_latents = sample["video_latents"]
+            ref_video = _decode_latents_to_uint8(model, ref_latents.unsqueeze(0).to(device))
+            _export_uint8_video(ref_video, ref_path, fps)
+            del ref_video
+            torch.cuda.empty_cache()
+        reference_paths.append(str(ref_path))
 
     init_generator = torch.Generator(device=device).manual_seed(seed + 17)
     shared_initial_latent = None

@@ -88,3 +88,48 @@ def test_release_uses_the_official_vbvr_pro_rl_dataset():
     for relative in ("README.md", "docs/data.md", "docs/getting_started.md"):
         assert "Video-Reason/VBVR-Pro-RL" in (_REPO_ROOT / relative).read_text(encoding="utf-8")
     assert not (_REPO_ROOT / "scripts/data/vbvr_pro_pack_hf.py").exists()
+
+
+def test_removed_training_modes_are_not_shipped():
+    removed_paths = (
+        "src/cli/train_cos.py",
+        "src/cli/train_i2v_correction.py",
+        "src/models/cos_path.py",
+        "src/trainer/cos_trainer.py",
+        "src/trainer/i2v_correction_trainer.py",
+    )
+    assert all(not (_REPO_ROOT / relative).exists() for relative in removed_paths)
+    assert not list((_REPO_ROOT / "configs").glob("train_cos_*.yaml"))
+    assert not list((_REPO_ROOT / "configs").glob("train_correction_*.yaml"))
+
+    forbidden_tokens = (
+        "Chain-of-Step",
+        "COSTrainer",
+        "CorrectionConfig",
+        "I2VCorrectionTrainer",
+        "compute_cos_loss",
+        "compute_correction_loss",
+        "cos_tau_sigma",
+        "cos_chain_mode",
+        "trainer: cos",
+        "train_i2v_correction",
+    )
+    release_sources = [
+        _REPO_ROOT / "README.md",
+        _REPO_ROOT / "CHANGELOG.md",
+        _REPO_ROOT / "AGENTS.md",
+        *_release_documents(),
+        *sorted((_REPO_ROOT / "src").rglob("*.py")),
+        *sorted((_REPO_ROOT / "configs").glob("*.yaml")),
+        *sorted((_REPO_ROOT / "scripts").rglob("*.py")),
+        *sorted((_REPO_ROOT / "scripts").rglob("*.fish")),
+        *sorted((_REPO_ROOT / "scripts").rglob("*.bash")),
+        *sorted((_REPO_ROOT / "scripts").rglob("*.sh")),
+    ]
+    violations: list[str] = []
+    for path in dict.fromkeys(release_sources):
+        text = path.read_text(encoding="utf-8").lower()
+        for token in forbidden_tokens:
+            if token.lower() in text:
+                violations.append(f"{path.relative_to(_REPO_ROOT)}: {token}")
+    assert not violations, f"removed training mode references: {violations}"

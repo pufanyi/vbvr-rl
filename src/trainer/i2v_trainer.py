@@ -14,15 +14,6 @@ from src.trainer.flops import MFUMonitor, compute_wan_seq_len, estimate_wan_forw
 from src.trainer.utils import cosine_lr, format_eta, to_model_pixels
 
 
-def _final_video_latents(video_latents):
-    """Return the final target latent from a single-target or chain latent batch."""
-    if isinstance(video_latents, list):
-        if not video_latents:
-            raise ValueError("video_latents list is empty")
-        return video_latents[-1]
-    return video_latents
-
-
 class I2VTrainer(BaseTrainer):
     def _post_init(self, cfg: TrainConfig) -> None:
         self.mfu_monitor = self._setup_mfu()
@@ -73,7 +64,6 @@ class I2VTrainer(BaseTrainer):
             try:
                 sample = next(iter(self.dataset))
                 latent = sample["video_latents"]  # (C, T', H', W')
-                latent = _final_video_latents(latent)
                 _, t_lat, h_lat, w_lat = latent.shape
                 ref_t = experts[0][1] if experts else None
                 if ref_t is not None:
@@ -372,7 +362,7 @@ class I2VTrainer(BaseTrainer):
         if "prompt_embeds" in batch:
             # Precomputed latents path
             prompt_embeds = batch["prompt_embeds"].to(self.device)
-            video_latents = _final_video_latents(batch["video_latents"]).to(self.device)
+            video_latents = batch["video_latents"].to(self.device)
             condition = batch["condition"].to(self.device)
         else:
             # Raw data path — encode on-the-fly

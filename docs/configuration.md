@@ -35,12 +35,10 @@ CLI does not parse every composite type.
 
 | Entry point | Config class | Purpose |
 | --- | --- | --- |
-| `src.cli.train_i2v` | `SFTConfig` | Standard flow-matching SFT and COS |
-| `src.cli.train_i2v_correction` | `CorrectionConfig` | Supervised on-policy correction |
+| `src.cli.train_i2v` | `SFTConfig` | Standard flow-matching SFT |
 | `src.cli.train_grpo` | `RLConfig` | DanceGRPO rollout and replay |
 
-`SFTConfig.trainer` selects `i2v` or `cos`. `RLConfig.trainer` is
-`dancegrpo`.
+`SFTConfig.trainer` is `i2v`; `RLConfig.trainer` is `dancegrpo`.
 
 ## Paths and Artifact Isolation
 
@@ -79,8 +77,7 @@ both settings before assuming input order.
 
 Set `latent_webdataset_dir` to a directory of `shard-*.tar` files. Each sample
 must contain `{key}.safetensors` and `{key}.json`; required tensors are
-`prompt_embeds`, `condition`, and either `latents` or a COS chain named
-`latents_0`, `latents_1`, and so on.
+`prompt_embeds`, `condition`, and one target tensor named `latents`.
 
 Always set the exact `dataset_size`. It determines rank-local epoch lengths and
 the learning-rate schedule. Latents and conditions must be created with the
@@ -121,7 +118,7 @@ All ranks must execute compatible wrapped-module forward sequences.
 
 `expert_parallel: true` splits A14B high- and low-noise experts into separate
 groups. It requires FSDP, both experts, an even world size, and synchronized
-routing. It is supported by SFT/COS, not DanceGRPO or correction training.
+routing. It is supported by SFT, but not DanceGRPO.
 
 ### Tensor parallel RL
 

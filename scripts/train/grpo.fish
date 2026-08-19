@@ -1,7 +1,7 @@
 #!/usr/bin/env fish
 # Wan2.2 I2V DanceGRPO training launcher
 # Usage: fish scripts/train/grpo.fish [--nproc N] [training args...]
-#   e.g. fish scripts/train/grpo.fish --config configs/train_dancegrpo_maze.yaml
+#   e.g. fish scripts/train/grpo.fish --nproc 1 --config configs/train_dancegrpo_vbvr_pro_5b_512x512x81_official_base_smoke_1gpu.yaml
 
 set -l nproc 8
 

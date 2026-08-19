@@ -12,10 +12,10 @@ Config JSON points to one or more parquet files:
     ]
 
 Parquet schema:
-    - videos: list<string>  — ordered video paths [step_0, step_1, ..., final]
-      OR video: string      — single video path (equivalent to [video])
+    - video: string         — target video path
+      OR videos: list<string> — compatibility form; only the final entry is used
     - prompt: string
-    - image:  string        — optional reference image (uses first frame of videos[-1] if absent)
+    - image:  string        — optional reference image (uses the target's first frame if absent)
 
 Per-dataset overrides (optional keys in the config dict):
     num_frames, max_area, height, width, fps
@@ -230,21 +230,23 @@ class I2VDataset(Dataset):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _read_row(table, row: int) -> tuple[list[str], str, str | None]:
-        """Read a single row. Returns (video_paths, prompt, image_path)."""
+    def _read_row(table, row: int) -> tuple[str, str, str | None]:
+        """Read a single row. Returns (target_video_path, prompt, image_path)."""
         cols = table.column_names
 
-        if "videos" in cols:
+        video_path = table.column("video")[row].as_py() if "video" in cols else None
+        if not video_path and "videos" in cols:
             video_paths = table.column("videos")[row].as_py()
-        elif "video" in cols:
-            video_paths = [table.column("video")[row].as_py()]
-        else:
-            raise ValueError("Table has no 'videos' or 'video' column")
+            if not video_paths:
+                raise ValueError("'videos' column contains an empty list")
+            video_path = video_paths[-1]
+        if not video_path:
+            raise ValueError("Table row has no target in 'video' or 'videos'")
 
         prompt = table.column("prompt")[row].as_py() if "prompt" in cols else ""
         image = table.column("image")[row].as_py() if "image" in cols else None
 
-        return video_paths, prompt, image
+        return video_path, prompt, image
 
     @staticmethod
     def _resolve_config_path(path: str | os.PathLike[str], parent_dir: Path) -> Path:
@@ -517,9 +519,9 @@ class I2VDataset(Dataset):
             si, row = self._locate(source_idx)
             source = self._sources[si]
             if source["format"] == "parquet":
-                video_paths, prompt, image_path = self._read_row(source["table"], row)
+                video_path, prompt, image_path = self._read_row(source["table"], row)
                 root = source["root"]
-                paths = [self._resolve(p, root) for p in video_paths]
+                paths = [self._resolve(video_path, root)]
                 if image_path is not None:
                     paths.append(self._resolve(image_path, root))
             else:
@@ -583,9 +585,9 @@ class I2VDataset(Dataset):
         si, row = self._locate(source_idx)
         source = self._sources[si]
         if source["format"] == "parquet":
-            video_paths, _prompt, image_path = self._read_row(source["table"], row)
+            video_path, _prompt, image_path = self._read_row(source["table"], row)
             root = source["root"]
-            paths = [self._resolve(p, root) for p in video_paths]
+            paths = [self._resolve(video_path, root)]
             if image_path is not None:
                 paths.append(self._resolve(image_path, root))
         else:
@@ -602,26 +604,23 @@ class I2VDataset(Dataset):
         if source["format"] == "vbvr_pro":
             return self._load_vbvr_pro_item(source_idx, source["samples"][row], source["cfg"])
 
-        video_paths, prompt, image_path = self._read_row(source["table"], row)
+        video_path, prompt, image_path = self._read_row(source["table"], row)
         cfg = source["cfg"]
         root = source["root"]
 
-        # Use the last video (final target) to determine resolution
-        final_video_path = self._resolve(video_paths[-1], root)
-        height, width = self._get_video_hw(final_video_path, cfg)
+        target_video_path = self._resolve(video_path, root)
+        height, width = self._get_video_hw(target_video_path, cfg)
+        video = self._load_video(target_video_path, height, width, cfg)
 
-        # Load all videos in order
-        videos = [self._load_video(self._resolve(p, root), height, width, cfg) for p in video_paths]
-
-        # Reference image: explicit column, or first frame of the final video
+        # Reference image: explicit column, or first frame of the target video.
         if image_path is not None:
             image = self._load_image(self._resolve(image_path, root), height, width)
         else:
-            image = videos[-1][:, 0].clone()
+            image = video[:, 0].clone()
 
         return {
             "index": source_idx,
-            "videos": videos,
+            "videos": [video],
             "image": image,
             "prompt": prompt,
         }

@@ -159,7 +159,7 @@ def _slice_prompt_batch(batch: dict[str, Any], index: int, batch_size: int) -> d
         if isinstance(value, torch.Tensor):
             sliced[key] = value[index : index + 1]
         elif isinstance(value, list):
-            if key in {"videos", "video_latents"} and value and all(torch.is_tensor(item) for item in value):
+            if key == "videos" and value and all(torch.is_tensor(item) for item in value):
                 sliced[key] = [item[index : index + 1] for item in value]
             elif len(value) == batch_size:
                 sliced[key] = value[index : index + 1]

@@ -12,8 +12,8 @@ under the ignored `storage/` tree.
    distributed topology, rewards, and resume behavior.
 3. [Data](data.md) — prepare raw Parquet data, latent WebDataset shards, and the
    public VBVR-Pro RL snapshot.
-4. [Training](training.md) — launch SFT, COS, correction, or DanceGRPO and adapt
-   the reference configs safely.
+4. [Training](training.md) — launch SFT or DanceGRPO and adapt the reference
+   configs safely.
 5. [Evaluation](evaluation.md) — generate, prepare, score, and audit VBVR-Pro
    outputs.
 

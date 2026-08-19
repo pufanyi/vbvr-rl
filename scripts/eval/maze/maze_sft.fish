@@ -16,13 +16,7 @@ set CHECKPOINTS \
     # storage/checkpoints/sft_maze_muon/checkpoint-2000 \
     # storage/checkpoints/sft_maze_muon/checkpoint-4000 \
     # storage/checkpoints/sft_maze_muon/checkpoint-6000
-    # storage/checkpoints/cos_maze_cos_path_all/checkpoint-4000
-    # storage/checkpoints/cos_maze_cos_path/checkpoint-4000 \
     # storage/checkpoints/sft_maze/checkpoint-epoch0
-    # storage/checkpoints/cos_maze_linear_path/checkpoint-2000
-    # storage/checkpoints/cos_maze/checkpoint-epoch0
-    # storage/checkpoints/cos_maze/checkpoint-3000
-    # storage/checkpoints/cos_maze/checkpoint-4000
 set NUM_GPUS 1
 set NUM_SAMPLES 5         # leave empty to use all samples
 set NUM_RENDER_STEPS     # leave empty to render all steps

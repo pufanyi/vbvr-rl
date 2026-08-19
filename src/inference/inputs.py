@@ -136,8 +136,7 @@ def prepare_from_latent(cfg: InferenceConfig, device: torch.device) -> PreparedI
     reference_latents: list[torch.Tensor] = []
     video_latents = sample.get("video_latents")
     if video_latents is not None:
-        refs = video_latents if isinstance(video_latents, list) else [video_latents]
-        reference_latents = [r.detach().cpu() for r in refs]
+        reference_latents = [video_latents.detach().cpu()]
 
     return PreparedInput(
         condition=condition,

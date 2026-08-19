@@ -46,7 +46,9 @@ The runtime applies a save filter before writing `high/` or `low/`, so each subd
 
 ## EMA
 
-`EMA` stores local shadow copies of trainable parameter shards. Because it tracks the current sharded parameter tensors, it can be saved with DCP and resharded on load. It also supports `swap_to_shadow()` for correction teacher rollouts.[^ema]
+`EMA` stores local shadow copies of trainable parameter shards. Because it
+tracks the current sharded parameter tensors, it can be saved with DCP and
+resharded on load.[^ema]
 
 When loading as weight-only initialization, EMA is preferred if present. For evaluation, `eval_i2v --use_ema` explicitly asks `load_dcp_into_pipeline` to prefer EMA shadows.[^checkpoint]
 

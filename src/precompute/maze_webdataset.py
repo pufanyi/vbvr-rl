@@ -11,14 +11,12 @@ End-to-end pipeline (runnable under torchrun):
        layout matches ``VBVRLatentDataset``:
 
            {key:07d}.safetensors   → prompt_embeds / latents / condition
-                                     or prompt_embeds / latents_0 / latents_1 / condition
                                      plus maze_* tensors for reward use
            {key:07d}.json          → prompt / tar / index_in_tar / seq_len
                                      plus a structured ``maze`` blob
 
-The extra ``maze_*`` tensors and JSON fields are ignored by
-``VBVRLatentDataset._decode_sample`` — they are only consumed by a future
-maze-aware dataset / reward function.
+The extra ``maze_*`` tensors and JSON fields pass through
+``VBVRLatentDataset._decode_sample`` for maze-aware reward functions.
 
 Launch (single node, 8 GPUs)::
 
@@ -30,8 +28,7 @@ Launch (single node, 8 GPUs)::
         --model_path storage/models/Wan2.2-I2V-A14B-Diffusers \
         --num_samples 100000 --samples_per_shard 1000
 
-The output directory is compatible with ``configs/train_correction_vbvr.yaml``
-by setting ``latent_webdataset_dir`` to either the SFT or RL split directory.
+Set ``latent_webdataset_dir`` to either the generated SFT or RL split directory.
 """
 
 from __future__ import annotations
@@ -59,10 +56,8 @@ from tqdm import tqdm
 from src.precompute.maze_generator import (
     DEFAULT_DIFFICULTIES,
     DEFAULT_PALETTES,
-    RENDER_MODE_MOVING_BALL,
     MazeSample,
     MazeSpec,
-    build_line_waypoint_from_sample,
     build_maze_sample,
     normalize_render_mode,
 )
@@ -99,8 +94,6 @@ class GenConfig(BaseModel):
     difficulty_names: str = "easy,mid,hard,xhard"
     difficulty_geometries: str | None = None
     render_mode: str = "moving_ball"
-    cos_chain_mode: str = "single"
-    line_completion_fraction: float = Field(default=0.5, gt=0.0, le=1.0)
     max_generation_attempts: int = Field(default=512, ge=1)
     max_search_steps: int = Field(default=250_000, ge=1)
 
@@ -141,27 +134,6 @@ class GenConfig(BaseModel):
             max_generation_attempts=self.max_generation_attempts,
             max_search_steps=self.max_search_steps,
         )
-
-
-COS_CHAIN_MODE_SINGLE = "single"
-COS_CHAIN_MODE_LINE_TO_MOVING_BALL = "line_to_moving_ball"
-COS_CHAIN_MODE_ALIASES = {
-    "single": COS_CHAIN_MODE_SINGLE,
-    "none": COS_CHAIN_MODE_SINGLE,
-    "off": COS_CHAIN_MODE_SINGLE,
-    "line_to_moving_ball": COS_CHAIN_MODE_LINE_TO_MOVING_BALL,
-    "line_to_ball": COS_CHAIN_MODE_LINE_TO_MOVING_BALL,
-    "path_line_to_moving_ball": COS_CHAIN_MODE_LINE_TO_MOVING_BALL,
-}
-
-
-def normalize_cos_chain_mode(mode: str) -> str:
-    key = mode.strip().lower().replace("-", "_")
-    try:
-        return COS_CHAIN_MODE_ALIASES[key]
-    except KeyError as exc:
-        valid = ", ".join(sorted(COS_CHAIN_MODE_ALIASES))
-        raise ValueError(f"Unknown COS chain mode '{mode}'. Valid values: {valid}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -267,13 +239,6 @@ def _parse_difficulty_geometries(raw: str | None) -> dict[str, tuple[int, int, i
 
 def _build_maze_specs(cfg: GenConfig) -> tuple[dict[str, MazeSpec], tuple[int, int], dict[str, tuple[int, int, int]]]:
     """Build either one default spec or per-difficulty specs with shared output H/W."""
-    render_mode = normalize_render_mode(cfg.render_mode)
-    cos_chain_mode = normalize_cos_chain_mode(cfg.cos_chain_mode)
-    if cos_chain_mode == COS_CHAIN_MODE_LINE_TO_MOVING_BALL and render_mode != RENDER_MODE_MOVING_BALL:
-        raise ValueError(
-            "cos_chain_mode=line_to_moving_ball requires render_mode=moving_ball because "
-            "the final COS waypoint is the moving-ball target."
-        )
     _validate_num_frames(cfg.num_frames)
     difficulty_names = cfg.difficulty_tuple()
     if not difficulty_names:
@@ -555,8 +520,8 @@ def _tar_add_bytes(tar: tarfile.TarFile, name: str, data: bytes) -> None:
 
 
 ShardPlanEntry = tuple[str, Path, int, list[int], int]
-GeneratedSample = tuple[list[np.ndarray], list[MazeSample], int]
-EncodedSample = tuple[list[torch.Tensor], torch.Tensor, torch.Tensor, list[MazeSample], int]
+GeneratedSample = tuple[np.ndarray, MazeSample, int]
+EncodedSample = tuple[torch.Tensor, torch.Tensor, torch.Tensor, MazeSample, int]
 
 
 def _using_split_dirs(cfg: GenConfig) -> bool:
@@ -613,7 +578,6 @@ def _generate_shard_samples(
     """CPU-only: synthesise ``count`` maze samples with deterministic seeds."""
     out: list[GeneratedSample] = []
     difficulty_names = cfg.difficulty_tuple()
-    cos_chain_mode = normalize_cos_chain_mode(cfg.cos_chain_mode)
     for gid in sample_gids:
         sample_seed = cfg.seed + gid
         rng = np.random.default_rng(sample_seed)
@@ -624,17 +588,8 @@ def _generate_shard_samples(
             difficulty_name = difficulty_names[int(difficulty_rng.integers(0, len(difficulty_names)))]
             spec = specs[difficulty_name]
         video, sample = build_maze_sample(spec, rng, sample_seed=sample_seed)
-        videos = [video]
-        samples = [sample]
-        if cos_chain_mode == COS_CHAIN_MODE_LINE_TO_MOVING_BALL:
-            waypoint_video, waypoint_sample = build_line_waypoint_from_sample(
-                sample,
-                completion_fraction=cfg.line_completion_fraction,
-            )
-            videos = [waypoint_video, video]
-            samples = [waypoint_sample, sample]
-        _write_preview_video(cfg, gid, split_name, videos, samples)
-        out.append((videos, samples, gid))
+        _write_preview_video(cfg, gid, split_name, video, sample)
+        out.append((video, sample, gid))
     return out
 
 
@@ -642,37 +597,30 @@ def _write_preview_video(
     cfg: GenConfig,
     gid: int,
     split_name: str,
-    videos: list[np.ndarray],
-    samples: list[MazeSample],
+    video: np.ndarray,
+    sample: MazeSample,
 ) -> None:
     preview_dir = _preview_output_dir(cfg)
     if preview_dir is None or gid >= cfg.num_preview_videos:
         return
 
     preview_dir.mkdir(parents=True, exist_ok=True)
-    final_sample = samples[-1]
-    stem = f"{gid:07d}_{final_sample.difficulty}"
+    stem = f"{gid:07d}_{sample.difficulty}"
     from diffusers.utils import export_to_video
     from PIL import Image
 
-    for idx, (video, sample) in enumerate(zip(videos, samples, strict=True)):
-        suffix = "" if len(videos) == 1 else f"_latent{idx}_{sample.render_mode}"
-        video_path = preview_dir / f"{stem}{suffix}.mp4"
-        if not video_path.exists():
-            export_to_video([Image.fromarray(frame) for frame in video], str(video_path), fps=cfg.preview_fps)
+    video_path = preview_dir / f"{stem}.mp4"
+    if not video_path.exists():
+        export_to_video([Image.fromarray(frame) for frame in video], str(video_path), fps=cfg.preview_fps)
 
     meta_path = preview_dir / f"{stem}.json"
     if not meta_path.exists():
         meta = {
             "global_index": gid,
             "split": split_name,
-            "prompt": final_sample.prompt,
-            "num_latents": len(videos),
-            "cos_chain_mode": normalize_cos_chain_mode(cfg.cos_chain_mode),
-            "maze": _sample_to_json_blob(final_sample, fps=cfg.preview_fps),
+            "prompt": sample.prompt,
+            "maze": _sample_to_json_blob(sample, fps=cfg.preview_fps),
         }
-        if len(samples) > 1:
-            meta["maze_chain"] = [_sample_to_json_blob(sample, fps=cfg.preview_fps) for sample in samples]
         meta_path.write_text(json.dumps(meta, indent=2) + "\n")
 
 
@@ -689,49 +637,37 @@ def _encode_shard(
     n = len(samples)
     if n == 0:
         return []
-    num_latents = len(samples[0][0])
-    if any(len(videos) != num_latents for videos, _, _ in samples):
-        raise ValueError("All samples in a shard must have the same number of COS chain videos")
-    latents_all: list[list[torch.Tensor]] = [[None] * n for _ in range(num_latents)]  # type: ignore[list-item]
+    latents_all: list[torch.Tensor] = [None] * n  # type: ignore[list-item]
     condition_all: list[torch.Tensor] = [None] * n  # type: ignore[list-item]
 
     # Video + condition (VAE) in small batches.
     for batch_start in range(0, n, cfg.vae_batch_size):
         batch = samples[batch_start : batch_start + cfg.vae_batch_size]
-        final_vids = torch.stack([_video_to_tensor(videos[-1]) for videos, _, _ in batch]).to(
+        videos = torch.stack([_video_to_tensor(video) for video, _, _ in batch]).to(
             device=device,
             dtype=torch.bfloat16,
             non_blocking=True,
         )
-        first_frames = final_vids[:, :, 0].contiguous()
+        first_frames = videos[:, :, 0].contiguous()
         cond = _encode_condition(vae_bundle, first_frames, cfg.num_frames, height, width)
+        latents = _encode_video(vae_bundle, videos)
         for j in range(len(batch)):
             condition_all[batch_start + j] = cond[j].contiguous().cpu()
-        del final_vids, first_frames, cond
-
-        for latent_idx in range(num_latents):
-            vids = torch.stack([_video_to_tensor(videos[latent_idx]) for videos, _, _ in batch]).to(
-                device=device,
-                dtype=torch.bfloat16,
-                non_blocking=True,
-            )
-            latents = _encode_video(vae_bundle, vids)
-            for j in range(len(batch)):
-                latents_all[latent_idx][batch_start + j] = latents[j].contiguous().cpu()
-            del vids, latents
+            latents_all[batch_start + j] = latents[j].contiguous().cpu()
+        del videos, first_frames, cond, latents
 
     # Prompts (text encoder) in larger batches.
     prompt_embeds_all: list[torch.Tensor] = [None] * n  # type: ignore[list-item]
     for batch_start in range(0, n, cfg.text_batch_size):
         batch = samples[batch_start : batch_start + cfg.text_batch_size]
-        prompts = [sample_chain[-1].prompt for _, sample_chain, _ in batch]
+        prompts = [sample.prompt for _, sample, _ in batch]
         embeds = _encode_prompts(text_bundle, prompts, device)
         for j, e in enumerate(embeds):
             prompt_embeds_all[batch_start + j] = e.cpu()
 
     return [
         (
-            [latents_all[latent_idx][i] for latent_idx in range(num_latents)],
+            latents_all[i],
             condition_all[i],
             prompt_embeds_all[i],
             samples[i][1],
@@ -749,38 +685,29 @@ def _write_encoded_samples(
     split_offset: int,
     local_start: int,
 ) -> None:
-    for local_idx, (latents_list, condition, prompt_embeds, samples, gid) in enumerate(encoded):
+    for local_idx, (latents, condition, prompt_embeds, sample, gid) in enumerate(encoded):
         key = f"{gid:07d}"
-        final_sample = samples[-1]
 
         st_tensors = {
             "prompt_embeds": prompt_embeds,
             "condition": condition,
-            **_sample_to_reward_tensors(final_sample),
+            "latents": latents,
+            **_sample_to_reward_tensors(sample),
         }
-        if len(latents_list) == 1:
-            st_tensors["latents"] = latents_list[0]
-        else:
-            for latent_idx, latents in enumerate(latents_list):
-                st_tensors[f"latents_{latent_idx}"] = latents
         st_bytes = st_save(st_tensors)
 
         meta = {
             "metadata_schema_version": 2,
-            "prompt": final_sample.prompt,
+            "prompt": sample.prompt,
             "tar": cfg.tar_tag,
             "index_in_tar": gid,
             "global_index": gid,
             "split": split_name,
             "split_index": split_offset + local_start + local_idx,
             "seq_len": int(prompt_embeds.shape[0]),
-            "render_mode": final_sample.render_mode,
-            "num_latents": len(latents_list),
-            "cos_chain_mode": normalize_cos_chain_mode(cfg.cos_chain_mode),
-            "maze": _sample_to_json_blob(final_sample, fps=cfg.preview_fps),
+            "render_mode": sample.render_mode,
+            "maze": _sample_to_json_blob(sample, fps=cfg.preview_fps),
         }
-        if len(samples) > 1:
-            meta["maze_chain"] = [_sample_to_json_blob(sample, fps=cfg.preview_fps) for sample in samples]
         meta_bytes = json.dumps(meta).encode()
 
         _tar_add_bytes(tar, f"{key}.safetensors", st_bytes)
@@ -863,7 +790,6 @@ def main() -> None:
         preview_dir.mkdir(parents=True, exist_ok=True)
 
     specs, (height, width), geometry_map = _build_maze_specs(cfg)
-    cos_chain_mode = normalize_cos_chain_mode(cfg.cos_chain_mode)
     plan, split_counts = _shard_plan(cfg)
     if cfg.only_split:
         only_split = cfg.only_split.strip()
@@ -875,16 +801,13 @@ def main() -> None:
 
     if rank == 0:
         logger.info(
-            "Maze gen: {} samples @ {}x{} px, {} frames, render_mode={}, cos_chain_mode={}",
+            "Maze gen: {} samples @ {}x{} px, {} frames, render_mode={}",
             cfg.num_samples,
             height,
             width,
             cfg.num_frames,
             normalize_render_mode(cfg.render_mode),
-            cos_chain_mode,
         )
-        if cos_chain_mode == COS_CHAIN_MODE_LINE_TO_MOVING_BALL:
-            logger.info("Line waypoint completes by {:.0%} of frames", cfg.line_completion_fraction)
         if geometry_map:
             logger.info("Per-difficulty geometries: {}", geometry_map)
         else:
@@ -954,9 +877,6 @@ def main() -> None:
             "image_w": width,
             "num_frames": cfg.num_frames,
             "render_mode": normalize_render_mode(cfg.render_mode),
-            "cos_chain_mode": cos_chain_mode,
-            "line_completion_fraction": cfg.line_completion_fraction,
-            "num_latents": 2 if cos_chain_mode == COS_CHAIN_MODE_LINE_TO_MOVING_BALL else 1,
             "cell_h": cfg.cell_h,
             "cell_w": cfg.cell_w,
             "cell_px": cfg.cell_px,

@@ -74,11 +74,6 @@ def parse_args():
     p.add_argument("--shuffle_seed", type=int, default=42, help="Shuffle seed before sharding across ranks")
     p.add_argument("--max_samples", type=int, default=None, help="Optional cap for smoke tests")
     p.add_argument("--no_shuffle", action="store_true", help="Keep dataset order instead of shuffling")
-    p.add_argument(
-        "--encode_all_videos",
-        action="store_true",
-        help="Encode every video in the chain and store latents_0, latents_1, ... for COS training",
-    )
     p.add_argument("--compile_text_encoder", action="store_true", help="Use torch.compile on the text encoder")
     p.add_argument("--compile_vae", action="store_true", help="Use torch.compile on the VAE encoder")
     return p.parse_args()
@@ -206,18 +201,20 @@ class ParquetI2VDataset:
         return ti, local
 
     @staticmethod
-    def _read_row(table, row: int) -> tuple[list[str], str, str | None]:
+    def _read_row(table, row: int) -> tuple[str, str, str | None]:
         cols = table.column_names
-        if "videos" in cols:
+        video_path = table.column("video")[row].as_py() if "video" in cols else None
+        if not video_path and "videos" in cols:
             video_paths = table.column("videos")[row].as_py()
-        elif "video" in cols:
-            video_paths = [table.column("video")[row].as_py()]
-        else:
-            raise ValueError("Table has no 'videos' or 'video' column")
+            if not video_paths:
+                raise ValueError("'videos' column contains an empty list")
+            video_path = video_paths[-1]
+        if not video_path:
+            raise ValueError("Table row has no target in 'video' or 'videos'")
 
         prompt = table.column("prompt")[row].as_py() if "prompt" in cols else ""
         image = table.column("image")[row].as_py() if "image" in cols else None
-        return video_paths, prompt, image
+        return video_path, prompt, image
 
     @staticmethod
     def _resolve(path: str, root: Path) -> str:
@@ -283,22 +280,22 @@ class ParquetI2VDataset:
 
     def _load_item(self, idx: int):
         ti, row = self._locate(idx)
-        video_paths, prompt, image_path = self._read_row(self._tables[ti], row)
+        video_path, prompt, image_path = self._read_row(self._tables[ti], row)
         cfg = self._configs[ti]
         root = self._roots[ti]
 
-        final_video_path = self._resolve(video_paths[-1], root)
-        height, width = self._get_video_hw(final_video_path, cfg)
-        videos = [self._load_video(self._resolve(p, root), height, width, cfg) for p in video_paths]
+        target_video_path = self._resolve(video_path, root)
+        height, width = self._get_video_hw(target_video_path, cfg)
+        video = self._load_video(target_video_path, height, width, cfg)
 
         if image_path is not None:
             image = self._load_image(self._resolve(image_path, root), height, width)
         else:
-            image = videos[-1][:, 0].clone()
+            image = video[:, 0].clone()
 
         return {
             "index": idx,
-            "videos": videos,
+            "videos": [video],
             "image": image,
             "prompt": prompt,
         }
@@ -490,23 +487,17 @@ def main():
             prompts = batch["prompt"]
             prompt_embeds = encode_text(text_components, prompts, device)
 
-            videos = batch["videos"]
-            final_video = videos[-1]
+            target_video = batch["videos"][0]
             image = batch["image"]
 
-            final_video_pixels = to_model_pixels(final_video, torch.device(device))
+            target_video_pixels = to_model_pixels(target_video, torch.device(device))
             image_pixels = to_model_pixels(image, torch.device(device))
 
-            num_frames = int(final_video_pixels.shape[2])
-            height = int(final_video_pixels.shape[3])
-            width = int(final_video_pixels.shape[4])
+            num_frames = int(target_video_pixels.shape[2])
+            height = int(target_video_pixels.shape[3])
+            width = int(target_video_pixels.shape[4])
 
-            if args.encode_all_videos:
-                all_video_latents = [
-                    encode_video(vae_components, to_model_pixels(video, torch.device(device))) for video in videos
-                ]
-            else:
-                all_video_latents = [encode_video(vae_components, final_video_pixels)]
+            video_latents = encode_video(vae_components, target_video_pixels)
             condition = prepare_condition(vae_components, image_pixels, num_frames, height, width)
 
             for i, prompt in enumerate(prompts):
@@ -517,13 +508,8 @@ def main():
                 tensors = {
                     "prompt_embeds": pe,
                     "condition": sample_condition,
+                    "latents": video_latents[i].contiguous().cpu(),
                 }
-                use_multi_latents = args.encode_all_videos and len(all_video_latents) > 1
-                if use_multi_latents:
-                    for latent_idx, latent_batch in enumerate(all_video_latents):
-                        tensors[f"latents_{latent_idx}"] = latent_batch[i].contiguous().cpu()
-                else:
-                    tensors["latents"] = all_video_latents[0][i].contiguous().cpu()
 
                 writer.write(
                     key=key,
@@ -533,7 +519,6 @@ def main():
                         "tar": dataset_tag,
                         "index_in_tar": global_idx,
                         "seq_len": int(pe.shape[0]),
-                        "num_latents": len(all_video_latents),
                     },
                 )
 

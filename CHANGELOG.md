@@ -9,8 +9,8 @@ Initial public source release.
 
 ### Included
 
-- Wan2.2 TI2V-5B and I2V-A14B training with SFT, COS, correction, and
-  DanceGRPO-style reinforcement learning.
+- Wan2.2 TI2V-5B and I2V-A14B training with SFT and DanceGRPO-style
+  reinforcement learning.
 - Flow-CPS rollout and replay, LoRA/full fine-tuning, FSDP2/HSDP, expert
   parallelism, and RL tensor parallelism.
 - Raw Parquet and latent WebDataset pipelines, plus a resumable materializer

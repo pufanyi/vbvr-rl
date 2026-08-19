@@ -4,7 +4,7 @@ Examples::
 
     # precomputed latent sample, deterministic ODE, full per-step gallery
     .venv/bin/python -m src.inference \
-        --config configs/train_dancegrpo_maze_5b_line_to_ball_rl.yaml \
+        --config configs/<reviewed-rl-config>.yaml \
         --checkpoint storage/checkpoints/.../checkpoint-epoch3 \
         --mode ode --num_sampling_steps 50 --sample_index 0 \
         --output_dir storage/outputs/inf_ode_s0

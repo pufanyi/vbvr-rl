@@ -2,7 +2,6 @@
 
 Each tar shard contains pairs of files per sample:
   {key}.safetensors  — prompt_embeds, latents, condition
-                     or prompt_embeds, latents_0, latents_1, ..., condition
   {key}.json         — prompt, tar, index_in_tar, seq_len
 
 Usage:
@@ -211,18 +210,15 @@ def _decode_sample(sample: dict, max_text_len: int = 512) -> dict:
         if isinstance(maze, dict) and "path" in maze:
             decoded["maze_path"] = torch.tensor(maze["path"], dtype=torch.int16)
 
-    if "latents" in tensors:
-        decoded["video_latents"] = tensors["latents"]
-    else:
-        latent_keys = []
-        for key in tensors:
-            match = _LATENTS_KEY_RE.fullmatch(key)
-            if match is not None:
-                latent_keys.append((int(match.group(1)), key))
-        if not latent_keys:
-            raise KeyError("Expected either 'latents' or 'latents_<n>' tensors in latent sample")
-        latent_keys.sort()
-        decoded["video_latents"] = [tensors[key] for _, key in latent_keys]
+    legacy_latent_keys = sorted(key for key in tensors if _LATENTS_KEY_RE.fullmatch(key))
+    if legacy_latent_keys:
+        raise KeyError(
+            "Numbered target latents are no longer supported; rebuild the sample with one 'latents' tensor "
+            f"instead of {legacy_latent_keys}"
+        )
+    if "latents" not in tensors:
+        raise KeyError("Expected a 'latents' tensor in latent sample")
+    decoded["video_latents"] = tensors["latents"]
 
     # Pass through anything else (e.g. maze_* reward metadata).
     for key, value in tensors.items():

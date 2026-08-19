@@ -27,13 +27,13 @@
 ## Release Shape
 
 - VBVR-RL is a research training and evaluation stack for Wan2.2 I2V/TI2V
-  Diffusers models on VBVR-Pro. It supports SFT, COS, supervised correction,
-  DanceGRPO, Flow-CPS, raw and latent data, DCP, LoRA, rule rewards, and VLM
-  rewards.
+  Diffusers models on VBVR-Pro. It supports SFT, DanceGRPO, Flow-CPS, raw and
+  latent data, DCP, LoRA, rule rewards, and VLM rewards.
 - Start with `docs/README.md`. Source layout: `src/cli/` entrypoints,
-  `src/models/` model wrapper/COS, `src/data/` loaders, `src/trainer/` training
-  and rewards, `src/precompute/` builders, `src/eval/` scoring/provenance,
-  `scripts/` launchers, `configs/` references, and `tests/` contracts.
+  `src/models/` model wrapper/LoRA, `src/data/` loaders, `src/trainer/`
+  training and rewards, `src/precompute/` builders, `src/eval/`
+  scoring/provenance, `scripts/` launchers, `configs/` references, and
+  `tests/` contracts.
 - The release does not bundle model weights, datasets, evaluator source, OCR
   weights, or generated outputs. Store all such artifacts beneath ignored
   paths such as `storage/`, `wandb/`, `logs/`, and `tmp/`.
@@ -64,17 +64,18 @@
 ## Data Contracts
 
 - Raw I2V data is configured by a JSON list of Parquet descriptors, not a flat
-  sample list. Rows use ordered `videos` for COS/multi-step chains or `video`
-  for one target, plus `prompt` and optional `image`. Missing `image` falls back
-  to the first frame of the final video.
+  sample list. Rows use `video` for one target, plus `prompt` and optional
+  `image`. Older `videos` lists are accepted only as a compatibility input and
+  only their final entry is used. Missing `image` falls back to the target's
+  first frame.
 - `I2VDataset` currently samples `num_frames` uniformly over the complete
   decoded frame range. Its top-level `fps` is metadata and does not perform
   physical-time resampling. Reward/evaluation FPS fields independently define
   generated media contracts.
 - Latent WebDataset uses `shard-*.tar` files with `{key}.safetensors` and
-  `{key}.json`. Required tensors are `prompt_embeds`, `condition`, and either
-  `latents` or a COS chain `latents_0`, `latents_1`, and so on. Extra tensors
-  are passed through to rewards.
+  `{key}.json`. Required tensors are `prompt_embeds`, `condition`, and one
+  target named `latents`. Numbered multi-target latent keys are rejected;
+  rebuild old shards before use. Extra tensors are passed through to rewards.
 - Always set the exact `dataset_size` for latent/iterable configs. It controls
   rank-local epoch lengths and scheduling; mistakes can cause uneven-rank
   endings and collective hangs.
@@ -107,8 +108,7 @@
 - `WanI2VForTraining` reads A14B `boundary_ratio` and scheduler `flow_shift`,
   builds the shifted timestep schedule, and routes high/low experts. TI2V-5B
   is a dense single-transformer model with expanded token timesteps.
-- `src.cli.train_i2v` dispatches `SFTConfig.trainer` to `I2VTrainer` or
-  `COSTrainer`; `src.cli.train_i2v_correction` uses `CorrectionConfig`;
+- `src.cli.train_i2v` uses `SFTConfig` and `I2VTrainer`;
   `src.cli.train_grpo` uses `RLConfig` and `DanceGRPOTrainer`.
 - SFT and RL have separate `BaseTrainer` and `BaseRLTrainer` stacks with some
   duplicated distributed, model, dataset, optimizer, and checkpoint logic.
@@ -131,8 +131,7 @@
   divergence can hang collectives.
 - Expert parallel requires FSDP, both A14B experts, an even world size, and
   synchronized control flow. `duplicate` gives expert groups the same data;
-  `split` shards data across all ranks. DanceGRPO and correction reject expert
-  parallel.
+  `split` shards data across all ranks. DanceGRPO rejects expert parallel.
 - HSDP shards within a machine and replicates across machines; on one machine
   it falls back to plain FSDP.
 - RL tensor parallel is applied before FSDP, is currently A14B/one-machine
@@ -142,16 +141,6 @@
 - Compile wrapped modules in place to preserve DCP keys. The collective-aware
   TP Q/K norm stays an eager Dynamo boundary because its backward collective
   must remain explicit.
-
-## COS and Correction
-
-- COS N-step paths are `linear`, `target_cosine`, and `target_sigmoid`; legacy
-  paths are two-step only. `len(cos_tau_sigma)` must equal
-  `len(video_latents) - 1`, and latent data must include every chain waypoint.
-- Correction is supervised, not policy gradient. It combines standard flow
-  matching with an EMA-teacher rollout correction and does not support expert
-  parallel. Use an EMA teacher unless intentionally validating live-student
-  behavior.
 
 ## DanceGRPO and Flow-CPS
 

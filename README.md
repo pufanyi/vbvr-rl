@@ -2,9 +2,9 @@
 
 VBVR-RL is a research training and evaluation stack for reinforcement learning
 of Wan2.2 image-to-video models on VBVR-Pro. It includes supervised
-fine-tuning, Chain-of-Step training, on-policy correction, DanceGRPO-style
-replay, Flow-CPS sampling, distributed full fine-tuning, LoRA, DCP
-checkpointing, and provenance-checked VBVR-Pro evaluation.
+fine-tuning, DanceGRPO-style replay, Flow-CPS sampling, distributed full
+fine-tuning, LoRA, DCP checkpointing, and provenance-checked VBVR-Pro
+evaluation.
 
 This repository is a source release. Model weights, datasets, generated media,
 and the third-party VBVR evaluator are not bundled.
@@ -13,7 +13,7 @@ and the third-party VBVR evaluator are not bundled.
 
 - Wan2.2 I2V A14B and TI2V-5B training through Diffusers.
 - Raw Parquet and latent WebDataset input pipelines.
-- SFT, COS, correction, and grouped on-policy RL objectives.
+- Supervised flow-matching and grouped on-policy RL objectives.
 - FSDP2, HSDP, expert parallelism, and RL-only tensor parallelism.
 - Fixed and randomized Flow-CPS coefficients with replay-consistent sampling.
 - Rule-based VBVR-Pro rewards and task-specific Qwen VLM rewards.
@@ -179,7 +179,7 @@ you intentionally define a new scorer contract. See
 
 ## Training
 
-Single-machine SFT/COS launchers use `scripts/train/i2v.fish`:
+Single-machine SFT uses `scripts/train/i2v.fish`:
 
 ```fish
 fish scripts/train/i2v.fish --nproc 8 -- \
@@ -291,7 +291,7 @@ model memory:
 
 ```text
 src/cli/          training, inference, conversion, and evaluation entrypoints
-src/models/       Wan2.2 model wrapper and COS paths
+src/models/       Wan2.2 model wrapper and LoRA integration
 src/data/         raw-media, WebDataset, and remote-I/O loaders
 src/trainer/      SFT/RL trainers, rewards, distributed runtime, checkpoints
 src/precompute/   latent and synthetic-data builders

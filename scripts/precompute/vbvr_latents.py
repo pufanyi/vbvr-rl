@@ -137,7 +137,7 @@ def parse_args():
 
 
 # ---------------------------------------------------------------------------
-# Model loading (reused from precompute_latents.py)
+# Model loading
 # ---------------------------------------------------------------------------
 
 
@@ -176,7 +176,7 @@ def load_model_components(model_path: str, device: str):
 
 
 # ---------------------------------------------------------------------------
-# Encoding helpers (reused from precompute_latents.py)
+# Encoding helpers
 # ---------------------------------------------------------------------------
 
 

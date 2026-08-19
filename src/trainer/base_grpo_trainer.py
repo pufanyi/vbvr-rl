@@ -235,11 +235,7 @@ class BaseGRPOTrainer(BaseRLTrainer):
         """
         if "prompt_embeds" in batch:
             prompt_embeds = batch["prompt_embeds"].to(self.device)
-            video_latents = batch["video_latents"]
-            if isinstance(video_latents, list):
-                gt_video_latents = video_latents[-1].to(self.device)
-            else:
-                gt_video_latents = video_latents.to(self.device)
+            gt_video_latents = batch["video_latents"].to(self.device)
             condition = batch["condition"].to(self.device)
         else:
             if self.cfg.grpo_offload_inference_models:

@@ -71,6 +71,6 @@ class LatentDataset(Dataset):
             "index": idx,
             "prompt": prompt,
             "prompt_embeds": prompt_embeds,
-            "video_latents": [latents],
+            "video_latents": latents,
             "condition": condition,
         }

@@ -913,9 +913,9 @@ def build_line_waypoint_from_sample(
     *,
     completion_fraction: float = 0.5,
 ) -> tuple[np.ndarray, MazeSample]:
-    """Build a path-line waypoint for COS training from an existing maze sample.
+    """Render a path-line variant from an existing maze sample.
 
-    The waypoint uses the same maze, palette, and prompt as the final sample,
+    The variant uses the same maze, palette, and prompt as the source sample,
     but its path line reaches the goal by ``completion_fraction`` of the video.
     """
     line_completion_frame = _completion_frame(sample.num_frames, completion_fraction)

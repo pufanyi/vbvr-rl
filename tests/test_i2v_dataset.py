@@ -1,9 +1,45 @@
 import json
 from pathlib import Path
 
+import pyarrow as pa
 import pytest
 
 from src.data.i2v_dataset import I2VDataset
+
+
+def test_legacy_videos_column_uses_only_final_target() -> None:
+    table = pa.table(
+        {
+            "videos": [["intermediate.mp4", "target.mp4"]],
+            "prompt": ["move the object"],
+        }
+    )
+
+    video, prompt, image = I2VDataset._read_row(table, 0)
+
+    assert video == "target.mp4"
+    assert prompt == "move the object"
+    assert image is None
+
+
+def test_video_column_takes_precedence_over_legacy_videos() -> None:
+    table = pa.table(
+        {
+            "video": ["target.mp4"],
+            "videos": [["old-intermediate.mp4", "old-target.mp4"]],
+        }
+    )
+
+    video, _prompt, _image = I2VDataset._read_row(table, 0)
+
+    assert video == "target.mp4"
+
+
+def test_legacy_videos_column_rejects_empty_list() -> None:
+    table = pa.table({"videos": pa.array([[]], type=pa.list_(pa.string()))})
+
+    with pytest.raises(ValueError, match="empty list"):
+        I2VDataset._read_row(table, 0)
 
 
 def _record(task: str, split: str, source: Path) -> dict:
