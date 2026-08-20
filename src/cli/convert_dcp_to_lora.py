@@ -7,7 +7,7 @@ in the layout that ``pipe.load_lora_weights(...)`` expects.
 
 Usage::
 
-    .venv/bin/python -m src.cli.convert_dcp_to_lora \\
+    pixi run python -m src.cli.convert_dcp_to_lora \\
         --config   configs/train_xxx.yaml \\
         --checkpoint storage/checkpoints/run/checkpoint-200 \\
         --output     storage/lora_exports/run/checkpoint-200

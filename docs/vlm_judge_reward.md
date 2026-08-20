@@ -5,8 +5,9 @@ OpenAI-compatible multimodal service. The training process decodes a rollout,
 encodes it as an in-memory H.264 MP4, submits the input frame plus video, and
 receives a normalized task-specific score.
 
-The judge is optional. Its model weights and vLLM environment are not part of
-the main project lock because their dependency stack differs from training.
+The judge is optional. Its model weights are external, while its dependency
+stack lives in a separate Pixi `vllm` environment recorded by the project's
+shared manifest and lockfile.
 
 ## Supported Contract
 
@@ -59,32 +60,21 @@ so semantic validation remains mandatory.
 Create the ignored service environment:
 
 ```fish
-fish scripts/dev/setup_host_vllm.fish
+pixi run setup-vllm
 ```
 
-The default location is `storage/host_vllm/.venv`. The setup pins vLLM and
-writes `storage/host_vllm/requirements.freeze.txt`. It uses `uv pip
---no-config` so project-level package overrides do not leak into the service
-environment.
-
-Useful setup overrides are:
-
-```bash
-WAN_TRAINER_HOST_VLLM_ROOT=storage/host_vllm
-WAN_TRAINER_VLLM_VERSION=0.26.0
-WAN_TRAINER_HOST_VLLM_INDEX=https://pypi.org/simple
-```
-
-The setup script's default package index and the model download helper's
-default Hugging Face endpoint are convenience choices. Override them when they
-are unavailable or inappropriate for your environment.
+The service uses the Pixi `vllm` environment, which explicitly excludes the
+training stack. Its vLLM, Ray, NumPy, Torch, and CUDA-wheel contract is recorded
+in `pyproject.toml` and `pixi.lock`; setup also writes an ignored
+`storage/host_vllm/pixi-packages.json` inspection snapshot. Change the
+manifest and regenerate the lock deliberately when updating this runtime.
 
 ## Download the Pinned Model
 
 After creating the isolated environment:
 
 ```fish
-fish scripts/download/qwen36_27b_hf_mirror.fish
+pixi run download-vllm-model
 ```
 
 The helper downloads the exact recorded revision into
@@ -93,7 +83,7 @@ and LFS files. To use the standard Hugging Face endpoint instead, run the
 isolated `hf` command directly:
 
 ```bash
-storage/host_vllm/.venv/bin/hf download Qwen/Qwen3.6-27B \
+pixi run --environment vllm hf download Qwen/Qwen3.6-27B \
   --revision 6a9e13bd6fc8f0983b9b99948120bc37f49c13e9 \
   --local-dir storage/models/Qwen3.6-27B
 ```
@@ -106,7 +96,7 @@ Review the model license and access requirements. Keep weights under
 The reference launcher hosts one OpenAI-compatible endpoint:
 
 ```fish
-fish scripts/serve/qwen36_27b_vllm.fish
+pixi run serve-vllm
 ```
 
 Defaults include:
@@ -127,7 +117,7 @@ WAN_TRAINER_VLM_TENSOR_PARALLEL_SIZE=2 \
 WAN_TRAINER_VLM_DATA_PARALLEL_SIZE=4 \
 WAN_TRAINER_VLM_DATA_PARALLEL_SIZE_LOCAL=4 \
 WAN_TRAINER_VLM_GPU_MEMORY_UTILIZATION=0.50 \
-fish scripts/serve/qwen36_27b_vllm.fish
+pixi run fish scripts/serve/qwen36_27b_vllm.fish
 ```
 
 For the built-in `mp` backend, local data-parallel size must equal global
@@ -145,7 +135,7 @@ Wait for startup and exercise both vision input and the exact dynamic task
 schema:
 
 ```bash
-.venv/bin/python -m src.cli.probe_vlm_service \
+pixi run python -m src.cli.probe_vlm_service \
   --base-url http://127.0.0.1:18080/v1 \
   --model qwen3.6-27b \
   --wait-seconds 900 \
@@ -242,7 +232,7 @@ MASTER_ADDR=<rank-zero-host> \
 MASTER_PORT=29500 \
 WORLD_SIZE=<machine-count> \
 RANK=<machine-rank> \
-fish scripts/train/grpo_vlm_eval_multinode.fish --nproc 8 -- \
+pixi run fish scripts/train/grpo_vlm_eval_multinode.fish --nproc 8 -- \
   --config configs/train_rl_5b_vlm.yaml
 ```
 
@@ -265,7 +255,7 @@ append-only result root.
 Single-machine example:
 
 ```bash
-.venv/bin/python -m src.cli.eval_vbvr_vlm_outputs score \
+pixi run python -m src.cli.eval_vbvr_vlm_outputs score \
   --input-root storage/eval_out/<rule-or-generation-matrix> \
   --output-root storage/eval_out/<matrix>-vlm-judge \
   --base-url http://127.0.0.1:18080/v1 \
@@ -279,7 +269,7 @@ Single-machine example:
 Audit assignments without issuing requests:
 
 ```bash
-.venv/bin/python -m src.cli.eval_vbvr_vlm_outputs score \
+pixi run python -m src.cli.eval_vbvr_vlm_outputs score \
   --input-root storage/eval_out/<matrix> \
   --output-root storage/eval_out/<matrix>-vlm-judge \
   --world-size 1 --rank 0 \
@@ -289,7 +279,7 @@ Audit assignments without issuing requests:
 Strictly summarize already complete cells:
 
 ```bash
-.venv/bin/python -m src.cli.eval_vbvr_vlm_outputs summarize \
+pixi run python -m src.cli.eval_vbvr_vlm_outputs summarize \
   --input-root storage/eval_out/<matrix> \
   --output-root storage/eval_out/<matrix>-vlm-judge
 ```
@@ -297,7 +287,7 @@ Strictly summarize already complete cells:
 The convenience wrapper can start and stop a local judge service automatically:
 
 ```fish
-fish scripts/eval/vbvr_pro/vlm_judge.fish \
+pixi run fish scripts/eval/vbvr_pro/vlm_judge.fish \
   score \
   --input-root storage/eval_out/<matrix> \
   --output-root storage/eval_out/<matrix>-vlm-judge

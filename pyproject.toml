@@ -3,7 +3,7 @@ name = "vbvr-rl"
 version = "0.1.0"
 description = "Distributed Wan2.2 training and reinforcement learning for VBVR-Pro"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 authors = [
     { name = "Pu Fanyi", email = "FPU001@e.ntu.edu.sg" },
 ]
@@ -63,13 +63,60 @@ dev = [
 Repository = "https://github.com/pufanyi/vbvr-rl"
 Documentation = "https://github.com/pufanyi/vbvr-rl/tree/main/docs"
 
-[tool.uv]
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = [{ platform = "linux-64", cuda = "12.6" }]
+requires-pixi = ">=0.77.0,<0.78"
+
+[tool.pixi.dependencies]
+fish = ">=4.0,<5"
+
+[tool.pixi.pypi-options.dependency-overrides]
 # Norfair 2.3 still declares numpy<2 even though the pinned VBVR evaluator is
 # exercised with the project's NumPy 2 stack. Keep the runtime constraint
 # explicit so the evaluator dependencies can be resolved reproducibly.
-override-dependencies = [
-    "numpy==2.4.4",
-]
+numpy = "==2.4.4"
+# Keep the training stack on the official PyTorch CUDA 12.6 wheels.
+torch = { version = "==2.11.0", index = "https://download.pytorch.org/whl/cu126" }
+torchvision = { version = "==0.26.0", index = "https://download.pytorch.org/whl/cu126" }
+
+[tool.pixi.tasks]
+test = "python -m pytest tests"
+check = { depends-on = ["lint", "format-check", "test"] }
+runtime-check = "python -m src.eval.vbvr_runtime"
+setup-vllm = "fish scripts/dev/setup_host_vllm.fish"
+download-vllm-model = "fish scripts/download/qwen36_27b_hf_mirror.fish"
+serve-vllm = "fish scripts/serve/qwen36_27b_vllm.fish"
+
+[tool.pixi.feature.lint.dependencies]
+python = "3.12.*"
+
+[tool.pixi.feature.lint.pypi-dependencies]
+ruff = "==0.16.3"
+
+[tool.pixi.feature.lint.tasks]
+lint = "ruff check --output-format=github ."
+format-check = "ruff format --check ."
+
+[tool.pixi.feature.vllm.dependencies]
+python = "3.12.*"
+
+[tool.pixi.feature.vllm.pypi-dependencies]
+numpy = "==2.3.5"
+ray = { version = "*", extras = ["cgraph"] }
+vllm = "==0.26.0"
+
+[tool.pixi.feature.vllm.pypi-options.dependency-overrides]
+# vLLM 0.26.0's media extras are paired with the Torch 2.11 release family;
+# force every member of that family to the official CUDA 12.6 wheel index.
+torch = { version = "==2.11.0", index = "https://download.pytorch.org/whl/cu126" }
+torchaudio = { version = "==2.11.0", index = "https://download.pytorch.org/whl/cu126" }
+torchvision = { version = "==0.26.0", index = "https://download.pytorch.org/whl/cu126" }
+
+[tool.pixi.environments]
+default = { features = ["dev"], solve-group = "default" }
+lint = { features = ["lint"], no-default-feature = true }
+vllm = { features = ["vllm"], no-default-feature = true }
 
 [tool.ruff]
 line-length = 120
@@ -94,12 +141,3 @@ known-first-party = ["src"]
 
 [tool.ruff.format]
 exclude = ["src/trainer/rewards/vbvr_vlm_eval_prompts.py"]
-
-[tool.uv.sources]
-torch = { index = "pytorch-cu126" }
-torchvision = { index = "pytorch-cu126" }
-
-[[tool.uv.index]]
-name = "pytorch-cu126"
-url = "https://download.pytorch.org/whl/cu126"
-explicit = true

@@ -4,7 +4,7 @@ trainer: dancegrpo
 model_path: storage/models/diffsynth_converted_5b/wan2.2-TI2V-5B_260715_vbvr_pro_step-35500
 
 # Materialize the already-downloaded public raw snapshot once with:
-# .venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
+# pixi run python -m scripts.data.vbvr_pro_unpack_hf \
 #   --dataset-root storage/datasets/VBVR-Pro-RL \
 #   --output-dir storage/datasets/VBVR-Pro-RL/materialized \
 #   --source-revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \

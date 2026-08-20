@@ -3,6 +3,13 @@
 All notable public changes to VBVR-RL are documented here. The project uses
 [Semantic Versioning](https://semver.org/) for source releases.
 
+## [Unreleased]
+
+### Changed
+
+- Replaced the uv/`.venv` workflow with a single Pixi manifest and lockfile for
+  development, CI, training, evaluation, and the isolated vLLM service.
+
 ## [0.1.0] - 2026-08-19
 
 Initial public source release.

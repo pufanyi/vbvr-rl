@@ -8,31 +8,30 @@ the repository and should be placed under the ignored `storage/` directory.
 
 Requirements:
 
-- Linux and Python 3.12;
-- [`uv`](https://docs.astral.sh/uv/);
-- Fish for the provided launchers;
+- Linux;
+- [Pixi](https://pixi.prefix.dev/) 0.77.x;
 - FFmpeg and ffprobe on `PATH` for media workflows;
 - a CUDA-capable NVIDIA GPU for training and generation;
-- a C/C++ compiler and matching Python headers when Triton compiles locally.
+- a C/C++ compiler when Triton compiles locally.
 
 Clone the repository and reproduce the lockfile exactly:
 
 ```bash
 git clone https://github.com/pufanyi/vbvr-rl.git
 cd vbvr-rl
-uv sync --frozen
-uv sync --frozen --check
+pixi install --locked
+pixi lock --check
 ```
 
 Run a cheap import and media-runtime check:
 
 ```bash
-.venv/bin/python -m src.eval.vbvr_runtime
+pixi run runtime-check
 ```
 
-The project intentionally uses direct `.venv/bin/python` and
-`.venv/bin/torchrun` commands. This makes the interpreter used by launchers,
-workers, and tests unambiguous.
+Pixi installs Python 3.12, Fish, all Python dependencies, and development
+tools into `.pixi/envs/default`. Use `pixi run` so launchers, workers, and
+tests always use that locked environment.
 
 ## 2. Download a Base Model
 
@@ -40,7 +39,7 @@ The bounded smoke profile expects the official TI2V-5B Diffusers model at
 `storage/models/Wan2.2-TI2V-5B-Diffusers`:
 
 ```bash
-hf download Wan-AI/Wan2.2-TI2V-5B-Diffusers \
+pixi run hf download Wan-AI/Wan2.2-TI2V-5B-Diffusers \
   --local-dir storage/models/Wan2.2-TI2V-5B-Diffusers
 ```
 
@@ -55,7 +54,7 @@ Generate four deterministic H.264 samples with matching first frames and a
 trainer descriptor:
 
 ```bash
-.venv/bin/python scripts/dev/create_i2v_smoke_dataset.py \
+pixi run python scripts/dev/create_i2v_smoke_dataset.py \
   --output-dir storage/smoke/i2v_512x512x81 \
   --samples 4 \
   --frames 81 \
@@ -73,7 +72,7 @@ The validator launches a bounded DanceGRPO step and checks that trainable
 tensors actually change:
 
 ```bash
-.venv/bin/torchrun --standalone --nproc_per_node=1 \
+pixi run torchrun --standalone --nproc_per_node=1 \
   -m scripts.dev.validate_grpo_parameter_update \
   --config configs/train_rl_5b_rule.yaml \
   --one-gpu-smoke \
@@ -98,7 +97,7 @@ multiply memory and runtime.
 Download the video half of the official public dataset at the pinned revision:
 
 ```bash
-.venv/bin/hf download Video-Reason/VBVR-Pro-RL \
+pixi run hf download Video-Reason/VBVR-Pro-RL \
   --repo-type dataset \
   --revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \
   --include 'VBVR-Pro-RL-Video/*.tar.gz' \
@@ -108,7 +107,7 @@ Download the video half of the official public dataset at the pinned revision:
 Materialize the fields required by `I2VDataset` and `vbvr_rule`:
 
 ```bash
-.venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
+pixi run python -m scripts.data.vbvr_pro_unpack_hf \
   --dataset-root storage/datasets/VBVR-Pro-RL \
   --output-dir storage/datasets/VBVR-Pro-RL/materialized \
   --source-revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \
@@ -161,7 +160,7 @@ See [Configuration](configuration.md) for field semantics.
 Single-machine SFT:
 
 ```fish
-fish scripts/train/i2v.fish --nproc 8 -- \
+pixi run fish scripts/train/i2v.fish --nproc 8 -- \
   --config configs/train_sft_vbvr_5e-6.yaml
 ```
 
@@ -172,7 +171,7 @@ archives prepared above are not a drop-in replacement for those latents.
 Single-machine DanceGRPO:
 
 ```fish
-fish scripts/train/grpo.fish --nproc 8 \
+pixi run fish scripts/train/grpo.fish --nproc 8 \
   --config configs/train_rl_a14b_rule.yaml
 ```
 
@@ -183,7 +182,7 @@ MASTER_ADDR=<rank-zero-host> \
 MASTER_PORT=29500 \
 WORLD_SIZE=<machine-count> \
 RANK=<machine-rank> \
-fish scripts/train/grpo_multinode.fish --nproc 8 -- \
+pixi run fish scripts/train/grpo_multinode.fish --nproc 8 -- \
   --config configs/train_rl_5b_rule.yaml
 ```
 
@@ -196,15 +195,15 @@ runtime checks before loading model weights.
 Run tests from the explicit project test directory:
 
 ```bash
-.venv/bin/python -m pytest tests
-.venv/bin/ruff check --output-format=github .
-.venv/bin/ruff format --check .
+pixi run test
+pixi run lint
+pixi run format-check
 ```
 
 For a selected RL config, run the same preflight used by the launcher:
 
 ```bash
-.venv/bin/python -m src.cli.validate_grpo_runtime \
+pixi run python -m src.cli.validate_grpo_runtime \
   --config configs/train_rl_5b_rule.yaml
 ```
 
@@ -216,19 +215,18 @@ Both pinned OpenCV distributions expose the same `cv2` package. On a headless
 host, reinstall the headless wheel last, then repeat the runtime check:
 
 ```bash
-uv pip install --python .venv/bin/python --reinstall --no-deps \
-  opencv-python-headless==4.13.0.92
-.venv/bin/python -m src.eval.vbvr_runtime
+pixi reinstall --locked opencv-python-headless
+pixi run runtime-check
 ```
 
 ### Triton reports a missing `Python.h`
 
-Install the development package matching Python 3.12. If the system image
-cannot be changed, the helper can provision an ignored project-local header
-toolchain:
+Pixi's locked Python package includes matching headers. If they are missing or
+damaged, this helper reinstalls that package when needed and validates a fresh
+Triton driver compile:
 
 ```fish
-fish scripts/dev/bootstrap_triton_python_headers.fish
+pixi run fish scripts/dev/bootstrap_triton_python_headers.fish
 ```
 
 The distributed launcher reports this failure before `torchrun` starts.
@@ -239,7 +237,7 @@ Confirm both evaluator fields are present, the checkout exists on every
 machine, and its computed fingerprint matches the YAML. Then run:
 
 ```bash
-.venv/bin/python -m src.cli.validate_grpo_runtime \
+pixi run python -m src.cli.validate_grpo_runtime \
   --config configs/<rule-reward-config>.yaml
 ```
 

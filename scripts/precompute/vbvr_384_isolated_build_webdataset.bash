@@ -32,7 +32,7 @@ Environment overrides:
   SAMPLES_PER_SHARD        Default: 1000
   BUILD_WORKERS            Default: nproc, capped only by the machine
   SEED                     Default: 1337
-  PYTHON_BIN               Default: .venv/bin/python, then python3
+  PYTHON_BIN               Default: .pixi/envs/default/bin/python
 EOF
 }
 
@@ -75,12 +75,9 @@ SFT_RATIO="${SFT_RATIO:-0.8}"
 SAMPLES_PER_SHARD="${SAMPLES_PER_SHARD:-1000}"
 SEED="${SEED:-1337}"
 
-PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.pixi/envs/default/bin/python}"
 if [[ ! -x "$PYTHON_BIN" ]]; then
-    PYTHON_BIN="$(command -v python3 || true)"
-fi
-if [[ -z "$PYTHON_BIN" ]]; then
-    echo "[error] python not found; set PYTHON_BIN=/path/to/python" >&2
+    echo "[error] locked Pixi Python is missing: $PYTHON_BIN; run 'pixi install --locked'" >&2
     exit 1
 fi
 

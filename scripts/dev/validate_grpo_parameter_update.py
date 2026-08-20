@@ -5,7 +5,7 @@ trainable tensors before ``trainer.train()`` and fails if the optimizer step
 leaves them byte-identical.
 
 Example:
-    .venv/bin/torchrun --standalone --nproc_per_node=1 \
+    pixi run torchrun --standalone --nproc_per_node=1 \
         -m scripts.dev.validate_grpo_parameter_update \
         --config configs/train_rl_5b_rule.yaml \
         --one-gpu-smoke \

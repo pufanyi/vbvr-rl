@@ -10,11 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/ruff-action@v3
+      - uses: prefix-dev/setup-pixi@v0.10.0
         with:
-          args: check --output-format=github
-          src: "."
-      - uses: astral-sh/ruff-action@v3
-        with:
-          args: format --check
-          src: "."
+          pixi-version: v0.77.0
+          environments: lint
+          locked: true
+          cache: true
+      - run: pixi run --locked --environment lint lint
+      - run: pixi run --locked --environment lint format-check

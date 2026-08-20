@@ -6,7 +6,7 @@ the VAE and prompts through T5, and writes parquet files compatible with
 LatentDataset.
 
 Single-GPU:
-    .venv/bin/python scripts/precompute/vbvr_latents.py \
+    pixi run python scripts/precompute/vbvr_latents.py \
         --metadata data/vbvr/VBVR-Dataset/data/metadata.parquet \
         --tar_dir data/vbvr/VBVR-Dataset/tars \
         --model_path storage/models/Wan2.2-I2V-A14B-Diffusers \
@@ -14,7 +14,7 @@ Single-GPU:
         --batch_size 4
 
 Single-node multi-GPU (8 GPUs on 1 machine):
-    .venv/bin/torchrun --nproc_per_node=8 scripts/precompute/vbvr_latents.py \
+    pixi run torchrun --nproc_per_node=8 scripts/precompute/vbvr_latents.py \
         --metadata data/vbvr/VBVR-Dataset/data/metadata.parquet \
         --tar_dir data/vbvr/VBVR-Dataset/tars \
         --model_path storage/models/Wan2.2-I2V-A14B-Diffusers \
@@ -24,7 +24,7 @@ Single-node multi-GPU (8 GPUs on 1 machine):
 Multi-node multi-GPU (e.g. 8 nodes x 2 GPUs = 16 GPUs total):
     # Run on EVERY node (torchrun launches --nproc_per_node processes per node).
     # --output_dir must be on shared storage (NFS/GPFS/Lustre) visible to all nodes.
-    .venv/bin/torchrun \
+    pixi run torchrun \
         --nnodes=$WORLD_SIZE --nproc_per_node=1 \
         --node_rank=$RANK \
         --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \
@@ -37,7 +37,7 @@ Multi-node multi-GPU (e.g. 8 nodes x 2 GPUs = 16 GPUs total):
 
     With SLURM (srun launches one process per GPU automatically):
     srun --nodes=8 --ntasks-per-node=2 --gpus-per-node=2 \
-        .venv/bin/torchrun \
+        pixi run torchrun \
         --nnodes=$SLURM_NNODES --nproc_per_node=2 \
         --rdzv_id=$SLURM_JOB_ID --rdzv_backend=c10d \
         --rdzv_endpoint=$MASTER_ADDR:29500 \

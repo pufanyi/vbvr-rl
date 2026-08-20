@@ -5,7 +5,7 @@ is resized without cropping, padded to the requested canvas, and retimed by
 raising its frame rate while preserving every source frame.
 
 Example:
-    .venv/bin/python -m src.cli.prepare_vbvr_eval_videos \
+    pixi run python -m src.cli.prepare_vbvr_eval_videos \
         --input-dir storage/eval_out/vbvr_pro/generated_256 \
         --output-dir storage/eval_out/vbvr_pro/eval_1024 \
         --width 1024 --height 1024 --max-duration 5 \

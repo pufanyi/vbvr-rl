@@ -45,8 +45,9 @@ that logic rather than duplicate algorithm or scoring implementations.
 | `src.cli.eval_vbvr_vlm_outputs` | Score existing evaluation cells with the VLM judge |
 
 Fish wrappers source [`scripts/lib/env.fish`](../scripts/lib/env.fish), enter the
-repository root, activate `.venv`, set `PYTHONPATH`, and construct `torchrun`
-arguments. The Python entrypoints remain usable directly.
+repository root, activate the locked Pixi default environment, set
+`PYTHONPATH`, and construct `torchrun` arguments. The Python entrypoints remain
+usable through `pixi run`.
 
 ## Configuration Layer
 

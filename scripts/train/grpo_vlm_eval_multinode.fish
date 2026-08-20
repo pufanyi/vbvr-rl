@@ -150,7 +150,7 @@ if test "$WAN_TRAINER_VLM_TASK_PROMPT_PREFLIGHT" = 1
     set -a probe_args --task-prompt-smoke
 end
 
-.venv/bin/python -m src.cli.probe_vlm_service $probe_args
+pixi run --locked python -m src.cli.probe_vlm_service $probe_args
 or begin
     echo "ERROR: VLM service preflight failed on node $RANK." >&2
     exit 1

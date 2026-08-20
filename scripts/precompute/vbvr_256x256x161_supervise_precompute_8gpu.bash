@@ -44,13 +44,15 @@ VAE_BATCH_SIZE="${VAE_BATCH_SIZE:-22}"
 BUILD_WORKERS="${BUILD_WORKERS:-64}"
 LOG_DIR="${LOG_DIR:-logs/vbvr_256x256x161}"
 
-TORCHRUN_BIN="${TORCHRUN_BIN:-$ROOT_DIR/.venv/bin/torchrun}"
-PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
+TORCHRUN_BIN="${TORCHRUN_BIN:-$ROOT_DIR/.pixi/envs/default/bin/torchrun}"
+PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.pixi/envs/default/bin/python}"
 if [[ ! -x "$TORCHRUN_BIN" ]]; then
-    TORCHRUN_BIN="$(command -v torchrun || true)"
+    echo "[error] locked Pixi torchrun is missing: $TORCHRUN_BIN; run 'pixi install --locked'" >&2
+    exit 1
 fi
 if [[ ! -x "$PYTHON_BIN" ]]; then
-    PYTHON_BIN="$(command -v python3 || true)"
+    echo "[error] locked Pixi Python is missing: $PYTHON_BIN; run 'pixi install --locked'" >&2
+    exit 1
 fi
 
 require_path() {
@@ -86,14 +88,6 @@ PY
 require_path metadata "$METADATA"
 require_path tar_dir "$TAR_DIR"
 require_path model_path "$MODEL_PATH"
-if [[ -z "$TORCHRUN_BIN" ]]; then
-    echo "[error] torchrun not found; set TORCHRUN_BIN=/path/to/torchrun" >&2
-    exit 1
-fi
-if [[ -z "$PYTHON_BIN" ]]; then
-    echo "[error] python not found; set PYTHON_BIN=/path/to/python" >&2
-    exit 1
-fi
 
 mkdir -p "$PROMPT_EMBEDS_DIR" "$VAE_LATENTS_DIR" "$SFT_WEBDATASET_DIR" "$RL_WEBDATASET_DIR" "$LOG_DIR"
 

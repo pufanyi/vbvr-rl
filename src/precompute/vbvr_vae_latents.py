@@ -2,7 +2,7 @@
 
 Launch on 2 nodes x 8 GPUs (16 GPUs total):
     # Run on EVERY node:
-    .venv/bin/torchrun \
+    pixi run torchrun \
         --nnodes=2 --nproc_per_node=8 \
         --node_rank=$RANK \
         --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \

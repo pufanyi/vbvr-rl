@@ -17,7 +17,8 @@ external artifacts automatically.
 | SFT | `src.cli.train_i2v` | `trainer: i2v` | Standard flow-matching supervision |
 | DanceGRPO | `src.cli.train_grpo` | `trainer: dancegrpo` | Grouped on-policy rollout and clipped replay |
 
-All commands below run from the repository root and use the locked `.venv`.
+All commands below run from the repository root through the locked Pixi
+default environment.
 
 ## Model Families
 
@@ -97,7 +98,7 @@ lora_rank: 0
 Launch on one machine:
 
 ```fish
-fish scripts/train/i2v.fish --nproc 8 -- \
+pixi run fish scripts/train/i2v.fish --nproc 8 -- \
   --config configs/train_sft_vbvr_5e-6.yaml
 ```
 
@@ -287,14 +288,14 @@ one-sample calls can otherwise receive identical random values.
 Run an RL preflight without loading weights:
 
 ```bash
-.venv/bin/python -m src.cli.validate_grpo_runtime \
+pixi run python -m src.cli.validate_grpo_runtime \
   --config configs/<reviewed-rl-config>.yaml
 ```
 
 One machine:
 
 ```fish
-fish scripts/train/grpo.fish --nproc 8 \
+pixi run fish scripts/train/grpo.fish --nproc 8 \
   --config configs/<reviewed-rl-config>.yaml
 ```
 
@@ -305,7 +306,7 @@ MASTER_ADDR=<rank-zero-host> \
 MASTER_PORT=29500 \
 WORLD_SIZE=<machine-count> \
 RANK=<machine-rank> \
-fish scripts/train/grpo_multinode.fish --nproc 8 -- \
+pixi run fish scripts/train/grpo_multinode.fish --nproc 8 -- \
   --config configs/<reviewed-rl-config>.yaml
 ```
 

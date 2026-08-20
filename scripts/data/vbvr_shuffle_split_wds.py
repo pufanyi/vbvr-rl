@@ -12,7 +12,7 @@ Tuned for 128-core / 2TB RAM boxes:
 
 Example:
 
-    .venv/bin/python scripts/data/vbvr_shuffle_split_wds.py \
+    pixi run python scripts/data/vbvr_shuffle_split_wds.py \
         --src data/vbvr/latents/webdataset \
         --sft-dst data/vbvr/latents/splits/sft \
         --rl-dst data/vbvr/latents/splits/rl \

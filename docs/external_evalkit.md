@@ -71,7 +71,7 @@ The fingerprint includes the evaluator entrypoint, evaluator modules, task
 annotations, and requirements used by the scoring contract:
 
 ```bash
-.venv/bin/python -c '
+pixi run python -c '
 import sys
 from pathlib import Path
 from src.eval.vbvr_run_evaluation_parallel import evalkit_source_sha256
@@ -114,7 +114,7 @@ paths are resolved before spawned workers change their working directory.
 Validate dependencies before loading weights:
 
 ```bash
-.venv/bin/python -m src.cli.validate_grpo_runtime \
+pixi run python -m src.cli.validate_grpo_runtime \
   --config configs/<rule-reward-config>.yaml
 ```
 
@@ -123,7 +123,7 @@ Validate dependencies before loading weights:
 The parallel adapter requires the checkout and digest explicitly:
 
 ```bash
-.venv/bin/python -m src.eval.vbvr_run_evaluation_parallel \
+pixi run python -m src.eval.vbvr_run_evaluation_parallel \
   --evalkit_dir storage/evalkits/vbvr-evalkit-compatible \
   --expected_evalkit_source_sha256 <computed-digest> \
   --model_path storage/eval_out/<run>/prepared \
@@ -158,7 +158,7 @@ also pins EasyOCR, OpenCV, NumPy, SciPy, scikit-image, and related media
 packages. Check it with:
 
 ```bash
-.venv/bin/python -m src.eval.vbvr_runtime --json
+pixi run python -m src.eval.vbvr_runtime --json
 ```
 
 The report includes a behavioral OpenCV probe and a stable runtime digest.

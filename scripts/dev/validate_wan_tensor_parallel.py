@@ -2,10 +2,10 @@
 
 Examples:
 
-    PYTHONPATH=. .venv/bin/torchrun --standalone --nproc_per_node=2 \
+    PYTHONPATH=. pixi run torchrun --standalone --nproc_per_node=2 \
         scripts/dev/validate_wan_tensor_parallel.py --mode tp
 
-    PYTHONPATH=. .venv/bin/torchrun --standalone --nproc_per_node=8 \
+    PYTHONPATH=. pixi run torchrun --standalone --nproc_per_node=8 \
         scripts/dev/validate_wan_tensor_parallel.py --mode tp-fsdp \
         --liger --compile --checkpoint-autocast
 """

@@ -39,12 +39,9 @@ MASTER_PORT_BASE="${MASTER_PORT_BASE:-29630}"
 LOG_DIR="${LOG_DIR:-logs}"
 mkdir -p "$LOG_DIR" "$SFT_WEBDATASET_DIR" "$RL_WEBDATASET_DIR"
 
-PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.pixi/envs/default/bin/python}"
 if [[ ! -x "$PYTHON_BIN" ]]; then
-    PYTHON_BIN="$(command -v python3 || command -v python || true)"
-fi
-if [[ -z "$PYTHON_BIN" ]]; then
-    echo "[error] python not found; set PYTHON_BIN=/path/to/python" >&2
+    echo "[error] locked Pixi Python is missing: $PYTHON_BIN; run 'pixi install --locked'" >&2
     exit 1
 fi
 

@@ -23,7 +23,7 @@ coefficient, resolution, or output location does not need a new wrapper.
 Evaluate a DCP checkpoint with UniPC:
 
 ```fish
-fish scripts/eval/vbvr_pro/run.fish \
+pixi run fish scripts/eval/vbvr_pro/run.fish \
   --checkpoint storage/checkpoints/<run>/checkpoint-100 \
   --converted-model storage/models/converted/<run>-checkpoint-100 \
   --output-root storage/eval_out/<run>/checkpoint-100/unipc \
@@ -33,7 +33,7 @@ fish scripts/eval/vbvr_pro/run.fish \
 Evaluate an existing Diffusers model with Euler:
 
 ```fish
-fish scripts/eval/vbvr_pro/run.fish \
+pixi run fish scripts/eval/vbvr_pro/run.fish \
   --model storage/models/<model> \
   --output-root storage/eval_out/<model>/euler \
   --sampler euler
@@ -42,7 +42,7 @@ fish scripts/eval/vbvr_pro/run.fish \
 Flow-CPS requires an explicit coefficient:
 
 ```fish
-fish scripts/eval/vbvr_pro/run.fish \
+pixi run fish scripts/eval/vbvr_pro/run.fish \
   --model storage/models/<model> \
   --output-root storage/eval_out/<model>/cps-noise-0.7 \
   --sampler cps \
@@ -51,7 +51,7 @@ fish scripts/eval/vbvr_pro/run.fish \
 
 Add `--dry-run` to resolve the model, sampler, evaluator, media contract, and
 output namespace without reading model or dataset artifacts. Run
-`fish scripts/eval/vbvr_pro/run.fish --help` for every supported option.
+`pixi run fish scripts/eval/vbvr_pro/run.fish --help` for every supported option.
 
 ## Sampler Sweep
 
@@ -59,7 +59,7 @@ output namespace without reading model or dataset artifacts. Run
 `run.fish` after `--`:
 
 ```fish
-fish scripts/eval/vbvr_pro/sweep.fish \
+pixi run fish scripts/eval/vbvr_pro/sweep.fish \
   --output-base storage/eval_out/<model> \
   --samplers unipc,euler,cps:0.3,cps:0.7 \
   -- \
@@ -84,7 +84,7 @@ it.
 Summarize one run or a parent containing sampler cells:
 
 ```fish
-fish scripts/eval/vbvr_pro/summarize.fish \
+pixi run fish scripts/eval/vbvr_pro/summarize.fish \
   --root storage/eval_out/<model> \
   --expected-samples 500
 ```
@@ -97,7 +97,7 @@ The optional Qwen judge consumes generated-video cells without modifying rule
 scores:
 
 ```fish
-fish scripts/eval/vbvr_pro/vlm_judge.fish score \
+pixi run fish scripts/eval/vbvr_pro/vlm_judge.fish score \
   --input-root storage/eval_out/<model> \
   --output-root storage/eval_out/<model>-vlm-judge
 ```

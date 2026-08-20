@@ -8,6 +8,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
+PYTHON="${PYTHON:-$PWD/.pixi/envs/default/bin/python}"
+if [[ ! -x "$PYTHON" ]]; then
+  echo "missing locked Pixi Python: $PYTHON; run 'pixi install --locked'" >&2
+  exit 1
+fi
+
 CKPT="${CKPT:?set CKPT to the checkpoint dir}"
 NAME="${NAME:?set NAME to the output subdir label}"
 CONFIGS="${CONFIGS:-ode:0}"
@@ -26,7 +32,7 @@ for g in 0 1 2 3 4 5 6 7; do
   [ "$start" -ge "$N" ] && continue
   end=$(( start + per - 1 )); [ "$end" -ge "$N" ] && end=$(( N - 1 ))
   samples=$(seq -s, "$start" "$end")
-  PYTHONPATH="$PWD" CUDA_VISIBLE_DEVICES="$g" .venv/bin/python scripts/inference/noise_coeff_sweep.py \
+  PYTHONPATH="$PWD" CUDA_VISIBLE_DEVICES="$g" "$PYTHON" scripts/inference/noise_coeff_sweep.py \
     --checkpoint "$CKPT" --ckpt_name "$NAME" --device cuda:0 \
     --latent_webdataset_dir "$LATENTS" --sample_indices "$samples" \
     --configs "$CONFIGS" --rounds "$ROUNDS" --num_sampling_steps "$STEPS" --output_root "$OUT_ROOT" \

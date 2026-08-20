@@ -1,7 +1,7 @@
 """Wan2.2 I2V DanceGRPO training entry point.
 
 Usage:
-    .venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_grpo \
+    pixi run torchrun --nproc_per_node=8 -m src.cli.train_grpo \
         --config configs/train_rl_a14b_rule.yaml
 """
 

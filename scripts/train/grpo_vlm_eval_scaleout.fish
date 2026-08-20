@@ -89,7 +89,7 @@ end
 # 4, 8, and 16 nodes. Explicit CLI overrides still win.
 set -l topology_args
 if test "$has_output_dir" = false
-    set -l config_output_dir (.venv/bin/python -c \
+    set -l config_output_dir (pixi run --locked python -c \
         'import sys, yaml; print((yaml.safe_load(open(sys.argv[1])) or {}).get("output_dir", ""))' \
         "$config")
     or exit 1
@@ -98,7 +98,7 @@ if test "$has_output_dir" = false
     end
 end
 if test "$has_wandb_run_name" = false
-    set -l config_wandb_name (.venv/bin/python -c \
+    set -l config_wandb_name (pixi run --locked python -c \
         'import sys, yaml; print((yaml.safe_load(open(sys.argv[1])) or {}).get("wandb_run_name", "") or "")' \
         "$config")
     or exit 1

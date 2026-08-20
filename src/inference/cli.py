@@ -3,14 +3,14 @@
 Examples::
 
     # precomputed latent sample, deterministic ODE, full per-step gallery
-    .venv/bin/python -m src.inference \
+    pixi run python -m src.inference \
         --config configs/<reviewed-rl-config>.yaml \
         --checkpoint storage/checkpoints/.../checkpoint-epoch3 \
         --mode ode --num_sampling_steps 50 --sample_index 0 \
         --output_dir storage/outputs/inf_ode_s0
 
     # raw image + prompt, stochastic DanceGRPO SDE
-    .venv/bin/python -m src.inference \
+    pixi run python -m src.inference \
         --model_path storage/models/Wan2.2-TI2V-5B-Diffusers \
         --checkpoint storage/checkpoints/.../checkpoint-epoch3 \
         --image first_frame.png --prompt "..." --mode sde \

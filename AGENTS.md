@@ -12,11 +12,11 @@
   sync when data, checkpoint, training, reward, or evaluation contracts change.
 - Long-running tasks must be monitored to a final exit status. Verify no
   required background session or service remains before reporting completion.
-- Run the suite as `.venv/bin/python -m pytest tests`. Do not use root-wide
-  bare `pytest`; generated artifacts and external trees can disrupt discovery.
-- Before pushing, run `.venv/bin/ruff check --output-format=github .` and
-  `.venv/bin/ruff format --check .`. Keep the Ruff dev dependency exactly
-  pinned in `uv.lock` because CI resolves its declared version independently.
+- Run the suite as `pixi run test`. Do not use root-wide bare `pytest`;
+  generated artifacts and external trees can disrupt discovery.
+- Before pushing, run `pixi run lint` and `pixi run format-check`. Keep the
+  Ruff dev dependency exactly pinned in `pyproject.toml` and `pixi.lock`
+  because CI installs the locked Pixi `lint` environment independently.
 - Use repository-relative examples. Never commit credentials, private
   endpoints, scheduler settings, machine-specific paths, or generated model,
   data, video, checkpoint, W&B, log, and cache artifacts.
@@ -55,22 +55,24 @@
 ## Environment
 
 - The locked environment uses Python 3.12 and official PyTorch 2.11 CUDA 12.6
-  wheels. Prefer direct `.venv/bin/python` and `.venv/bin/torchrun`; do not
-  default to `uv run` inside launchers or operator instructions.
-- Reproduce it with `uv sync --frozen` and verify with `uv sync --frozen
-  --check`. `decord2` still imports as `decord`; the media stack uses headless
-  OpenCV and a bundled FFmpeg/ffprobe fallback.
+  wheels. Pixi is the sole supported environment, dependency, lockfile, and
+  task manager; use `pixi run` in operator instructions and launcher examples.
+- Reproduce the default environment with `pixi install --locked` and verify
+  manifest/lock consistency with `pixi lock --check`. `decord2` still imports
+  as `decord`; the media stack uses headless OpenCV and a bundled
+  FFmpeg/ffprobe fallback.
 - `opencv-python` and `opencv-python-headless` own the same `cv2` files. If a
   headless environment loads the GUI payload and fails on `libGL.so.1`,
-  reinstall the exact headless wheel last with `uv pip install --python
-  .venv/bin/python --reinstall --no-deps
-  opencv-python-headless==4.13.0.92`, then rerun
-  `.venv/bin/python -m src.eval.vbvr_runtime`.
+  reinstall the locked headless package last with `pixi reinstall --locked
+  opencv-python-headless`, then rerun `pixi run runtime-check`.
 - Fresh Triton/Inductor caches require a host C compiler and matching Python
-  headers. The preferred fix is system Python 3.12 development headers;
-  `scripts/dev/bootstrap_triton_python_headers.fish` can create an ignored
-  fallback toolchain. Multi-machine GRPO preflights Triton's driver on every
-  machine before loading the model.
+  headers. Pixi's Python package provides matching headers;
+  `scripts/dev/bootstrap_triton_python_headers.fish` reinstalls that locked
+  package if necessary and validates a fresh-cache compile. Multi-machine GRPO
+  preflights Triton's driver on every machine before loading the model.
+- The optional Qwen judge uses the isolated Pixi `vllm` environment in the
+  same manifest and lockfile. Install it with `pixi run setup-vllm`; do not add
+  an unmanaged service venv or a second package-manager workflow.
 
 ## Data Contracts
 

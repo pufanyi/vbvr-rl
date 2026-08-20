@@ -39,8 +39,8 @@ contract or troubleshooting note.
 ## Documentation Conventions
 
 - Commands run from the repository root unless stated otherwise.
-- `.venv/bin/python` and `.venv/bin/torchrun` refer to the locked project
-  environment created by `uv sync --frozen`.
+- `pixi run python` and `pixi run torchrun` execute inside the locked Pixi
+  default environment created by `pixi install --locked`.
 - `WORLD_SIZE` in Fish multi-machine launchers means machine count;
   `--nproc` means local processes/GPUs.
 - Paths under `storage/` are local runtime artifacts and are not part of the

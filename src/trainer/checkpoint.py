@@ -598,7 +598,7 @@ def _lora_to_plain_error() -> ValueError:
     return ValueError(
         "Cannot init a full-FT model from a LoRA-trained checkpoint — the LoRA "
         "delta must be merged into base weights first. Recipe:\n"
-        "  1. .venv/bin/python -m src.cli.convert_dcp_to_lora \\\n"
+        "  1. pixi run python -m src.cli.convert_dcp_to_lora \\\n"
         "         --config <original_train_config.yaml> \\\n"
         "         --checkpoint <ckpt_path> \\\n"
         "         --output <adapter_out>\n"

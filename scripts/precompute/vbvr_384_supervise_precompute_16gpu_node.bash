@@ -59,9 +59,10 @@ LOG_DIR="${LOG_DIR:-logs}"
 STREAM_VAE_LOG="${STREAM_VAE_LOG:-1}"
 mkdir -p "$LOG_DIR" "$SFT_WEBDATASET_DIR" "$RL_WEBDATASET_DIR"
 
-TORCHRUN_BIN="${TORCHRUN_BIN:-$ROOT_DIR/.venv/bin/torchrun}"
+TORCHRUN_BIN="${TORCHRUN_BIN:-$ROOT_DIR/.pixi/envs/default/bin/torchrun}"
 if [[ ! -x "$TORCHRUN_BIN" ]]; then
-    TORCHRUN_BIN="$(command -v torchrun || true)"
+    echo "[error] locked Pixi torchrun is missing: $TORCHRUN_BIN; run 'pixi install --locked'" >&2
+    exit 1
 fi
 
 if [[ -z "$NODE_RANK" ]]; then
@@ -72,11 +73,6 @@ if [[ -z "$MASTER_ADDR" ]]; then
     echo "[error] MASTER_ADDR is required and must point to node0" >&2
     exit 1
 fi
-if [[ -z "$TORCHRUN_BIN" ]]; then
-    echo "[error] torchrun not found; set TORCHRUN_BIN=/path/to/torchrun" >&2
-    exit 1
-fi
-
 SUPERVISOR_LOG="${SUPERVISOR_LOG:-$LOG_DIR/vbvr_384_multinode_supervisor_rank${NODE_RANK}_$(date +%Y%m%d_%H%M%S).log}"
 PID_FILE="${PID_FILE:-$LOG_DIR/vbvr_384_multinode_supervisor_rank${NODE_RANK}.pid}"
 VAE_PID_FILE="${VAE_PID_FILE:-$LOG_DIR/vbvr_384_multinode_vae_rank${NODE_RANK}.pid}"

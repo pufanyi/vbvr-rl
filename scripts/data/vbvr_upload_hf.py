@@ -5,10 +5,10 @@ Expects ``--tar_dir`` to contain ``shard-*.tar`` shards produced by
 the target repo and writes a README card describing the format.
 
 Deps:
-    uv add huggingface_hub
+    pixi install --locked
 
 Usage:
-    .venv/bin/python scripts/data/vbvr_upload_hf.py \\
+    pixi run python scripts/data/vbvr_upload_hf.py \\
         --tar_dir data/vbvr/VBVR-Bench-wds \\
         --repo_id pufanyi/VBVR-Bench
 """

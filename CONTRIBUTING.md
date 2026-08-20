@@ -8,21 +8,21 @@ training, checkpoint conversion, and VBVR-Pro evaluation.
 Create the locked Python 3.12 environment from the repository root:
 
 ```bash
-uv sync --frozen
-uv sync --frozen --check
+pixi install --locked
+pixi lock --check
 ```
 
-Use `.venv/bin/python` for project commands. Fish is required to exercise the
-provided launchers.
+Run project commands through Pixi. The locked default environment includes
+Python 3.12, Fish, the runtime dependencies, and the development tools.
 
 ## Before Opening a Pull Request
 
 Run the project suite and the same Ruff checks as CI:
 
 ```bash
-.venv/bin/python -m pytest tests
-.venv/bin/ruff check --output-format=github .
-.venv/bin/ruff format --check .
+pixi run test
+pixi run lint
+pixi run format-check
 ```
 
 If you change a Fish launcher, also run `fish -n` on it. If you change a YAML

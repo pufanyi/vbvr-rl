@@ -4,7 +4,7 @@ The generated dataset follows the same Parquet contract as production raw
 training data, but uses deterministic synthetic MP4s and first-frame images.
 
 Example:
-    .venv/bin/python scripts/dev/create_i2v_smoke_dataset.py \
+    pixi run python scripts/dev/create_i2v_smoke_dataset.py \
         --output-dir storage/smoke/i2v_512x512x81 \
         --samples 4 --frames 81 --height 512 --width 512 --fps 16
 """

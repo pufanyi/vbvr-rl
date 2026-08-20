@@ -1,36 +1,38 @@
 #!/usr/bin/env fish
-# Provision same-major/minor Python headers in the shared ignored storage tree
-# and prove that Triton's CUDA driver helper compiles from a fresh cache.
+# Ensure the locked Pixi Python headers are present and prove that Triton's
+# CUDA driver helper compiles from a fresh cache.
 
 set -l project_root (realpath (dirname (status filename))/../..)
 cd $project_root; or exit 1
 
-if not test -x .venv/bin/python
-    echo "[error] missing .venv/bin/python under $project_root" >&2
-    exit 1
-end
-if not command -q uv
-    echo "[error] uv is required to provision the shared Python toolchain" >&2
+if not command -q pixi
+    echo "[error] Pixi is required to provision the project environment" >&2
     exit 1
 end
 
-set -l python_abi (.venv/bin/python -c \
-    'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-set -l install_dir $project_root/storage/toolchains/uv-python
-
-echo "[bootstrap] Installing uv Python $python_abi headers under $install_dir"
-uv python install --install-dir $install_dir --no-bin $python_abi; or exit 1
-
+pixi install --environment default --locked; or exit 1
 source scripts/lib/env.fish; or exit 1
-if not test -f "$WAN_TRAINER_PYTHON_INCLUDE/Python.h"
-    echo "[error] scripts/lib/env.fish did not resolve a usable Python.h" >&2
+
+set -l python_include (python -c 'import sysconfig; print(sysconfig.get_path("include"))')
+if not test -f "$python_include/Python.h"
+    echo "[bootstrap] Python.h is missing; reinstalling the locked Pixi Python package"
+    pixi reinstall --environment default --locked python; or exit 1
+    set python_include (python -c 'import sysconfig; print(sysconfig.get_path("include"))')
+end
+
+if not test -f "$python_include/Python.h"
+    echo "[error] locked Pixi Python still lacks Python.h: $python_include" >&2
     exit 1
+end
+set -gx WAN_TRAINER_PYTHON_INCLUDE $python_include
+if not contains -- $python_include $CPATH
+    set -gx CPATH $python_include $CPATH
 end
 
 set -l fresh_cache (mktemp -d /tmp/wan-trainer-triton-bootstrap.XXXXXX); or exit 1
 set -lx TRITON_CACHE_DIR $fresh_cache
-.venv/bin/python -c \
+python -c \
     'from triton.runtime import driver; print(f"[bootstrap] Triton target: {driver.active.get_current_target()}")'
 or exit 1
 
-echo "[bootstrap] Fresh-cache Triton compilation passed with headers from $WAN_TRAINER_PYTHON_INCLUDE"
+echo "[bootstrap] Fresh-cache Triton compilation passed with Pixi headers from $WAN_TRAINER_PYTHON_INCLUDE"

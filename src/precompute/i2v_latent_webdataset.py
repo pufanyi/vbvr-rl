@@ -9,7 +9,7 @@ tar-shard layout consumed by ``VBVRLatentDataset``:
     {key}.json         - prompt, tar, index_in_tar, seq_len
 
 Example:
-    .venv/bin/torchrun --nproc_per_node=8 \
+    pixi run torchrun --nproc_per_node=8 \
         -m src.precompute.i2v_latent_webdataset \
         --config configs/precompute_diffsynth_mix_260603_raw_384.yaml \
         --output_dir storage/latents/example/webdataset \

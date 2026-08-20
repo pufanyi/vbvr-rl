@@ -88,7 +88,7 @@ test $eval_rank -lt $eval_world; or _fail "RANK=$eval_rank is outside WORLD_SIZE
 
 set -l source_args --input-root $input_root --output-root $output_root
 if test "$mode" = summarize
-    exec .venv/bin/python -m src.cli.eval_vbvr_vlm_outputs summarize $source_args $forwarded
+    exec pixi run --locked python -m src.cli.eval_vbvr_vlm_outputs summarize $source_args $forwarded
 end
 
 set -l score_args $source_args --world-size $eval_world --rank $eval_rank $forwarded
@@ -99,7 +99,7 @@ set -l plan_mode --assignment-only
 if test $assignment_only -eq 0; and not test -d "$output_root"
     set plan_mode --quick-assignment-only
 end
-set -l plan_output (.venv/bin/python -m src.cli.eval_vbvr_vlm_outputs score $score_args $plan_mode | string collect)
+set -l plan_output (pixi run --locked python -m src.cli.eval_vbvr_vlm_outputs score $score_args $plan_mode | string collect)
 set -l plan_status $pipestatus[1]
 echo $plan_output
 test $plan_status -eq 0; or _fail "VLM judge assignment/source audit failed"
@@ -189,7 +189,7 @@ if test $pending -gt 0
     if test -n "$_wan_trainer_offline_vllm_pid"
         set -a probe_args --server-pid $_wan_trainer_offline_vllm_pid --server-log $service_log
     end
-    .venv/bin/python -m src.cli.probe_vlm_service $probe_args
+    pixi run --locked python -m src.cli.probe_vlm_service $probe_args
     or begin
         _stop_wan_trainer_offline_vllm
         _fail "offline Qwen service preflight failed on node $eval_rank"
@@ -197,7 +197,7 @@ if test $pending -gt 0
 end
 
 echo "Launching offline VLM judge: node=$eval_rank/$eval_world input=$input_root output=$output_root"
-.venv/bin/python -m src.cli.eval_vbvr_vlm_outputs score $score_args
+pixi run --locked python -m src.cli.eval_vbvr_vlm_outputs score $score_args
 set -l score_status $status
 _stop_wan_trainer_offline_vllm
 if test $score_status -ne 0

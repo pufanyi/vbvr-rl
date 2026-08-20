@@ -70,8 +70,8 @@ set -q PREPARATION_PROVENANCE[1]; or set PREPARATION_PROVENANCE $OUTPUT_ROOT/pre
 set -q SCORE_PROVENANCE[1]; or set SCORE_PROVENANCE $OUTPUT_ROOT/score-provenance.json
 set -q CONVERSION_LOCK[1]; or set CONVERSION_LOCK $CONVERSION_PROVENANCE.lock
 
-set PYTHON .venv/bin/python
-set TORCHRUN .venv/bin/torchrun
+set PYTHON python
+set TORCHRUN torchrun
 
 function _fail
     echo "[error] $argv" >&2
@@ -520,7 +520,7 @@ set -g scorer_dependency_versions (env \
     OPENBLAS_NUM_THREADS=$SCORE_THREADS_PER_WORKER \
     NUMEXPR_NUM_THREADS=$SCORE_THREADS_PER_WORKER \
     $PYTHON -m src.eval.vbvr_runtime --json
-); or _fail "main_v2 scorer runtime contract failed; run uv sync --frozen and restart"
+); or _fail "main_v2 scorer runtime contract failed; run pixi install --locked and restart"
 test -n "$scorer_dependency_versions"
 or _fail "main_v2 scorer dependency version record is empty"
 

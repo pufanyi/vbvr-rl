@@ -17,7 +17,7 @@ Output per sample (key = "{split}_{task_name}_{video_idx}"):
     {key}.gt.mp4        raw ground-truth video
 
 Launch (single node, 8 GPUs):
-    .venv/bin/torchrun --nproc_per_node=8 \\
+    pixi run torchrun --nproc_per_node=8 \\
         -m src.precompute.vbvr_bench_webdataset \\
         --gt_base data/vbvr/VBVR-Bench \\
         --model_path storage/models/Wan2.2-I2V-A14B-Diffusers \\

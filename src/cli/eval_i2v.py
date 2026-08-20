@@ -5,10 +5,10 @@ a disjoint slice of the dataset.
 
 Usage:
     # Single GPU
-    .venv/bin/python -m src.cli.eval_i2v --eval_json data/eval.json --output_dir eval_out/
+    pixi run python -m src.cli.eval_i2v --eval_json data/eval.json --output_dir eval_out/
 
     # Multi-GPU
-    .venv/bin/torchrun --nproc_per_node=8 -m src.cli.eval_i2v \
+    pixi run torchrun --nproc_per_node=8 -m src.cli.eval_i2v \
         --eval_json data/eval.json --output_dir eval_out/
 
 JSON format (compatible with training dataset):

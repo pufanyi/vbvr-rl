@@ -97,7 +97,7 @@ The remapper supports:
 Example portable conversion:
 
 ```bash
-.venv/bin/python -m src.cli.convert_dcp_to_diffusers \
+pixi run python -m src.cli.convert_dcp_to_diffusers \
   --checkpoint storage/checkpoints/<run>/checkpoint-100 \
   --base_model storage/models/Wan2.2-TI2V-5B-Diffusers \
   --output storage/models/converted/<run>-checkpoint-100 \

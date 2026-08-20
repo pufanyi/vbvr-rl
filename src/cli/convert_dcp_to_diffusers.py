@@ -6,11 +6,11 @@ evaluation, optionally fuses LoRA adapters into the base weights, and writes a
 plain ``save_pretrained`` Diffusers model.
 
 Usage:
-    .venv/bin/python -m src.cli.convert_dcp_to_diffusers
+    pixi run python -m src.cli.convert_dcp_to_diffusers
         --checkpoint storage/checkpoints/run/checkpoint-2000
         --output storage/models/run-checkpoint-2000-diffusers
 
-    .venv/bin/python -m src.cli.convert_dcp_to_diffusers
+    pixi run python -m src.cli.convert_dcp_to_diffusers
         --checkpoint storage/checkpoints/run/checkpoint-2000 --output storage/models/run-2000
         --checkpoint storage/checkpoints/run/checkpoint-4000 --output storage/models/run-4000
 """

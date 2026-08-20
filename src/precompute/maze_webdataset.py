@@ -20,7 +20,7 @@ The extra ``maze_*`` tensors and JSON fields pass through
 
 Launch (single node, 8 GPUs)::
 
-    .venv/bin/torchrun --nproc_per_node=8 \
+    pixi run torchrun --nproc_per_node=8 \
         -m src.precompute.maze_webdataset \
         --output_dir data/maze_synth/latents/webdataset \
         --sft_output_dir data/maze_synth/latents/webdataset/sft \

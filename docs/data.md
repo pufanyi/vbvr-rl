@@ -57,7 +57,7 @@ Use the deterministic fixture generator when production media paths are not
 mounted but the complete raw data path still needs validation:
 
 ```bash
-.venv/bin/python scripts/dev/create_i2v_smoke_dataset.py \
+pixi run python scripts/dev/create_i2v_smoke_dataset.py \
   --output-dir storage/smoke/i2v_512x512x81 \
   --samples 4 --frames 81 --height 512 --width 512 --fps 16
 ```
@@ -96,7 +96,7 @@ Because this is an iterable dataset, configs should set `dataset_size`. The trai
 Example:
 
 ```bash
-.venv/bin/torchrun --nproc_per_node=8 -m src.precompute.i2v_latent_webdataset \
+pixi run torchrun --nproc_per_node=8 -m src.precompute.i2v_latent_webdataset \
   --config configs/precompute_diffsynth_mix_260603_raw_384.yaml \
   --output_dir storage/latents/example/webdataset \
   --batch_size 4 \
@@ -112,7 +112,7 @@ The precompute script writes `dataset_info.json` with recommended `latent_webdat
 The fish launcher defaults to:
 
 ```fish
-fish scripts/precompute/maze_webdataset.fish --num_samples 20000
+pixi run fish scripts/precompute/maze_webdataset.fish --num_samples 20000
 ```
 
 Important generated tensors:
@@ -158,7 +158,7 @@ The separate image archives are therefore unnecessary for the current I2V
 loader. Download only the video archives:
 
 ```bash
-.venv/bin/hf download Video-Reason/VBVR-Pro-RL \
+pixi run hf download Video-Reason/VBVR-Pro-RL \
   --repo-type dataset \
   --revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \
   --include 'VBVR-Pro-RL-Video/*.tar.gz' \
@@ -169,7 +169,7 @@ Restore a flat VBVR-Pro tree and generate the descriptor consumed by the
 checked-in RL configs:
 
 ```bash
-.venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
+pixi run python -m scripts.data.vbvr_pro_unpack_hf \
   --dataset-root storage/datasets/VBVR-Pro-RL \
   --output-dir storage/datasets/VBVR-Pro-RL/materialized \
   --source-revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \

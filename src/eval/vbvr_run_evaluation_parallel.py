@@ -12,14 +12,14 @@ visible, regardless of the ``--device`` value. Run scoring with CUDA hidden
 and point EasyOCR at a writable or pre-populated model directory, for example::
 
     CUDA_VISIBLE_DEVICES="" EASYOCR_MODULE_PATH=/path/to/easyocr_root \
-        .venv/bin/python -m src.eval.vbvr_run_evaluation_parallel ...
+        pixi run python -m src.eval.vbvr_run_evaluation_parallel ...
 
 Main-v2 also has evaluators that explicitly use ``./easyocr_models``. Workers
 run from ``--evalkit_dir`` so relative annotations resolve correctly; that
 checkout must therefore contain an ``easyocr_models`` directory or symlink.
 
 Usage (called by the VBVR-Pro evaluation launchers):
-    .venv/bin/python -m src.eval.vbvr_run_evaluation_parallel \
+    pixi run python -m src.eval.vbvr_run_evaluation_parallel \
         --model_path /abs/path/model_out \
         --gt_base    /abs/path/VBVR-Bench \
         --output_dir /abs/path/model_out/score \

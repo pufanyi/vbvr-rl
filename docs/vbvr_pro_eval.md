@@ -77,7 +77,7 @@ old result label while changing evaluator source.
 The Python environment is also part of the scorer contract. Before a run:
 
 ```bash
-.venv/bin/python -m src.eval.vbvr_runtime
+pixi run python -m src.eval.vbvr_runtime
 ```
 
 The launcher repeats this check and records the full runtime report.
@@ -88,7 +88,7 @@ Inspect the resolved top-level selections without cloning evaluator source,
 loading weights, or touching outputs:
 
 ```fish
-fish scripts/eval/vbvr_pro/run.fish \
+pixi run fish scripts/eval/vbvr_pro/run.fish \
   --checkpoint storage/checkpoints/<run>/checkpoint-100 \
   --converted-model storage/models/converted/<run>-checkpoint-100 \
   --output-root storage/eval_out/<run>/checkpoint-100/unipc \
@@ -167,7 +167,7 @@ option list.
 Example ODE evaluation:
 
 ```fish
-fish scripts/eval/vbvr_pro/run.fish \
+pixi run fish scripts/eval/vbvr_pro/run.fish \
   --checkpoint storage/checkpoints/<run>/checkpoint-100 \
   --converted-model storage/models/converted/<run>-checkpoint-100 \
   --output-root storage/eval_out/<run>/checkpoint-100/unipc \
@@ -182,7 +182,7 @@ fish scripts/eval/vbvr_pro/run.fish \
 Flow-CPS changes the sampler and therefore requires a different output root:
 
 ```fish
-fish scripts/eval/vbvr_pro/run.fish \
+pixi run fish scripts/eval/vbvr_pro/run.fish \
   --model storage/models/converted/<run>-checkpoint-100 \
   --output-root storage/eval_out/<run>/checkpoint-100/cps-noise-0.7 \
   --sampler cps \
@@ -355,7 +355,7 @@ Use one parameterized sweep instead of creating checkpoint-by-sampler wrapper
 scripts:
 
 ```fish
-fish scripts/eval/vbvr_pro/sweep.fish \
+pixi run fish scripts/eval/vbvr_pro/sweep.fish \
   --output-base storage/eval_out/<run>/checkpoint-100 \
   --samplers unipc,euler,cps:0.3,cps:0.7 \
   -- \
@@ -376,7 +376,7 @@ output base. Keep manifest, media, and scorer settings fixed when comparing
 cells. Summarize only complete results that share one evaluator fingerprint:
 
 ```fish
-fish scripts/eval/vbvr_pro/summarize.fish \
+pixi run fish scripts/eval/vbvr_pro/summarize.fish \
   --root storage/eval_out/<run>/checkpoint-100 \
   --expected-samples 500 \
   --expected-evalkit-source-sha256 <64-hex-digest>

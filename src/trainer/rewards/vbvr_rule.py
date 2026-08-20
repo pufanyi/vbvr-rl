@@ -92,7 +92,7 @@ def _ensure_easyocr_runtime() -> None:
     if spec is None:
         raise ModuleNotFoundError(
             "main_v2 requires EasyOCR, but the `easyocr` package is not installed; "
-            "run `uv sync --frozen` before launching training"
+            "run `pixi install --locked` before launching training"
         )
 
     package_paths = [Path(path) for path in spec.submodule_search_locations or ()]
@@ -103,7 +103,7 @@ def _ensure_easyocr_runtime() -> None:
         expected = ", ".join(str(path) for path in character_paths) or "<easyocr package>/character/en_char.txt"
         raise FileNotFoundError(
             "EasyOCR is installed incompletely: required English character table is missing "
-            f"(expected {expected}); run `uv sync --frozen` before launching training"
+            f"(expected {expected}); run `pixi install --locked` before launching training"
         )
 
 

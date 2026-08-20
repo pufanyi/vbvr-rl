@@ -4,55 +4,41 @@ set -gx WAN_TRAINER_ROOT (realpath (dirname (status filename))/../..)
 
 cd $WAN_TRAINER_ROOT; or exit 1
 
-if not test -f .venv/bin/activate.fish
-    echo "[error] missing .venv/bin/activate.fish under $WAN_TRAINER_ROOT" >&2
+if not command -q pixi
+    echo "[error] Pixi is required; install it and run 'pixi install --locked'." >&2
     exit 1
 end
 
-source .venv/bin/activate.fish; or exit 1
+# Launchers can be called either through `pixi run` or directly. Direct calls
+# activate the locked default environment through Pixi before doing any work.
+if not set -q PIXI_IN_SHELL; or not set -q PIXI_ENVIRONMENT_NAME; or test "$PIXI_ENVIRONMENT_NAME" != default
+    pixi shell-hook \
+        --manifest-path "$WAN_TRAINER_ROOT/pyproject.toml" \
+        --environment default \
+        --locked \
+        --shell fish | source
+    or exit 1
+end
+
+if not command -q python; or not command -q torchrun
+    echo "[error] the locked Pixi default environment is incomplete; run 'pixi install --locked'." >&2
+    exit 1
+end
+
 set -gx PYTHONPATH $WAN_TRAINER_ROOT $PYTHONPATH
 
 # Triton compiles a small CUDA driver extension lazily on the first compiled
-# forward. Debian/Ubuntu virtualenvs inherit the system Python include path,
-# which may exist in sysconfig even when Python.h was omitted from the image.
-# Prefer an explicit/operator-provided header directory, then the interpreter's
-# native include directory, an existing CPATH entry, the project-local shared
-# uv toolchain, or an already-installed user-level uv Python with the same
-# major.minor ABI. Never download at launch.
-set -l wan_python_include (.venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("include"))')
-set -l wan_python_abi (.venv/bin/python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+# forward. Pixi's Python package normally includes matching headers. Prefer an
+# explicit operator override, then the active Pixi interpreter's include
+# directory, then an existing CPATH entry. Never download at launch.
+set -l wan_python_include (python -c 'import sysconfig; print(sysconfig.get_path("include"))')
+set -l wan_python_abi (python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 set -l wan_python_header_include
 
 for candidate in $WAN_TRAINER_PYTHON_INCLUDE $wan_python_include $CPATH
     if test -n "$candidate"; and test -f "$candidate/Python.h"
         set wan_python_header_include $candidate
         break
-    end
-end
-
-# Cluster images may provide only the Python runtime package, while all nodes
-# share the repository's storage/ tree. `uv python install --no-bin` can
-# provision this directory once before launch without requiring root access.
-if test -z "$wan_python_header_include"
-    set -l wan_project_python_root $WAN_TRAINER_ROOT/storage/toolchains/uv-python
-    for candidate in \
-            $wan_project_python_root/cpython-$wan_python_abi.*-*/include/python$wan_python_abi \
-            $wan_project_python_root/cpython-$wan_python_abi-*/include/python$wan_python_abi
-        if test -f "$candidate/Python.h"
-            set wan_python_header_include $candidate
-            break
-        end
-    end
-end
-
-if test -z "$wan_python_header_include"; and command -q uv
-    set -l wan_managed_python (uv python find --managed-python --no-python-downloads $wan_python_abi 2>/dev/null)
-    if test -n "$wan_managed_python"; and test -x "$wan_managed_python"
-        set -l wan_managed_include ($wan_managed_python -c \
-            'import sysconfig; print(sysconfig.get_path("include"))')
-        if test -f "$wan_managed_include/Python.h"
-            set wan_python_header_include $wan_managed_include
-        end
     end
 end
 
@@ -71,6 +57,6 @@ if test -n "$wan_python_header_include"
     end
 else
     echo "[warning] Python.h for Python $wan_python_abi was not found; torch.compile/Triton will fail." >&2
-    echo "[warning] Install python$wan_python_abi-dev or export WAN_TRAINER_PYTHON_INCLUDE/CPATH before launch." >&2
-    echo "[warning] On a shared runtime-only cluster, run fish scripts/dev/bootstrap_triton_python_headers.fish once." >&2
+    echo "[warning] Run 'pixi reinstall --locked python' or export WAN_TRAINER_PYTHON_INCLUDE/CPATH." >&2
+    echo "[warning] Then run fish scripts/dev/bootstrap_triton_python_headers.fish to verify a fresh compile." >&2
 end

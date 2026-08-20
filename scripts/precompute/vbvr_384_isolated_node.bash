@@ -140,14 +140,8 @@ MASTER_ADDR="${LOCAL_MASTER_ADDR:-127.0.0.1}"
 MASTER_PORT="${LOCAL_MASTER_PORT:-$((29680 + MACHINE_RANK))}"
 mkdir -p "$LOG_DIR" "$PROMPT_EMBEDS_DIR" "$VAE_LATENTS_DIR"
 
-PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
-if [[ ! -x "$PYTHON_BIN" ]]; then
-    PYTHON_BIN="$(command -v python3 || true)"
-fi
-TORCHRUN_BIN="${TORCHRUN_BIN:-$ROOT_DIR/.venv/bin/torchrun}"
-if [[ ! -x "$TORCHRUN_BIN" ]]; then
-    TORCHRUN_BIN="$(command -v torchrun || true)"
-fi
+PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.pixi/envs/default/bin/python}"
+TORCHRUN_BIN="${TORCHRUN_BIN:-$ROOT_DIR/.pixi/envs/default/bin/torchrun}"
 
 require_path() {
     local kind="$1"
@@ -161,12 +155,12 @@ require_path() {
 require_path metadata "$METADATA"
 require_path tar_dir "$TAR_DIR"
 require_path model_path "$MODEL_PATH"
-if [[ -z "$PYTHON_BIN" ]]; then
-    echo "[error] python not found; set PYTHON_BIN=/path/to/python" >&2
+if [[ ! -x "$PYTHON_BIN" ]]; then
+    echo "[error] locked Pixi Python is missing: $PYTHON_BIN; run 'pixi install --locked'" >&2
     exit 1
 fi
-if [[ -z "$TORCHRUN_BIN" ]]; then
-    echo "[error] torchrun not found; set TORCHRUN_BIN=/path/to/torchrun" >&2
+if [[ ! -x "$TORCHRUN_BIN" ]]; then
+    echo "[error] locked Pixi torchrun is missing: $TORCHRUN_BIN; run 'pixi install --locked'" >&2
     exit 1
 fi
 

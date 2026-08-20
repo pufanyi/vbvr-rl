@@ -60,7 +60,7 @@ else
 end
 echo "[preflight] Persistent attention kernel cache: $KERNELS_CACHE"
 
-.venv/bin/python -m src.cli.validate_grpo_runtime $train_args
+pixi run --locked python -m src.cli.validate_grpo_runtime $train_args
 or begin
     echo "ERROR: GRPO runtime preflight failed before torchrun." >&2
     exit 1

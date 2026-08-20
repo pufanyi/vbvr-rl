@@ -159,8 +159,8 @@ def validate_vbvr_scorer_runtime(
         raise VBVRScorerRuntimeError(
             "VBVR scorer runtime contract failed:\n"
             f"{detail}\n"
-            "Run `uv sync --frozen` on every node, then restart the whole training/evaluation job. "
-            "Updating .venv cannot replace cv2 or other modules already loaded by scorer workers."
+            "Run `pixi install --locked` on every node, then restart the whole training/evaluation job. "
+            "Updating the Pixi environment cannot replace cv2 or other modules already loaded by scorer workers."
         )
     return report
 
