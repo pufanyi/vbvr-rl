@@ -57,6 +57,9 @@
 - The locked environment uses Python 3.12 and official PyTorch 2.11 CUDA 12.6
   wheels. Pixi is the sole supported environment, dependency, lockfile, and
   task manager; use `pixi run` in operator instructions and launcher examples.
+- Keep the isolated `lint` environment on the plain CPU-compatible `linux-64`
+  platform. Bind the default and `vllm` environments to the named CUDA 12.6
+  platform so CPU-only CI can run strict locked Pixi inspection before Ruff.
 - Reproduce the default environment with `pixi install --locked` and verify
   manifest/lock consistency with `pixi lock --check`. `decord2` still imports
   as `decord`; the media stack uses headless OpenCV and a bundled

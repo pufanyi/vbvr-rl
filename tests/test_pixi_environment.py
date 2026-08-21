@@ -11,7 +11,20 @@ def test_pixi_is_the_only_project_environment_workflow():
     pixi = manifest["tool"]["pixi"]
 
     assert pixi["workspace"]["requires-pixi"] == ">=0.77.0,<0.78"
+    assert pixi["workspace"]["platforms"] == [
+        {
+            "name": "linux-64-cuda-12-6",
+            "platform": "linux-64",
+            "cuda": "12.6",
+        },
+        "linux-64",
+    ]
+    assert pixi["feature"]["cuda"]["platforms"] == ["linux-64-cuda-12-6"]
+    assert pixi["feature"]["lint"]["platforms"] == ["linux-64"]
+    assert pixi["feature"]["vllm"]["platforms"] == ["linux-64-cuda-12-6"]
     assert {"default", "lint", "vllm"} <= set(pixi["environments"])
+    assert pixi["environments"]["default"]["features"] == ["dev", "cuda"]
+    assert pixi["environments"]["vllm"]["features"] == ["vllm", "cuda"]
     assert pixi["tasks"]["test"] == "python -m pytest tests"
     assert (_REPO_ROOT / "pixi.lock").is_file()
     assert not (_REPO_ROOT / "uv.lock").exists()

@@ -65,8 +65,14 @@ Documentation = "https://github.com/pufanyi/vbvr-rl/tree/main/docs"
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
-platforms = [{ platform = "linux-64", cuda = "12.6" }]
+platforms = [
+    { name = "linux-64-cuda-12-6", platform = "linux-64", cuda = "12.6" },
+    "linux-64",
+]
 requires-pixi = ">=0.77.0,<0.78"
+
+[tool.pixi.feature.cuda]
+platforms = ["linux-64-cuda-12-6"]
 
 [tool.pixi.dependencies]
 fish = ">=4.0,<5"
@@ -88,6 +94,9 @@ setup-vllm = "fish scripts/dev/setup_host_vllm.fish"
 download-vllm-model = "fish scripts/download/qwen36_27b_hf_mirror.fish"
 serve-vllm = "fish scripts/serve/qwen36_27b_vllm.fish"
 
+[tool.pixi.feature.lint]
+platforms = ["linux-64"]
+
 [tool.pixi.feature.lint.dependencies]
 python = "3.12.*"
 
@@ -97,6 +106,9 @@ ruff = "==0.16.3"
 [tool.pixi.feature.lint.tasks]
 lint = "ruff check --output-format=github ."
 format-check = "ruff format --check ."
+
+[tool.pixi.feature.vllm]
+platforms = ["linux-64-cuda-12-6"]
 
 [tool.pixi.feature.vllm.dependencies]
 python = "3.12.*"
@@ -114,9 +126,9 @@ torchaudio = { version = "==2.11.0", index = "https://download.pytorch.org/whl/c
 torchvision = { version = "==0.26.0", index = "https://download.pytorch.org/whl/cu126" }
 
 [tool.pixi.environments]
-default = { features = ["dev"], solve-group = "default" }
+default = { features = ["dev", "cuda"], solve-group = "default" }
 lint = { features = ["lint"], no-default-feature = true }
-vllm = { features = ["vllm"], no-default-feature = true }
+vllm = { features = ["vllm", "cuda"], no-default-feature = true }
 
 [tool.ruff]
 line-length = 120
