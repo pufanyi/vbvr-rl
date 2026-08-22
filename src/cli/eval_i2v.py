@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 _TEMPORARY_VIDEO_NAME_RE = re.compile(r"^\.[A-Za-z0-9_.-]+\.tmp-rank[0-9]+-pid(?P<pid>[1-9][0-9]*)\.mp4$")
 
 
-def parse_args(argv: list[str] | None = None):
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Wan2.2 I2V batch evaluation")
     parser.add_argument("--eval_json", type=str, required=True, help="JSON file with eval samples")
     parser.add_argument(
@@ -114,7 +114,11 @@ def parse_args(argv: list[str] | None = None):
         default=180,
         help="Process-group timeout in minutes. Slow serialized model loading can exceed PyTorch's default.",
     )
-    return parser.parse_args(argv)
+    return parser
+
+
+def parse_args(argv: list[str] | None = None):
+    return build_parser().parse_args(argv)
 
 
 def _resolve_path(path: str, base_dir: Path) -> str:
@@ -365,8 +369,12 @@ def _load_pipeline_rank_serialized(args, device: torch.device, rank: int, world_
     return pipe
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+def _pipeline_call_kwargs(args, generator: torch.Generator) -> dict[str, object]:
+    """Return backend-specific keyword arguments for one pipeline call."""
+    return {"generator": generator}
+
+
+def run(args: argparse.Namespace) -> int:
 
     # Validation-only must remain usable without distributed, CUDA, or model setup.
     _, base_dir, data = _load_eval_data(args)
@@ -484,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
             num_frames=num_frames,
             guidance_scale=args.guidance_scale,
             num_inference_steps=args.num_inference_steps,
-            generator=generator,
+            **_pipeline_call_kwargs(args, generator),
         ).frames[0]
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -533,6 +541,10 @@ def main(argv: list[str] | None = None) -> int:
     if rank == 0:
         print(f"Done. Generated videos in {output_dir}")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    return run(parse_args(argv))
 
 
 if __name__ == "__main__":
