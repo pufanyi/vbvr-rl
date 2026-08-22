@@ -63,6 +63,14 @@ pixi run fish scripts/eval/vbvr_pro/run.fish \
   --dry-run
 ```
 
+Reproduce the published Rule-RL and Qwen-Judge-RL sampler matrices:
+
+```fish
+pixi run fish scripts/eval/vbvr_pro/reproduce.fish \
+  --output-base storage/eval_out/published-hf \
+  --dry-run
+```
+
 Convert a DCP checkpoint:
 
 ```bash

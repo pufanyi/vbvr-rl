@@ -253,6 +253,15 @@ dedicated to that model, sampler, media, manifest, and scorer contract. Use
 `scripts/eval/vbvr_pro/sweep.fish` to compare UniPC, Euler, and Flow-CPS without
 adding experiment-specific wrappers.
 
+To reproduce the published Rule-RL and Qwen-Judge-RL six-sampler matrices from
+their immutable Hugging Face revisions, inspect the 12 resolved cells first:
+
+```fish
+pixi run fish scripts/eval/vbvr_pro/reproduce.fish \
+  --output-base storage/eval_out/published-hf \
+  --dry-run
+```
+
 The full procedure and completion criteria are documented in
 [Evaluation](docs/evaluation.md) and
 [VBVR-Pro Evaluation](docs/vbvr_pro_eval.md).

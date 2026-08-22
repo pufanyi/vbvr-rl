@@ -10,6 +10,7 @@ arguments; they are not encoded in experiment-specific script names.
 | --- | --- |
 | `run.fish` | Evaluate one model with UniPC, Euler, or Flow-CPS |
 | `sweep.fish` | Expand one model into several sampler cells, optionally sharded across machines |
+| `reproduce.fish` | Reproduce the pinned 12-cell matrix for the published Rule-RL and Qwen-Judge-RL models |
 | `summarize.fish` | Verify and summarize complete rule-score cells |
 | `vlm_judge.fish` | Optionally judge generated-video cells with Qwen |
 | `lib/rule_pipeline.fish` | Internal conversion, generation, preparation, scoring, and provenance implementation |
@@ -17,6 +18,44 @@ arguments; they are not encoded in experiment-specific script names.
 Do not invoke or copy `lib/rule_pipeline.fish` directly. Add stable options to
 `run.fish` when the public contract needs to grow. A new checkpoint, sampler
 coefficient, resolution, or output location does not need a new wrapper.
+
+## Published Hugging Face Reproduction
+
+The release reproduction launcher pins the
+[Rule-RL](https://huggingface.co/pufanyi/VBVR-Pro-Wan2.2-TI2V-5B-Rule-RL) and
+[Qwen-Judge-RL](https://huggingface.co/pufanyi/VBVR-Pro-Wan2.2-TI2V-5B-Qwen-Judge-RL)
+model commits, the reviewed custom pipeline digest, all six paper samplers, and
+the 512×512×81, 30-step, CFG 1.0, 16 FPS, seed-zero generation contract. It
+materializes each snapshot beneath `storage/models/hf-releases`, validates it,
+and then reuses the same generation, preparation, EvalKit scoring, provenance,
+and summary stages as `run.fish`:
+
+```fish
+pixi run fish scripts/eval/vbvr_pro/reproduce.fish \
+  --output-base storage/eval_out/published-hf \
+  -- \
+  --gt-base storage/datasets/vbvr-pro-eval-500 \
+  --evalkit-dir storage/evalkits/<compatible-checkout> \
+  --easyocr-model-dir storage/evalkits/easyocr-shared/model \
+  --num-gpus 8
+```
+
+Inspect all 12 cells without downloading or evaluating:
+
+```fish
+pixi run fish scripts/eval/vbvr_pro/reproduce.fish \
+  --output-base storage/eval_out/published-hf \
+  --dry-run
+```
+
+| Model | CPS 0.1 | CPS 0.3 | CPS 0.7 | CPS 0.9 | Euler | UniPC |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Rule-RL | 0.509 | 0.526 | 0.548 | 0.539 | 0.522 | 0.522 |
+| Qwen-Judge-RL | 0.482 | 0.493 | 0.508 | 0.509 | 0.488 | 0.497 |
+
+Use `--models rule` or `--models qwen` for one release. Multi-machine runs use
+the same `--world-size`/`--rank` cell assignment as `sweep.fish`; after all
+ranks finish, run the command once with `--summarize-only`.
 
 ## One Rule-Evaluation Cell
 

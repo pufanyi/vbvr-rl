@@ -133,6 +133,7 @@ Generation entrypoints are:
 | UniPC ODE | `src.cli.eval_i2v` | none |
 | Euler ODE | `src.cli.eval_i2v_euler` | none |
 | Flow-CPS | `src.cli.eval_i2v_cps` | `--noise_level` |
+| Reviewed Hugging Face pipeline | `src.cli.eval_i2v_hf_pipeline` | `--sampler`, optional `--cps_eta`, and required pipeline digest |
 
 Keep model, checkpoint, EMA choice, sampler, sigma grid, inference steps, CFG,
 seed, resolution, frame count, and FPS fixed when comparing checkpoints.

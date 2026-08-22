@@ -52,9 +52,10 @@
   rule-evaluation path is `scripts/eval/vbvr_pro/` plus helpers in `src/eval/`.
   Do not restore a vendored or implicit evaluator fallback.
 - Keep the public VBVR-Pro launcher surface parameterized: `run.fish` owns one
-  UniPC/Euler/Flow-CPS cell, `sweep.fish` expands sampler cells, and
-  `summarize.fish` verifies their provenance. Do not add checkpoint-, cluster-,
-  resolution-, or sampler-specific wrapper scripts or checked-in result viewers.
+  UniPC/Euler/Flow-CPS cell, `sweep.fish` expands sampler cells,
+  `reproduce.fish` owns the pinned two-model/six-sampler published matrix, and
+  `summarize.fish` verifies provenance. Do not add further checkpoint-, model-,
+  cluster-, resolution-, or sampler-specific wrappers or checked-in viewers.
 
 ## Environment
 
@@ -238,6 +239,10 @@
   conversion, split manifest, generated paths/media, frame-preserving
   preparation, exact scorer source/runtime, sample errors, and stage
   provenance.
+- Published Hugging Face reproduction uses `reproduce.fish` and immutable local
+  snapshots. Keep both release commit IDs and the reviewed `pipeline.py` digest
+  pinned together with the 500-sample, 512x512x81/16-FPS, 30-step, CFG-1.0,
+  seed-zero, six-sampler contract; do not execute mutable remote pipeline code.
 - Rule evaluation may reuse a complete score only when both the exact sample
   set and score provenance still validate. Partial or mismatched scoring state
   is discarded and recomputed; never merge arbitrary partial evaluator output.

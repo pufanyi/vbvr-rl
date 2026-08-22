@@ -1,7 +1,7 @@
 # VBVR-Pro Rule Evaluation
 
 This is the detailed operator reference for the manifest-locked, rule-based
-VBVR-Pro evaluation pipeline. The stable public launcher is:
+VBVR-Pro evaluation pipeline. The stable one-cell public launcher is:
 
 ```text
 scripts/eval/vbvr_pro/run.fish
@@ -21,7 +21,9 @@ The repository includes:
 - frame-preserving video preparation;
 - a parallel adapter for external EvalKit;
 - stage provenance, completion checks, a sampler sweep, and generic result
-  summaries.
+  summaries;
+- immutable Hugging Face snapshot materialization and a pinned reproduction
+  matrix for the published Rule-RL and Qwen-Judge-RL checkpoints.
 
 It does not include model weights, VBVR-Pro evaluation data, evaluator source,
 EasyOCR weights, or generated results.
@@ -100,6 +102,48 @@ Always dry-run after changing model, sampler, media, evaluator, or output
 arguments. A dry run does not prove that paths exist or fingerprints match;
 those checks occur in the real pipeline.
 
+## Reproduce the Published Hugging Face Matrix
+
+`scripts/eval/vbvr_pro/reproduce.fish` is the single parameterized reproduction
+entrypoint for the published
+[Rule-RL](https://huggingface.co/pufanyi/VBVR-Pro-Wan2.2-TI2V-5B-Rule-RL) and
+[Qwen-Judge-RL](https://huggingface.co/pufanyi/VBVR-Pro-Wan2.2-TI2V-5B-Qwen-Judge-RL)
+TI2V-5B releases. It pins:
+
+```text
+Rule-RL model revision:       003373efcbc356e263f4c8d10b3dbb8f5cd7c6d0
+Qwen-Judge-RL model revision: 1282a14cf5379f97ff77326373285533a9e2387d
+pipeline.py SHA-256:          968acf1b214bce097f4d034bf26923dbf496ac319c1adb6560c16089f2ab0e50
+samplers:                     cps:0.1,cps:0.3,cps:0.7,cps:0.9,euler,unipc
+media:                        512x512x81 at 16 FPS
+sampling:                     30 steps, CFG 1.0, base seed 0
+samples:                      exact 500-item split manifest
+```
+
+Run both releases:
+
+```fish
+pixi run fish scripts/eval/vbvr_pro/reproduce.fish \
+  --output-base storage/eval_out/published-hf \
+  -- \
+  --gt-base storage/datasets/vbvr-pro-eval-500 \
+  --evalkit-dir storage/evalkits/<compatible-checkout> \
+  --easyocr-model-dir storage/evalkits/easyocr-shared/model \
+  --num-gpus 8
+```
+
+The launcher downloads only immutable revisions, verifies the reviewed custom
+pipeline before loading weights, writes `conversion_metadata.json`, evaluates
+six sampler cells per model, and summarizes each complete matrix. The benchmark
+data, compatible EvalKit checkout, and EasyOCR weights remain external
+requirements. Use `--dry-run` to inspect all 12 cells without downloading.
+
+For multi-machine generation, pass the same arguments on every machine with
+`--world-size N --rank R`. Once all ranks finish, invoke the launcher once with
+`--summarize-only`. Exact output bytes can vary with GPU and runtime kernels;
+retain every provenance file when comparing reproduced aggregates with the
+three-decimal paper values.
+
 ## Public CLI Contract
 
 ### Model and data
@@ -135,6 +179,8 @@ OCR model directory. It refuses to replace a real directory at that path.
 
 | Option | Meaning |
 | --- | --- |
+| `--generation-backend NAME` | `native` or the reviewed `hf-pipeline` backend |
+| `--hf-pipeline-sha256 HASH` | Required custom-pipeline digest for `hf-pipeline` |
 | `--sampler NAME` | `unipc`, `euler`, or `cps` |
 | `--cps-noise FLOAT` | Required Flow-CPS coefficient in `[0, 1]` |
 | `--num-gpus N` | Local data-parallel generation process count |
@@ -236,6 +282,10 @@ immutable `conversion_metadata.json`, or pass `--conversion-provenance` with an
 equivalent import record. The launcher validates structure, fingerprints the
 tree, and checks that it remains stable during the validation interval.
 
+`src.cli.materialize_hf_diffusers_model` creates this local tree and import
+record from a full Hugging Face commit SHA. It also validates every referenced
+component and safetensors header and refuses a different `pipeline.py` digest.
+
 ## Stage 3: Manifest Construction
 
 `src.eval.build_vbvr_eval_json` verifies each flattened sample against the
@@ -262,7 +312,9 @@ Otherwise it resumes missing/invalid videos through the selected module:
 
 - `src.cli.eval_i2v` for UniPC ODE;
 - `src.cli.eval_i2v_euler` for Euler ODE;
-- `src.cli.eval_i2v_cps` for Flow-CPS.
+- `src.cli.eval_i2v_cps` for Flow-CPS;
+- `src.cli.eval_i2v_hf_pipeline` for a reviewed custom pipeline materialized
+  from Hugging Face; sampler choice remains a per-cell provenance field.
 
 Generation is local multi-GPU data parallel. Every expected path is derived
 from the eval JSON; extra, missing, duplicate, corrupt, wrong-size,
