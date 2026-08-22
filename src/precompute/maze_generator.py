@@ -1028,9 +1028,6 @@ class MazeSample(BaseModel):
     palette: MazePalette
     prompt: str
 
-    class Config:
-        frozen = False
-
 
 def build_maze_sample(
     spec: MazeSpec,
