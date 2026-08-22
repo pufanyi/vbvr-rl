@@ -132,6 +132,12 @@
   is a dense single-transformer model with expanded token timesteps.
 - `src.cli.train_i2v` uses `SFTConfig` and `I2VTrainer`;
   `src.cli.train_grpo` uses `RLConfig` and `DanceGRPOTrainer`.
+- Keep the DanceGRPO implementation separated by responsibility:
+  `dancegrpo_trainer.py` owns the algorithm core and standard replay,
+  `dancegrpo_shared_prompt.py` owns shared-prompt/delayed replay,
+  `dancegrpo_split_runtime.py` owns split train/rollout orchestration, and
+  `dancegrpo_common.py` owns their shared records and partition helpers. Avoid
+  growing topology-specific orchestration back into the coordinator.
 - SFT and RL have separate `BaseTrainer` and `BaseRLTrainer` stacks with some
   duplicated distributed, model, dataset, optimizer, and checkpoint logic.
   Shared fixes often need mirrored implementation and tests.

@@ -105,6 +105,19 @@ BaseRLTrainer
     DanceGRPOTrainer
 ```
 
+`DanceGRPOTrainer` is a thin algorithm coordinator rather than the owner of
+every execution topology. Its implementation is split by responsibility:
+
+```text
+dancegrpo_trainer.py          policy objective, Flow-CPS transitions, standard replay
+dancegrpo_shared_prompt.py    shared-prompt waves and delayed replay
+dancegrpo_split_runtime.py    synchronous/asynchronous train-rollout rank orchestration
+dancegrpo_common.py           partition helpers and rollout state records
+```
+
+The two runtime modules are cooperative mixins over `BaseGRPOTrainer`; operator
+entrypoints and the public `DanceGRPOTrainer` import remain unchanged.
+
 Both bases initialize distributed state, model modules, datasets,
 `StatefulDataLoader`, optimizers, EMA, W&B, and DCP. Changes to shared concerns
 such as checkpointing, FSDP, data loading, or resume semantics must be reviewed
