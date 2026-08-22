@@ -29,6 +29,8 @@ function _usage
     echo "  --expected-videos N           Exact result count (default: 500)"
     echo
     echo "Generation:"
+    echo "  --generation-backend NAME    native or hf-pipeline (default: native)"
+    echo "  --hf-pipeline-sha256 HASH    Reviewed pipeline.py digest for hf-pipeline"
     echo "  --sampler NAME                unipc, euler, or cps (default: unipc)"
     echo "  --cps-noise FLOAT             Flow-CPS coefficient in [0, 1]"
     echo "  --steps N                     Sampling steps (default: 50)"
@@ -78,6 +80,8 @@ argparse -n vbvr-pro-eval \
     'easyocr-root=' \
     'easyocr-model-dir=' \
     'expected-videos=' \
+    'generation-backend=' \
+    'hf-pipeline-sha256=' \
     'sampler=' \
     'cps-noise=' \
     'steps=' \
@@ -135,6 +139,21 @@ else if set -q _flag_cps_noise
     _fail "--cps-noise is only valid with --sampler cps"
 end
 
+set -l generation_backend native
+set -q _flag_generation_backend; and set generation_backend (string lower -- $_flag_generation_backend)
+contains -- $generation_backend native hf-pipeline
+or _fail "--generation-backend must be one of: native, hf-pipeline"
+if test "$generation_backend" = hf-pipeline
+    test $has_model -eq 1
+    or _fail "--generation-backend hf-pipeline requires --model with a materialized Diffusers snapshot"
+    set -q _flag_hf_pipeline_sha256
+    or _fail "--hf-pipeline-sha256 is required with --generation-backend hf-pipeline"
+    string match -qr '^[0-9a-fA-F]{64}$' -- $_flag_hf_pipeline_sha256
+    or _fail "--hf-pipeline-sha256 must be a 64-hex digest"
+else if set -q _flag_hf_pipeline_sha256
+    _fail "--hf-pipeline-sha256 only applies to --generation-backend hf-pipeline"
+end
+
 set -l script_dir (realpath (dirname (status filename)))
 source $script_dir/../../lib/env.fish; or exit 1
 
@@ -145,6 +164,7 @@ for variable in \
         EVAL_JSON GENERATED_DIR PREPARED_DIR SCORE_DIR \
         GENERATION_PROVENANCE PREPARATION_PROVENANCE SCORE_PROVENANCE \
         CONVERSION_LOCK CUDA_DEVICES CPS_NOISE_LEVEL EVALKIT_REPO \
+        GENERATION_BACKEND HF_PIPELINE_SHA256 \
         DRY_RUN CONVERSION_ONLY FORCE_REGENERATE FORCE_REPREPARE
     set -e -g $variable
 end
@@ -168,6 +188,7 @@ set -gx INFER_FPS 16
 set -gx NUM_INFERENCE_STEPS 50
 set -gx GUIDANCE_SCALE 5.0
 set -gx SEED 0
+set -gx GENERATION_BACKEND $generation_backend
 set -gx PREPARED_HEIGHT 1024
 set -gx PREPARED_WIDTH 1024
 set -gx MAX_DURATION 5
@@ -204,6 +225,7 @@ if set -q _flag_easyocr_root
 end
 set -q _flag_easyocr_model_dir; and set -gx EASYOCR_SOURCE_MODELS $_flag_easyocr_model_dir
 set -q _flag_expected_videos; and set -gx EXPECTED_VIDEOS $_flag_expected_videos
+set -q _flag_hf_pipeline_sha256; and set -gx HF_PIPELINE_SHA256 (string lower -- $_flag_hf_pipeline_sha256)
 
 switch $sampler
     case unipc

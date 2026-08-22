@@ -36,6 +36,7 @@ set -q INFER_FPS[1]; or set INFER_FPS 16
 set -q NUM_INFERENCE_STEPS[1]; or set NUM_INFERENCE_STEPS 50
 set -q GUIDANCE_SCALE[1]; or set GUIDANCE_SCALE 5.0
 set -q SEED[1]; or set SEED 0
+set -q GENERATION_BACKEND[1]; or set GENERATION_BACKEND native
 set -q GENERATION_MODE[1]; or set GENERATION_MODE ode
 set -q ODE_SOLVER[1]; or set ODE_SOLVER unipc
 
@@ -98,6 +99,8 @@ test -n "$OUTPUT_ROOT"; or _fail "OUTPUT_ROOT is required; use scripts/eval/vbvr
 test -n "$CONVERTED_MODEL"; or _fail "CONVERTED_MODEL is required; use scripts/eval/vbvr_pro/run.fish"
 contains -- $GENERATION_MODE ode cps
 or _fail "GENERATION_MODE must be ode or cps, got $GENERATION_MODE"
+contains -- $GENERATION_BACKEND native hf-pipeline
+or _fail "GENERATION_BACKEND must be native or hf-pipeline, got $GENERATION_BACKEND"
 contains -- $ODE_SOLVER unipc euler
 or _fail "ODE_SOLVER must be unipc or euler, got $ODE_SOLVER"
 contains -- $PRECONVERTED_MODEL 0 1
@@ -107,6 +110,14 @@ or _fail "USE_ITEM_NUM_FRAMES must be 0 or 1, got $USE_ITEM_NUM_FRAMES"
 if test "$PRECONVERTED_MODEL" = 0
     test -n "$CHECKPOINT"; or _fail "CHECKPOINT is required for DCP conversion"
     test -n "$BASE_MODEL"; or _fail "BASE_MODEL is required for DCP conversion"
+end
+if test "$GENERATION_BACKEND" = hf-pipeline
+    test "$PRECONVERTED_MODEL" = 1
+    or _fail "GENERATION_BACKEND=hf-pipeline requires a preconverted --model snapshot"
+    set -q HF_PIPELINE_SHA256[1]
+    or _fail "HF_PIPELINE_SHA256 is required for the Hugging Face pipeline backend"
+    string match -qr '^[0-9a-f]{64}$' -- "$HF_PIPELINE_SHA256"
+    or _fail "HF_PIPELINE_SHA256 must be a 64-hex digest, got $HF_PIPELINE_SHA256"
 end
 _require_positive_integer EXPECTED_VIDEOS $EXPECTED_VIDEOS
 _require_positive_integer NUM_GPUS $NUM_GPUS
@@ -151,6 +162,11 @@ if set -q DRY_RUN[1]
     end
     echo "[dry-run] converted_model=$CONVERTED_MODEL output_root=$OUTPUT_ROOT"
     echo "[dry-run] preconverted_model=$PRECONVERTED_MODEL conversion_provenance=$CONVERSION_PROVENANCE"
+    if test "$GENERATION_BACKEND" = hf-pipeline
+        echo "[dry-run] generation_backend=hf-pipeline pipeline_sha256=$HF_PIPELINE_SHA256"
+    else
+        echo "[dry-run] generation_backend=native"
+    end
     echo "[dry-run] media="(string join x $HEIGHT $WIDTH $NUM_FRAMES)" fps=$INFER_FPS generated_dir=$GENERATED_DIR"
     echo "[dry-run] prepared_dir=$PREPARED_DIR expected_videos=$EXPECTED_VIDEOS"
     echo "[dry-run] evalkit=$EVALKIT_DIR revision=$EVALKIT_REV source_sha256=$EVALKIT_SOURCE_SHA256"
@@ -290,6 +306,14 @@ function _validate_converted_model
     $PYTHON -m src.eval.validate_diffusers_model "$CONVERTED_MODEL" $argv
 end
 
+function _validate_hf_pipeline_source
+    $PYTHON -c '
+import sys
+from src.cli.eval_i2v_hf_pipeline import verify_pipeline_source
+verify_pipeline_source(sys.argv[1], sys.argv[2])
+' "$CONVERTED_MODEL" "$HF_PIPELINE_SHA256"
+end
+
 function _generation_provenance
     set -l mode $argv[1]
     set -l state $argv[2]
@@ -303,20 +327,32 @@ function _generation_provenance
     set -l generator_source src/cli/eval_i2v.py
     set -l sampler_args
     set -l generator_file_args
+    set -l backend_args --value generation_backend=$GENERATION_BACKEND
     set -l frame_contract_args
     if test "$USE_ITEM_NUM_FRAMES" = 1
         set frame_contract_args \
             --value num_frames_mode=gt_duration \
             --value temporal_alignment=$TEMPORAL_ALIGNMENT
     end
+    if test "$GENERATION_BACKEND" = hf-pipeline
+        set generator_source src/cli/eval_i2v_hf_pipeline.py
+        set generator_file_args \
+            --file generator_base=src/cli/eval_i2v.py \
+            --file model_pipeline=$CONVERTED_MODEL/pipeline.py
+        set -a backend_args --value hf_pipeline_sha256=$HF_PIPELINE_SHA256
+    end
     if test $GENERATION_MODE = cps
-        set generator_source src/cli/eval_i2v_cps.py
+        if test "$GENERATION_BACKEND" = native
+            set generator_source src/cli/eval_i2v_cps.py
+        end
         set sampler_args \
             --value generation_mode=cps \
             --value cps_noise_level=$CPS_NOISE_LEVEL
     else if test $ODE_SOLVER = euler
-        set generator_source src/cli/eval_i2v_euler.py
-        set generator_file_args --file generator_base=src/cli/eval_i2v.py
+        if test "$GENERATION_BACKEND" = native
+            set generator_source src/cli/eval_i2v_euler.py
+            set generator_file_args --file generator_base=src/cli/eval_i2v.py
+        end
         set sampler_args \
             --value generation_mode=ode \
             --value ode_solver=flowmatch_euler
@@ -341,6 +377,7 @@ function _generation_provenance
         --value negative_prompt_sha256=$generation_negative_prompt_sha \
         --value diffusers_version=$diffusers_version \
         --value torch_version=$torch_version \
+        $backend_args \
         --file conversion_provenance=$CONVERSION_PROVENANCE \
         --file eval_json=$EVAL_JSON \
         --file split_manifest=$SPLIT_MANIFEST \
@@ -533,6 +570,10 @@ if test "$PRECONVERTED_MODEL" = 1
     or _fail "preconverted model failed structural validation: $CONVERTED_MODEL"
     _converted_model_is_stable
     or _fail "preconverted model is still being modified: $CONVERTED_MODEL"
+    if test "$GENERATION_BACKEND" = hf-pipeline
+        _validate_hf_pipeline_source
+        or _fail "preconverted model does not contain the reviewed Hugging Face pipeline: $CONVERTED_MODEL"
+    end
     echo "[skip] validated stable preconverted model and provenance: $CONVERTED_MODEL"
 else
     mkdir -p (dirname "$CONVERTED_MODEL") (dirname "$CONVERSION_PROVENANCE"); or exit 1
@@ -710,7 +751,17 @@ else
         --seed $SEED
     set -a generation_args $item_num_frames_args
     set -l generation_module src.cli.eval_i2v
-    if test $GENERATION_MODE = cps
+    if test "$GENERATION_BACKEND" = hf-pipeline
+        set generation_module src.cli.eval_i2v_hf_pipeline
+        set -a generation_args \
+            --pipeline_sha256 $HF_PIPELINE_SHA256 \
+            --disable_progress_bar
+        if test $GENERATION_MODE = cps
+            set -a generation_args --sampler cps --cps_eta $CPS_NOISE_LEVEL
+        else
+            set -a generation_args --sampler $ODE_SOLVER
+        end
+    else if test $GENERATION_MODE = cps
         set generation_module src.cli.eval_i2v_cps
         set -a generation_args --noise_level $CPS_NOISE_LEVEL
     else if test $ODE_SOLVER = euler
