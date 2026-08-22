@@ -4,6 +4,10 @@
 set -l project_root (realpath (dirname (status filename))/../..)
 cd $project_root
 
+set -l runtime_root_arg (set -q WAN_TRAINER_HOST_VLLM_ROOT; and echo $WAN_TRAINER_HOST_VLLM_ROOT; or echo storage/host_vllm)
+set -l runtime_root (realpath -m $runtime_root_arg)
+set -l vllm_bin "$runtime_root/.venv/bin/vllm"
+set -l vllm_venv_bin (dirname $vllm_bin)
 set -l model_path_arg (set -q WAN_TRAINER_VLM_MODEL_PATH; and echo $WAN_TRAINER_VLM_MODEL_PATH; or echo storage/models/Qwen3.6-27B)
 set -l model_path (realpath -m $model_path_arg)
 set -l served_name (set -q WAN_TRAINER_VLM_MODEL; and echo $WAN_TRAINER_VLM_MODEL; or echo qwen3.6-27b)
@@ -31,11 +35,11 @@ set -l cuda_cache (set -q WAN_TRAINER_VLM_CUDA_CACHE_PATH; and echo $WAN_TRAINER
 set -l flashinfer_workspace (set -q WAN_TRAINER_VLM_FLASHINFER_WORKSPACE_BASE; and echo $WAN_TRAINER_VLM_FLASHINFER_WORKSPACE_BASE; or echo /tmp/wan-trainer-vllm-flashinfer)
 set -l api_key (set -q WAN_TRAINER_VLM_API_KEY; and echo $WAN_TRAINER_VLM_API_KEY; or echo EMPTY)
 
-if not command -q pixi
-    echo "ERROR: Pixi is required to launch the isolated vLLM environment." >&2
+if not test -x $vllm_bin
+    echo "ERROR: vLLM executable is missing: $vllm_bin" >&2
+    echo "Run: fish scripts/dev/setup_host_vllm.fish" >&2
     exit 1
 end
-pixi install --environment vllm --locked; or exit 1
 if not test -d $model_path
     echo "ERROR: Qwen model directory is missing: $model_path" >&2
     exit 1
@@ -90,7 +94,8 @@ exec env \
     TORCHINDUCTOR_CACHE_DIR=$inductor_cache \
     CUDA_CACHE_PATH=$cuda_cache \
     FLASHINFER_WORKSPACE_BASE=$flashinfer_workspace \
-    pixi run --environment vllm --locked vllm serve $model_path \
+    PATH="$vllm_venv_bin:$PATH" \
+    $vllm_bin serve $model_path \
     --host $host \
     --port $port \
     --api-key $api_key \

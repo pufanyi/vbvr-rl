@@ -112,10 +112,7 @@ ipython_config.py
 .pdm-python
 .pdm-build/
 
-# pixi
-#   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
-#pixi.lock
-#   Pixi creates its managed environments beneath .pixi; do not commit them.
+# Obsolete local environments left by older checkouts.
 .pixi
 
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
