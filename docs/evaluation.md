@@ -59,7 +59,7 @@ resumed only when they match the current provenance contract.
 Pass the artifact paths and `--dry-run`:
 
 ```fish
-pixi run fish scripts/eval/vbvr_pro/run.fish \
+fish scripts/eval/vbvr_pro/run.fish \
   --checkpoint storage/checkpoints/<run>/checkpoint-100 \
   --converted-model storage/models/converted/<run>-checkpoint-100 \
   --output-root storage/eval_out/<run>/checkpoint-100/unipc \
@@ -86,7 +86,7 @@ The builder walks:
 and emits output names that already match EvalKit's domain/task/sample layout:
 
 ```bash
-pixi run python -m src.eval.build_vbvr_eval_json \
+.venv/bin/python -m src.eval.build_vbvr_eval_json \
   --gt_base storage/datasets/vbvr-pro-eval-500 \
   --split_manifest storage/datasets/vbvr-pro-eval-500/split_manifest.json \
   --output storage/eval_out/<run>/eval_samples.json \
@@ -107,7 +107,7 @@ that follows Wan's `alignment * k + 1` temporal rule.
 For an existing Diffusers model:
 
 ```bash
-pixi run torchrun --standalone --nproc_per_node=8 \
+.venv/bin/torchrun --standalone --nproc_per_node=8 \
   -m src.cli.eval_i2v \
   --eval_json storage/eval_out/<run>/eval_samples.json \
   --model_path storage/models/converted/<model> \
@@ -141,7 +141,7 @@ seed, resolution, frame count, and FPS fixed when comparing checkpoints.
 Validate an existing generation tree without loading a model:
 
 ```bash
-pixi run python -m src.cli.eval_i2v \
+.venv/bin/python -m src.cli.eval_i2v \
   --eval_json storage/eval_out/<run>/eval_samples.json \
   --output_dir storage/eval_out/<run>/generated \
   --height 256 --width 256 --num_frames 161 --fps 16 \
@@ -156,7 +156,7 @@ conversion is easier to fingerprint, reuse across samplers, and validate
 before expensive generation.
 
 ```bash
-pixi run python -m src.cli.convert_dcp_to_diffusers \
+.venv/bin/python -m src.cli.convert_dcp_to_diffusers \
   --checkpoint storage/checkpoints/<run>/checkpoint-100 \
   --base_model storage/models/Wan2.2-TI2V-5B-Diffusers \
   --output storage/models/converted/<run>-checkpoint-100 \
@@ -180,7 +180,7 @@ Generated videos are not passed directly to the evaluator. Preparation:
 - validates dimensions, frame count, FPS, and duration after encoding.
 
 ```bash
-pixi run python -m src.cli.prepare_vbvr_eval_videos \
+.venv/bin/python -m src.cli.prepare_vbvr_eval_videos \
   --input-dir storage/eval_out/<run>/generated \
   --output-dir storage/eval_out/<run>/prepared \
   --width 1024 \
@@ -201,7 +201,7 @@ Run the scorer on CPU with CUDA hidden from EasyOCR workers:
 ```bash
 CUDA_VISIBLE_DEVICES= \
 EASYOCR_MODULE_PATH=storage/evalkits/easyocr-shared \
-pixi run python -m src.eval.vbvr_run_evaluation_parallel \
+.venv/bin/python -m src.eval.vbvr_run_evaluation_parallel \
   --model_path storage/eval_out/<run>/prepared \
   --gt_base storage/datasets/vbvr-pro-eval-500 \
   --output_dir storage/eval_out/<run>/scores \

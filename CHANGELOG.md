@@ -7,8 +7,9 @@ All notable public changes to VBVR-RL are documented here. The project uses
 
 ### Changed
 
-- Replaced the uv/`.venv` workflow with a single Pixi manifest and lockfile for
-  development, CI, training, evaluation, and the isolated vLLM service.
+- Standardized development, CI, training, and evaluation on the locked uv
+  project environment. The optional vLLM service uses a separate uv-managed
+  environment because its runtime dependency contract differs from training.
 
 ## [0.1.0] - 2026-08-19
 

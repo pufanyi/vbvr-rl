@@ -20,7 +20,7 @@ The training entrypoints build configuration in this order:
 For example:
 
 ```bash
-pixi run torchrun --standalone --nproc_per_node=1 \
+.venv/bin/torchrun --standalone --nproc_per_node=1 \
   -m src.cli.train_grpo \
   --config configs/example.yaml \
   --max_steps 1 \

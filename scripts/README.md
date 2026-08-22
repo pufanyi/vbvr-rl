@@ -24,7 +24,7 @@ Generated artifacts belong under ignored directories such as `storage/`.
 Create a deterministic raw-media fixture:
 
 ```bash
-pixi run python scripts/dev/create_i2v_smoke_dataset.py \
+.venv/bin/python scripts/dev/create_i2v_smoke_dataset.py \
   --output-dir storage/smoke/i2v_512x512x81 \
   --samples 4 --frames 81 --height 512 --width 512 --fps 16
 ```
@@ -32,14 +32,14 @@ pixi run python scripts/dev/create_i2v_smoke_dataset.py \
 Launch SFT:
 
 ```fish
-pixi run fish scripts/train/sft_multinode.fish --nproc 8 -- \
+fish scripts/train/sft_multinode.fish --nproc 8 -- \
   --config configs/<reviewed-sft-config>.yaml
 ```
 
 Launch DanceGRPO:
 
 ```fish
-pixi run fish scripts/train/grpo_multinode.fish --nproc 8 \
+fish scripts/train/grpo_multinode.fish --nproc 8 \
   --config configs/<reviewed-rl-config>.yaml
 ```
 
@@ -48,14 +48,14 @@ Launch multi-machine DanceGRPO on every machine:
 ```bash
 MASTER_ADDR=<rank-zero-host> MASTER_PORT=29500 \
 WORLD_SIZE=<machine-count> RANK=<machine-rank> \
-pixi run fish scripts/train/grpo_multinode.fish --nproc 8 -- \
+fish scripts/train/grpo_multinode.fish --nproc 8 -- \
   --config configs/<reviewed-rl-config>.yaml
 ```
 
 Evaluate a VBVR-Pro checkpoint:
 
 ```fish
-pixi run fish scripts/eval/vbvr_pro/run.fish \
+fish scripts/eval/vbvr_pro/run.fish \
   --checkpoint storage/checkpoints/<run>/checkpoint-100 \
   --converted-model storage/models/converted/<run>-checkpoint-100 \
   --output-root storage/eval_out/<run>/checkpoint-100/unipc \
@@ -66,7 +66,7 @@ pixi run fish scripts/eval/vbvr_pro/run.fish \
 Reproduce the published Rule-RL and Qwen-Judge-RL sampler matrices:
 
 ```fish
-pixi run fish scripts/eval/vbvr_pro/reproduce.fish \
+fish scripts/eval/vbvr_pro/reproduce.fish \
   --output-base storage/eval_out/published-hf \
   --dry-run
 ```
@@ -74,7 +74,7 @@ pixi run fish scripts/eval/vbvr_pro/reproduce.fish \
 Convert a DCP checkpoint:
 
 ```bash
-pixi run python -m src.cli.convert_dcp_to_diffusers \
+.venv/bin/python -m src.cli.convert_dcp_to_diffusers \
   --checkpoint storage/checkpoints/<run>/checkpoint-100 \
   --base_model storage/models/Wan2.2-TI2V-5B-Diffusers \
   --output storage/models/converted/<run>-checkpoint-100
@@ -90,8 +90,8 @@ co-hosted VLM-reward GRPO launchers. Model-, topology-, and experiment-specific
 choices belong in reviewed YAML or explicit CLI/environment overrides.
 
 Most Fish launchers source `scripts/lib/env.fish`. It enters the repository
-root, activates the locked Pixi default environment, sets `PYTHONPATH`, and
-exposes matching Python headers to Triton when available.
+root, activates the locked uv `.venv`, sets `PYTHONPATH`, and exposes matching
+Python headers to Triton when available.
 
 For the training launchers:
 
@@ -114,7 +114,7 @@ official `Video-Reason/VBVR-Pro-RL` video archives into the `I2VDataset`
 layout:
 
 ```bash
-pixi run python -m scripts.data.vbvr_pro_unpack_hf \
+.venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
   --dataset-root storage/datasets/VBVR-Pro-RL \
   --output-dir storage/datasets/VBVR-Pro-RL/materialized \
   --source-revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \
@@ -130,9 +130,9 @@ does not use unsafe whole-archive extraction and does not republish data.
 The optional Qwen judge uses an isolated runtime:
 
 ```fish
-pixi run fish scripts/dev/setup_host_vllm.fish
-pixi run fish scripts/download/qwen36_27b_hf_mirror.fish
-pixi run fish scripts/serve/qwen36_27b_vllm.fish
+fish scripts/dev/setup_host_vllm.fish
+fish scripts/download/qwen36_27b_hf_mirror.fish
+fish scripts/serve/qwen36_27b_vllm.fish
 ```
 
 The co-hosted training launcher manages the service process group, probes its

@@ -37,7 +37,9 @@ All local artifacts should live under the ignored `storage/` directory.
 ## Requirements
 
 - Linux
-- [Pixi](https://pixi.prefix.dev/) 0.77.x
+- Python 3.12
+- [uv](https://docs.astral.sh/uv/) 0.11.33
+- Fish shell for the provided launchers
 - An NVIDIA GPU and driver compatible with the locked PyTorch 2.11 CUDA 12.6
   wheels for GPU workflows
 - A host C/C++ compiler when Triton must compile a fresh CUDA driver helper
@@ -52,21 +54,22 @@ Clone and create the locked environment:
 ```bash
 git clone https://github.com/pufanyi/vbvr-rl.git
 cd vbvr-rl
-pixi install --locked
-pixi lock --check
+uv sync --frozen
+uv lock --check
+uv sync --frozen --check
 ```
 
 Check the installed scorer/media runtime:
 
 ```bash
-pixi run runtime-check
+.venv/bin/python -m src.eval.vbvr_runtime
 ```
 
 For a one-GPU end-to-end training smoke, first create a deterministic local
 fixture:
 
 ```bash
-pixi run python scripts/dev/create_i2v_smoke_dataset.py \
+.venv/bin/python scripts/dev/create_i2v_smoke_dataset.py \
   --output-dir storage/smoke/i2v_512x512x81 \
   --samples 4 \
   --frames 81 \
@@ -79,7 +82,7 @@ Place the official TI2V-5B Diffusers model at
 `storage/models/Wan2.2-TI2V-5B-Diffusers`, then run:
 
 ```bash
-pixi run torchrun --standalone --nproc_per_node=1 \
+.venv/bin/torchrun --standalone --nproc_per_node=1 \
   -m scripts.dev.validate_grpo_parameter_update \
   --config configs/train_rl_5b_rule.yaml \
   --one-gpu-smoke \
@@ -132,7 +135,7 @@ the separate image archives are not required for I2V training.
 Download only the video archives into the expected ignored directory:
 
 ```bash
-pixi run hf download Video-Reason/VBVR-Pro-RL \
+.venv/bin/hf download Video-Reason/VBVR-Pro-RL \
   --repo-type dataset \
   --revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \
   --include 'VBVR-Pro-RL-Video/*.tar.gz' \
@@ -142,7 +145,7 @@ pixi run hf download Video-Reason/VBVR-Pro-RL \
 Materialize the five fields required by raw training and rule scoring:
 
 ```bash
-pixi run python -m scripts.data.vbvr_pro_unpack_hf \
+.venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
   --dataset-root storage/datasets/VBVR-Pro-RL \
   --output-dir storage/datasets/VBVR-Pro-RL/materialized \
   --source-revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \
@@ -184,7 +187,7 @@ SFT uses the unified `scripts/train/sft_multinode.fish` launcher. With no
 rendezvous variables it runs on one local machine:
 
 ```fish
-pixi run fish scripts/train/sft_multinode.fish --nproc 8 -- \
+fish scripts/train/sft_multinode.fish --nproc 8 -- \
   --config configs/train_sft_vbvr_5e-6.yaml
 ```
 
@@ -196,7 +199,7 @@ external artifact and are not interchangeable with the public raw
 DanceGRPO uses the same local/multi-machine contract:
 
 ```fish
-pixi run fish scripts/train/grpo_multinode.fish --nproc 8 \
+fish scripts/train/grpo_multinode.fish --nproc 8 \
   --config configs/train_rl_a14b_rule.yaml
 ```
 
@@ -212,7 +215,7 @@ MASTER_ADDR=<rank-zero-host> \
 MASTER_PORT=29500 \
 WORLD_SIZE=<machine-count> \
 RANK=<machine-rank> \
-pixi run fish scripts/train/grpo_multinode.fish --nproc 8 -- \
+fish scripts/train/grpo_multinode.fish --nproc 8 -- \
   --config configs/train_rl_5b_rule.yaml
 ```
 
@@ -237,7 +240,7 @@ The shared launcher performs:
 Inspect a configured run without loading weights or reading artifacts:
 
 ```fish
-pixi run fish scripts/eval/vbvr_pro/run.fish \
+fish scripts/eval/vbvr_pro/run.fish \
   --checkpoint storage/checkpoints/<run>/checkpoint-100 \
   --converted-model storage/models/converted/<run>-checkpoint-100 \
   --output-root storage/eval_out/<run>/checkpoint-100/unipc \
@@ -257,7 +260,7 @@ To reproduce the published Rule-RL and Qwen-Judge-RL six-sampler matrices from
 their immutable Hugging Face revisions, inspect the 12 resolved cells first:
 
 ```fish
-pixi run fish scripts/eval/vbvr_pro/reproduce.fish \
+fish scripts/eval/vbvr_pro/reproduce.fish \
   --output-base storage/eval_out/published-hf \
   --dry-run
 ```
@@ -277,7 +280,7 @@ PEFT-compatible adapter folders.
 Use the conversion CLI for portable Diffusers inference:
 
 ```bash
-pixi run python -m src.cli.convert_dcp_to_diffusers \
+.venv/bin/python -m src.cli.convert_dcp_to_diffusers \
   --checkpoint storage/checkpoints/<run>/checkpoint-100 \
   --base_model storage/models/Wan2.2-TI2V-5B-Diffusers \
   --output storage/models/converted/<run>-checkpoint-100 \
@@ -292,21 +295,21 @@ initialization semantics.
 Run project tests from the explicit test directory:
 
 ```bash
-pixi run test
+.venv/bin/python -m pytest tests
 ```
 
 Run the same lint and formatting checks as CI:
 
 ```bash
-pixi run lint
-pixi run format-check
+.venv/bin/ruff check --output-format=github .
+.venv/bin/ruff format --check .
 ```
 
 For rule-reward configs, validate the complete GRPO runtime before allocating
 model memory:
 
 ```bash
-pixi run python -m src.cli.validate_grpo_runtime \
+.venv/bin/python -m src.cli.validate_grpo_runtime \
   --config configs/<rule-reward-config>.yaml
 ```
 

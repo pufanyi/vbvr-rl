@@ -47,19 +47,19 @@ Run one command per machine. Ranks are one-indexed.
 Machine 1:
 
 ```bash
-pixi run bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1
+bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1
 ```
 
 Machine 2:
 
 ```bash
-pixi run bash scripts/precompute/vbvr_384_isolated_node.bash --rank=2
+bash scripts/precompute/vbvr_384_isolated_node.bash --rank=2
 ```
 
 Continue through machine 6:
 
 ```bash
-pixi run bash scripts/precompute/vbvr_384_isolated_node.bash --rank=6
+bash scripts/precompute/vbvr_384_isolated_node.bash --rank=6
 ```
 
 By default this runs only the VAE stage at `384x384x81`, assuming prompt
@@ -70,7 +70,7 @@ embeddings already exist or will be produced separately.
 Before launching GPUs, check the assigned tar subset:
 
 ```bash
-pixi run bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1 --dry-run
+bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1 --dry-run
 ```
 
 This writes a manifest and tar list under `logs/`, for example:
@@ -96,13 +96,13 @@ rank 6: 16 tars, 160000 samples
 If prompt embeddings have not been computed, run both stages on every machine:
 
 ```bash
-pixi run bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1 --stage=all
+bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1 --stage=all
 ```
 
 Use the matching rank on each machine. You can also run just T5:
 
 ```bash
-pixi run bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1 --stage=t5
+bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1 --stage=t5
 ```
 
 ## Common Overrides
@@ -111,21 +111,21 @@ Use all eight local GPUs by default:
 
 ```bash
 GPUS=0,1,2,3,4,5,6,7 \
-pixi run bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1
+bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1
 ```
 
 Change batch sizes:
 
 ```bash
 T5_BATCH_SIZE=2048 VAE_BATCH_SIZE=22 \
-pixi run bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1 --stage=all
+bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1 --stage=all
 ```
 
 Use a different output root:
 
 ```bash
 OUTPUT_ROOT=/data/vbvr_latents/vbvr_384x384x81 \
-pixi run bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1
+bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1
 ```
 
 Use a different model or dataset location:
@@ -134,14 +134,14 @@ Use a different model or dataset location:
 MODEL_PATH=/models/Wan2.2-I2V-A14B-Diffusers \
 METADATA=/data/VBVR-Dataset/data/metadata.parquet \
 TAR_DIR=/data/VBVR-Dataset/tars \
-pixi run bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1
+bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1
 ```
 
 If local port `29680 + rank` is busy:
 
 ```bash
 LOCAL_MASTER_PORT=29701 \
-pixi run bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1
+bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1
 ```
 
 ## Resume
@@ -157,7 +157,7 @@ settings determine batch filenames.
 Just rerun the same command:
 
 ```bash
-pixi run bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1
+bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1
 ```
 
 ## Monitor Progress
@@ -208,26 +208,26 @@ wrapper checks the six rank tar assignments, verifies the expected sample
 counts, and then builds globally shuffled 80/20 SFT/RL shards:
 
 ```bash
-pixi run bash scripts/precompute/vbvr_384_isolated_build_webdataset.bash
+bash scripts/precompute/vbvr_384_isolated_build_webdataset.bash
 ```
 
 To only check whether the collected files are ready:
 
 ```bash
-pixi run bash scripts/precompute/vbvr_384_isolated_build_webdataset.bash --verify-only
+bash scripts/precompute/vbvr_384_isolated_build_webdataset.bash --verify-only
 ```
 
 The wrapper defaults to `BUILD_WORKERS=$(nproc)`. Override it if storage
 contention is higher than CPU pressure:
 
 ```bash
-BUILD_WORKERS=64 pixi run bash scripts/precompute/vbvr_384_isolated_build_webdataset.bash
+BUILD_WORKERS=64 bash scripts/precompute/vbvr_384_isolated_build_webdataset.bash
 ```
 
 The underlying command is:
 
 ```bash
-pixi run python -m src.precompute.build_webdataset_split \
+.venv/bin/python -m src.precompute.build_webdataset_split \
   --prompt_embeds_dir data/vbvr/latents/vbvr_384x384x81/prompt_embeds \
   --vae_latents_dir data/vbvr/latents/vbvr_384x384x81/vae_latents \
   --sft_output_dir data/vbvr/latents/vbvr_384x384x81/webdataset/sft \
@@ -290,7 +290,7 @@ port.
 If GPU memory is too high, reduce `VAE_BATCH_SIZE`, for example:
 
 ```bash
-VAE_BATCH_SIZE=12 pixi run bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1
+VAE_BATCH_SIZE=12 bash scripts/precompute/vbvr_384_isolated_node.bash --rank=1
 ```
 
 If prompt embedding files collide during collection, confirm every machine used

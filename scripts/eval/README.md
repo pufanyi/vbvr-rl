@@ -17,7 +17,7 @@ workflow. The evaluator itself remains an external dependency.
 Inspect a DCP checkpoint with UniPC before starting expensive work:
 
 ```fish
-pixi run fish scripts/eval/vbvr_pro/run.fish \
+fish scripts/eval/vbvr_pro/run.fish \
   --checkpoint storage/checkpoints/<run>/checkpoint-100 \
   --converted-model storage/models/converted/<run>-checkpoint-100 \
   --output-root storage/eval_out/<run>/checkpoint-100/unipc \
@@ -35,7 +35,7 @@ vendored evaluator fallback.
 Use arguments rather than adding checkpoint- or sampler-specific scripts:
 
 ```fish
-pixi run fish scripts/eval/vbvr_pro/sweep.fish \
+fish scripts/eval/vbvr_pro/sweep.fish \
   --output-base storage/eval_out/<model> \
   --samplers unipc,euler,cps:0.3,cps:0.7 \
   -- \
@@ -50,7 +50,7 @@ cells across machines with `--world-size` and `--rank`.
 Summarize complete, provenance-bound cells with:
 
 ```fish
-pixi run fish scripts/eval/vbvr_pro/summarize.fish \
+fish scripts/eval/vbvr_pro/summarize.fish \
   --root storage/eval_out/<model>
 ```
 
@@ -60,7 +60,7 @@ The Qwen judge reads generated-video cells and writes a separate resumable
 result root:
 
 ```fish
-pixi run fish scripts/eval/vbvr_pro/vlm_judge.fish score \
+fish scripts/eval/vbvr_pro/vlm_judge.fish score \
   --input-root storage/eval_out/<model> \
   --output-root storage/eval_out/<model>-vlm-judge
 ```
@@ -71,7 +71,7 @@ It does not replace rule scoring and must not share output files with it. See
 Before rule evaluation, verify the shared scorer runtime:
 
 ```bash
-pixi run python -m src.eval.vbvr_runtime
+.venv/bin/python -m src.eval.vbvr_runtime
 ```
 
 See [`vbvr_pro/README.md`](vbvr_pro/README.md) for launcher examples and
