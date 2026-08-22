@@ -133,3 +133,13 @@ def test_removed_training_modes_are_not_shipped():
             if token.lower() in text:
                 violations.append(f"{path.relative_to(_REPO_ROOT)}: {token}")
     assert not violations, f"removed training mode references: {violations}"
+
+
+def test_training_launcher_surface_is_minimal():
+    expected = {
+        "grpo_multinode.fish",
+        "grpo_vlm_eval_multinode.fish",
+        "sft_multinode.fish",
+    }
+    actual = {path.name for path in (_REPO_ROOT / "scripts/train").iterdir()}
+    assert actual == expected

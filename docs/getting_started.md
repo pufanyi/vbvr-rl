@@ -160,7 +160,7 @@ See [Configuration](configuration.md) for field semantics.
 Single-machine SFT:
 
 ```fish
-pixi run fish scripts/train/i2v.fish --nproc 8 -- \
+pixi run fish scripts/train/sft_multinode.fish --nproc 8 -- \
   --config configs/train_sft_vbvr_5e-6.yaml
 ```
 
@@ -171,7 +171,7 @@ archives prepared above are not a drop-in replacement for those latents.
 Single-machine DanceGRPO:
 
 ```fish
-pixi run fish scripts/train/grpo.fish --nproc 8 \
+pixi run fish scripts/train/grpo_multinode.fish --nproc 8 \
   --config configs/train_rl_a14b_rule.yaml
 ```
 
@@ -186,9 +186,11 @@ pixi run fish scripts/train/grpo_multinode.fish --nproc 8 -- \
   --config configs/train_rl_5b_rule.yaml
 ```
 
-Here `WORLD_SIZE` is the machine count and `--nproc` is the local process
-count. The global process count is their product. The launcher performs cheap
-runtime checks before loading model weights.
+The training launchers default to local rendezvous values only when
+`MASTER_ADDR`, `WORLD_SIZE`, and `RANK` are all absent. For multiple machines,
+set all three. Here `WORLD_SIZE` is the machine count and `--nproc` is the
+local process count. The global process count is their product. The GRPO
+launcher performs cheap runtime checks before loading model weights.
 
 ## 9. Validate the Checkout
 

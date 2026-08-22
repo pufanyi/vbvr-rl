@@ -1,13 +1,16 @@
 #!/usr/bin/env fish
-# DanceGRPO launcher with one co-hosted Qwen3.6 VLM service per training node.
+# Single- or multi-node DanceGRPO launcher with one co-hosted Qwen3.6 VLM
+# service per training node.
 #
-# Scheduler inputs are identical to grpo_multinode.fish:
-#   MASTER_ADDR, WORLD_SIZE (nodes), RANK (node rank), optional MASTER_PORT.
+# Rendezvous inputs are identical to grpo_multinode.fish: MASTER_ADDR,
+# WORLD_SIZE (nodes), RANK (node rank), and optional MASTER_PORT. When the
+# first three are all omitted, the launcher defaults to one local node.
 #
 # By default every visible GPU participates in both processes: vLLM DP/TP uses
 # a 50% memory budget and torchrun uses the remaining physical headroom. This
 # is a co-location budget, not a CUDA-enforced 50/50 partition. The generic
-# default is DP1 x TP<nproc>; dedicated launchers may override that topology.
+# default is DP1 x TP<nproc>; operators may override that topology through the
+# documented WAN_TRAINER_VLM_* environment variables.
 
 set -l nproc 8
 set -l expect_nproc false
@@ -30,16 +33,30 @@ if not string match -qr '^[1-9][0-9]*$' -- $nproc
     exit 1
 end
 
+if not set -q MASTER_ADDR; and not set -q WORLD_SIZE; and not set -q RANK
+    set -gx MASTER_ADDR 127.0.0.1
+    set -gx WORLD_SIZE 1
+    set -gx RANK 0
+end
+
 if not set -q MASTER_ADDR; or test -z "$MASTER_ADDR"
-    echo "ERROR: MASTER_ADDR is not set" >&2
+    echo "ERROR: MASTER_ADDR, WORLD_SIZE, and RANK must be set together" >&2
     exit 1
 end
 if not set -q WORLD_SIZE; or test -z "$WORLD_SIZE"
-    echo "ERROR: WORLD_SIZE is not set" >&2
+    echo "ERROR: MASTER_ADDR, WORLD_SIZE, and RANK must be set together" >&2
     exit 1
 end
 if not set -q RANK; or test -z "$RANK"
-    echo "ERROR: RANK is not set" >&2
+    echo "ERROR: MASTER_ADDR, WORLD_SIZE, and RANK must be set together" >&2
+    exit 1
+end
+if not string match -qr '^[1-9][0-9]*$' -- "$WORLD_SIZE"
+    echo "ERROR: WORLD_SIZE must be a positive machine count, got '$WORLD_SIZE'" >&2
+    exit 1
+end
+if not string match -qr '^[0-9]+$' -- "$RANK"; or test "$RANK" -ge "$WORLD_SIZE"
+    echo "ERROR: RANK must be an integer in [0, WORLD_SIZE), got '$RANK' for WORLD_SIZE=$WORLD_SIZE" >&2
     exit 1
 end
 

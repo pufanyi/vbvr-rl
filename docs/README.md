@@ -41,8 +41,9 @@ contract or troubleshooting note.
 - Commands run from the repository root unless stated otherwise.
 - `pixi run python` and `pixi run torchrun` execute inside the locked Pixi
   default environment created by `pixi install --locked`.
-- `WORLD_SIZE` in Fish multi-machine launchers means machine count;
-  `--nproc` means local processes/GPUs.
+- `WORLD_SIZE` in Fish training launchers means machine count; `--nproc` means
+  local processes/GPUs. Omit all rendezvous variables for one local machine,
+  or set `MASTER_ADDR`, `WORLD_SIZE`, and `RANK` together.
 - Paths under `storage/` are local runtime artifacts and are not part of the
   Git repository.
 - `<placeholder>` values must be supplied by the user. Do not copy angle

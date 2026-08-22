@@ -232,15 +232,22 @@ MASTER_ADDR=<rank-zero-host> \
 MASTER_PORT=29500 \
 WORLD_SIZE=<machine-count> \
 RANK=<machine-rank> \
+WAN_TRAINER_VLM_DATA_PARALLEL_SIZE=4 \
+WAN_TRAINER_VLM_TENSOR_PARALLEL_SIZE=2 \
 pixi run fish scripts/train/grpo_vlm_eval_multinode.fish --nproc 8 -- \
-  --config configs/train_rl_5b_vlm.yaml
+  --config configs/train_rl_5b_vlm.yaml \
+  --output_dir storage/checkpoints/<unique-topology-run> \
+  --wandb_run_name <unique-topology-run>
 ```
 
-The default service uses the same visible GPUs as training with a configured
-memory utilization budget. That value is a vLLM allocation target, not a hard
-partition of physical memory. Run a bounded target-shape smoke before a long
-co-hosted job and leave headroom for CUDA contexts, media decoding, transient
-activations, and allocator fragmentation.
+The checked-in eight-GPU-per-machine VLM config uses four TP2 Qwen replicas per
+machine. Other models or GPU counts may need a different DP/TP split. Give each
+training topology its own checkpoint and W&B namespace. The service uses the
+same visible GPUs as training with a configured memory utilization budget.
+That value is a vLLM allocation target, not a hard partition of physical
+memory. Run a bounded target-shape smoke before a long co-hosted job and leave
+headroom for CUDA contexts, media decoding, transient activations, and
+allocator fragmentation.
 
 Set `WAN_TRAINER_VLM_START_SERVICE=0` to use an independently managed endpoint.
 Then provide a reachable `WAN_TRAINER_VLM_BASE_URL` on every training machine

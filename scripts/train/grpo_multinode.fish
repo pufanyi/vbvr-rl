@@ -1,10 +1,11 @@
 #!/usr/bin/env fish
-# Wan2.2 I2V DanceGRPO multi-node training launcher
+# Wan2.2 I2V DanceGRPO single- or multi-node training launcher.
 #
-# Expected environment variables (typically set by the job scheduler):
+# Multi-node environment variables (set all three together):
 #   MASTER_ADDR  — hostname/IP of the master node
 #   WORLD_SIZE   — number of nodes
 #   RANK         — this node's rank (0-indexed)
+# When all three are omitted, the launcher defaults to one local node.
 #
 # Optional environment variables:
 #   MASTER_PORT  — port on master node (default: 29500)
@@ -45,18 +46,38 @@ if test "$expect_nproc" = true
     echo "ERROR: --nproc requires a value" >&2
     exit 1
 end
+if not string match -qr '^[1-9][0-9]*$' -- "$nproc"
+    echo "ERROR: --nproc must be a positive integer, got '$nproc'" >&2
+    exit 1
+end
 
-# Validate required environment variables
+# Use the same production path for local and multi-node runs. A partially set
+# rendezvous contract is almost certainly a scheduler error, so only the fully
+# absent case receives local defaults.
+if not set -q MASTER_ADDR; and not set -q WORLD_SIZE; and not set -q RANK
+    set -gx MASTER_ADDR 127.0.0.1
+    set -gx WORLD_SIZE 1
+    set -gx RANK 0
+end
+
 if not set -q MASTER_ADDR; or test -z "$MASTER_ADDR"
-    echo "ERROR: MASTER_ADDR is not set" >&2
+    echo "ERROR: MASTER_ADDR, WORLD_SIZE, and RANK must be set together" >&2
     exit 1
 end
 if not set -q WORLD_SIZE; or test -z "$WORLD_SIZE"
-    echo "ERROR: WORLD_SIZE is not set" >&2
+    echo "ERROR: MASTER_ADDR, WORLD_SIZE, and RANK must be set together" >&2
     exit 1
 end
 if not set -q RANK; or test -z "$RANK"
-    echo "ERROR: RANK is not set" >&2
+    echo "ERROR: MASTER_ADDR, WORLD_SIZE, and RANK must be set together" >&2
+    exit 1
+end
+if not string match -qr '^[1-9][0-9]*$' -- "$WORLD_SIZE"
+    echo "ERROR: WORLD_SIZE must be a positive machine count, got '$WORLD_SIZE'" >&2
+    exit 1
+end
+if not string match -qr '^[0-9]+$' -- "$RANK"; or test "$RANK" -ge "$WORLD_SIZE"
+    echo "ERROR: RANK must be an integer in [0, WORLD_SIZE), got '$RANK' for WORLD_SIZE=$WORLD_SIZE" >&2
     exit 1
 end
 
@@ -65,7 +86,7 @@ set -l master_port (set -q MASTER_PORT; and echo $MASTER_PORT; or echo 29500)
 set -l project_root (realpath (dirname (status filename))/../..)
 cd $project_root
 
-echo "Preparing DanceGRPO multi-node training: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$master_port"
+echo "Preparing DanceGRPO: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$master_port"
 
 source (dirname (status filename))/../lib/env.fish
 
@@ -122,7 +143,7 @@ if test "$triton_preflight_only" = "1"
     exit 0
 end
 
-echo "Launching DanceGRPO multi-node training: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$master_port"
+echo "Launching DanceGRPO: node $RANK/$WORLD_SIZE, $nproc GPUs/node, master=$MASTER_ADDR:$master_port"
 
 torchrun \
     --nnodes=$WORLD_SIZE \

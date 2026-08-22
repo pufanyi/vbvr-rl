@@ -32,14 +32,14 @@ pixi run python scripts/dev/create_i2v_smoke_dataset.py \
 Launch SFT:
 
 ```fish
-pixi run fish scripts/train/i2v.fish --nproc 8 -- \
+pixi run fish scripts/train/sft_multinode.fish --nproc 8 -- \
   --config configs/<reviewed-sft-config>.yaml
 ```
 
 Launch DanceGRPO:
 
 ```fish
-pixi run fish scripts/train/grpo.fish --nproc 8 \
+pixi run fish scripts/train/grpo_multinode.fish --nproc 8 \
   --config configs/<reviewed-rl-config>.yaml
 ```
 
@@ -77,21 +77,27 @@ and converting checkpoints beneath `CHECKPOINT_ROOT`.
 
 ## Launcher Conventions
 
+`scripts/train/` intentionally contains only the generic SFT, GRPO, and
+co-hosted VLM-reward GRPO launchers. Model-, topology-, and experiment-specific
+choices belong in reviewed YAML or explicit CLI/environment overrides.
+
 Most Fish launchers source `scripts/lib/env.fish`. It enters the repository
 root, activates the locked Pixi default environment, sets `PYTHONPATH`, and
 exposes matching Python headers to Triton when available.
 
-For multi-machine launchers:
+For the training launchers:
 
 - `WORLD_SIZE` is the machine count;
 - `RANK` is the zero-based machine rank;
 - `--nproc` is the number of local processes;
 - the global process count is `WORLD_SIZE * --nproc`.
 
-The GRPO launchers run cheap reward/attention checks before model loading. The
-multi-machine launcher additionally exercises Triton's CUDA driver setup on
-every machine. Use `WAN_TRAINER_TRITON_PREFLIGHT_ONLY=1` for a preflight-only
-run.
+If `MASTER_ADDR`, `WORLD_SIZE`, and `RANK` are all absent, the launchers use
+local defaults. A multi-machine run must set all three together.
+
+The GRPO launchers run cheap reward/attention checks and exercise Triton's CUDA
+driver setup on every machine before model loading. Use
+`WAN_TRAINER_TRITON_PREFLIGHT_ONLY=1` for a preflight-only run.
 
 ## Public VBVR-Pro Dataset
 
@@ -121,9 +127,9 @@ pixi run fish scripts/download/qwen36_27b_hf_mirror.fish
 pixi run fish scripts/serve/qwen36_27b_vllm.fish
 ```
 
-Co-hosted training wrappers manage the service process group, probe its
-multimodal and task-schema paths, delegate to the standard GRPO launcher, and
-stop the service at exit. See
+The co-hosted training launcher manages the service process group, probes its
+multimodal and task-schema paths, delegates to the standard GRPO launcher, and
+stops the service at exit. See
 [`docs/vlm_judge_reward.md`](../docs/vlm_judge_reward.md).
 
 ## Development Rules

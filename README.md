@@ -180,10 +180,11 @@ you intentionally define a new scorer contract. See
 
 ## Training
 
-Single-machine SFT uses `scripts/train/i2v.fish`:
+SFT uses the unified `scripts/train/sft_multinode.fish` launcher. With no
+rendezvous variables it runs on one local machine:
 
 ```fish
-pixi run fish scripts/train/i2v.fish --nproc 8 -- \
+pixi run fish scripts/train/sft_multinode.fish --nproc 8 -- \
   --config configs/train_sft_vbvr_5e-6.yaml
 ```
 
@@ -192,10 +193,10 @@ precomputed latent samples at `data/vbvr/latents/sft`. Those latents are an
 external artifact and are not interchangeable with the public raw
 `Video-Reason/VBVR-Pro-RL` archives.
 
-Single-machine RL uses `scripts/train/grpo.fish`:
+DanceGRPO uses the same local/multi-machine contract:
 
 ```fish
-pixi run fish scripts/train/grpo.fish --nproc 8 \
+pixi run fish scripts/train/grpo_multinode.fish --nproc 8 \
   --config configs/train_rl_a14b_rule.yaml
 ```
 
@@ -203,8 +204,8 @@ The A14B reference uses TP2 plus four-way FSDP on one eight-GPU machine.
 For the one-GPU LoRA smoke, use the bounded validator in [Quick Start](#quick-start).
 Production configs are topology-specific and must be reviewed before launch.
 
-For multiple machines, run the same command on every machine with the
-scheduler-provided rendezvous values:
+For multiple machines, run the selected launcher on every machine with all
+three scheduler-provided rendezvous values:
 
 ```bash
 MASTER_ADDR=<rank-zero-host> \
@@ -215,6 +216,8 @@ pixi run fish scripts/train/grpo_multinode.fish --nproc 8 -- \
   --config configs/train_rl_5b_rule.yaml
 ```
 
+When `MASTER_ADDR`, `WORLD_SIZE`, and `RANK` are all omitted, training defaults
+to `127.0.0.1`, one machine, and rank zero. Otherwise all three are required.
 `WORLD_SIZE` is the machine count; `--nproc` is the number of local training
 processes. The selected YAML still determines global prompt, rollout, replay,
 and sharding semantics. Read [Configuration](docs/configuration.md) and

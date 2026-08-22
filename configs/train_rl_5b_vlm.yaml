@@ -1,7 +1,9 @@
 trainer: dancegrpo
-# Multi-node VLM-judge training candidate for world sizes 32, 64, and 128. The
-# scale-out launcher validates the topology. Every machine starts four TP2 Qwen3.6-27B
-# replicas behind one vLLM DP endpoint while all ranks roll out/train Wan 5B.
+# Multi-node VLM-judge training candidate for global process counts 32, 64, and
+# 128. Set the generic VLM launcher to DP4 x TP2 per eight-GPU machine through
+# WAN_TRAINER_VLM_DATA_PARALLEL_SIZE and WAN_TRAINER_VLM_TENSOR_PARALLEL_SIZE;
+# all ranks roll out/train Wan 5B. Override output_dir and wandb_run_name for
+# each topology so checkpoints and tracking runs cannot collide.
 model_path: storage/models/diffsynth_converted_5b/wan2.2-TI2V-5B_260715_vbvr_pro_step-35500
 
 # Materialize the already-downloaded public raw snapshot once with:

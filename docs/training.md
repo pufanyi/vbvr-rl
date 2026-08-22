@@ -98,7 +98,7 @@ lora_rank: 0
 Launch on one machine:
 
 ```fish
-pixi run fish scripts/train/i2v.fish --nproc 8 -- \
+pixi run fish scripts/train/sft_multinode.fish --nproc 8 -- \
   --config configs/train_sft_vbvr_5e-6.yaml
 ```
 
@@ -295,7 +295,7 @@ pixi run python -m src.cli.validate_grpo_runtime \
 One machine:
 
 ```fish
-pixi run fish scripts/train/grpo.fish --nproc 8 \
+pixi run fish scripts/train/grpo_multinode.fish --nproc 8 \
   --config configs/<reviewed-rl-config>.yaml
 ```
 
@@ -310,8 +310,10 @@ pixi run fish scripts/train/grpo_multinode.fish --nproc 8 -- \
   --config configs/<reviewed-rl-config>.yaml
 ```
 
-The multi-machine launcher treats `WORLD_SIZE` as machine count. The total
-process count is `WORLD_SIZE * --nproc`. It validates the reward/attention
+The same launcher serves both cases. When `MASTER_ADDR`, `WORLD_SIZE`, and
+`RANK` are all absent it defaults to one local machine; for a multi-machine
+run, set all three. `WORLD_SIZE` is the machine count, and the total process
+count is `WORLD_SIZE * --nproc`. The launcher validates the reward/attention
 runtime and a Triton driver build on every machine before starting `torchrun`.
 
 Use `WAN_TRAINER_TRITON_PREFLIGHT_ONLY=1` to perform only the per-machine
