@@ -12,7 +12,7 @@ Each sample in the tar has two entries:
   {key}.json         — prompt, tar, index_in_tar, seq_len
 
 Usage:
-    pixi run python -m src.precompute.build_webdataset \
+    .venv/bin/python -m src.precompute.build_webdataset \
         --prompt_embeds_dir data/vbvr/latents/prompt_embeds \
         --vae_latents_dir   data/vbvr/latents/vae_latents \
         --output_dir        data/vbvr/latents/webdataset \

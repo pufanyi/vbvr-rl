@@ -7,7 +7,7 @@ expected by EvalKit's `run_evaluation.py`. The legacy fixed split layout remains
 available for `run_evaluation_video_icml.py` callers.
 
 Usage:
-    pixi run python -m src.eval.build_vbvr_eval_json \
+    .venv/bin/python -m src.eval.build_vbvr_eval_json \
         --gt_base storage/datasets/VBVR-Bench \
         --output data/vbvr_eval.json
 """

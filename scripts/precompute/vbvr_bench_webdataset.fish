@@ -20,7 +20,7 @@ set SKIP_PRECOMPUTE                       # set to any value to skip encoding (u
 
 # Hub upload — empty by default; local tars sit under $OUTPUT_DIR.
 # To push later (idempotent — HF dedupes by hash, crashed uploads resume):
-#   pixi run --locked python scripts/data/vbvr_upload_hf.py --tar_dir $OUTPUT_DIR
+#   .venv/bin/python scripts/data/vbvr_upload_hf.py --tar_dir $OUTPUT_DIR
 # or set PUSH_TO_HUB=yes below to upload at the end of this script.
 set PUSH_TO_HUB                           # set to any value to push after precompute
 set HF_REPO_ID     pufanyi/VBVR-Bench-wan2.2-latent

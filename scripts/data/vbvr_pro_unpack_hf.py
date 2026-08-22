@@ -10,7 +10,7 @@ restores the five training/reward-critical files into a flat VBVR-Pro tree,
 and writes the standard ``dataset.json`` and ``split_manifest_rl.json``.
 
 Example:
-    pixi run python -m scripts.data.vbvr_pro_unpack_hf \
+    .venv/bin/python -m scripts.data.vbvr_pro_unpack_hf \
         --dataset-root storage/datasets/VBVR-Pro-RL \
         --output-dir storage/datasets/VBVR-Pro-RL/materialized \
         --source-revision ca0aaffea93b07d269c6fe2fbfe533f1fdab9aa1 \

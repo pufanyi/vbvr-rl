@@ -7,13 +7,13 @@ Default behavior:
   - require 30 consecutive minutes of low utilization
   - print a rolling 30-minute summary
   - then launch:
-      pixi run torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_sft_vbvr_5e-6.yaml
+      .venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_sft_vbvr_5e-6.yaml
 
 Examples:
-  pixi run python scripts/dev/watch_gpu_idle.py
-  pixi run python scripts/dev/watch_gpu_idle.py --dry-run
-  pixi run python scripts/dev/watch_gpu_idle.py --interval-seconds 300 --report-window-minutes 30 --dry-run
-  pixi run python scripts/dev/watch_gpu_idle.py --command "echo triggered"
+  .venv/bin/python scripts/dev/watch_gpu_idle.py
+  .venv/bin/python scripts/dev/watch_gpu_idle.py --dry-run
+  .venv/bin/python scripts/dev/watch_gpu_idle.py --interval-seconds 300 --report-window-minutes 30 --dry-run
+  .venv/bin/python scripts/dev/watch_gpu_idle.py --command "echo triggered"
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-DEFAULT_COMMAND = "pixi run torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_sft_vbvr_5e-6.yaml"
+DEFAULT_COMMAND = ".venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v --config configs/train_sft_vbvr_5e-6.yaml"
 
 
 def timestamp() -> str:

@@ -1,7 +1,7 @@
 """Wan2.2 I2V training entry point.
 
 Usage:
-    pixi run torchrun --nproc_per_node=8 -m src.cli.train_i2v \
+    .venv/bin/torchrun --nproc_per_node=8 -m src.cli.train_i2v \
         --config configs/train_sft_vbvr_5e-6.yaml
 """
 

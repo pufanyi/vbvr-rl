@@ -557,7 +557,7 @@ set -g scorer_dependency_versions (env \
     OPENBLAS_NUM_THREADS=$SCORE_THREADS_PER_WORKER \
     NUMEXPR_NUM_THREADS=$SCORE_THREADS_PER_WORKER \
     $PYTHON -m src.eval.vbvr_runtime --json
-); or _fail "main_v2 scorer runtime contract failed; run pixi install --locked and restart"
+); or _fail "main_v2 scorer runtime contract failed; run uv sync --frozen and restart"
 test -n "$scorer_dependency_versions"
 or _fail "main_v2 scorer dependency version record is empty"
 

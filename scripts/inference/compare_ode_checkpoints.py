@@ -9,7 +9,7 @@ no model reload) and produces, under ``<root>/compare_ode/``:
   side by side so trajectories can be compared frame by frame.
 
 Usage:
-    pixi run python scripts/inference/compare_ode_checkpoints.py \
+    .venv/bin/python scripts/inference/compare_ode_checkpoints.py \
         --root storage/outputs/noise_coeff_sweep \
         --ckpts checkpoint_a checkpoint_b checkpoint_c
 """

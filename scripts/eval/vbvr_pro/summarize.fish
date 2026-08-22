@@ -2,4 +2,4 @@
 
 source (dirname (status filename))/../../lib/env.fish
 
-pixi run --locked python -m src.cli.summarize_vbvr_pro_results $argv
+.venv/bin/python -m src.cli.summarize_vbvr_pro_results $argv

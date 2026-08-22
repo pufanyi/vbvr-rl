@@ -111,7 +111,7 @@ echo "[preflight] Persistent attention kernel cache: $KERNELS_CACHE"
 
 # Validate the scorer once on every node before torchrun loads or shards the
 # model. The training process and spawned reward workers repeat this check.
-pixi run --locked python -m src.cli.validate_grpo_runtime $train_args
+.venv/bin/python -m src.cli.validate_grpo_runtime $train_args
 or begin
     echo "ERROR: GRPO runtime preflight failed on node $RANK before torchrun." >&2
     exit 1
@@ -128,7 +128,7 @@ if test "$triton_preflight_only" = "1"
     set skip_triton_preflight 0
 end
 if test "$skip_triton_preflight" != "1"
-    pixi run --locked python -c \
+    .venv/bin/python -c \
         'from triton.runtime import driver; print(f"[preflight] Triton target: {driver.active.get_current_target()}")'
     or begin
         echo "ERROR: Triton preflight failed on node $RANK before torchrun." >&2

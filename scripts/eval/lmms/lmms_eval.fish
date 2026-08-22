@@ -10,12 +10,8 @@ test -d $LMMS_EVAL_ROOT; or begin
     echo "[error] LMMS_EVAL_ROOT does not exist: $LMMS_EVAL_ROOT" >&2
     exit 1
 end
-command -q pixi; or begin
-    echo "[error] Pixi is required to run the external lmms-eval checkout." >&2
-    exit 1
-end
-test -f $LMMS_EVAL_ROOT/pixi.lock; or begin
-    echo "[error] the external lmms-eval checkout must provide a locked Pixi environment: $LMMS_EVAL_ROOT/pixi.lock" >&2
+test -x $LMMS_EVAL_ROOT/.venv/bin/python; or begin
+    echo "[error] external lmms-eval uv environment is missing: $LMMS_EVAL_ROOT/.venv/bin/python" >&2
     exit 1
 end
 
@@ -70,9 +66,9 @@ if string match -q '*5b*' -- $MODEL_DIR_LOWER
     set MODEL_ARGS "$MODEL_ARGS,override_pipeline_cls_name=WanPipeline,ti2v_task=True,flow_shift=5"
 end
 
-# This command runs from LMMS_EVAL_ROOT, so Pixi uses that external checkout's
-# manifest and lock rather than the VBVR-RL training environment.
-exec stdbuf -oL -eL pixi run --locked python -m lmms_eval eval \
+# This command runs through the external checkout's own uv environment rather
+# than the VBVR-RL training environment.
+exec stdbuf -oL -eL .venv/bin/python -m lmms_eval eval \
     --model fastvideo \
     --model_args $MODEL_ARGS \
     --tasks vbvr \

@@ -29,7 +29,7 @@ MASTER_PORT="${MASTER_PORT:-29640}"
 # shared OUTPUT_ROOT (no merge needed).
 NNODES="${WORLD_SIZE:-1}"
 NODE_RANK="${RANK:-0}"
-TORCHRUN="${TORCHRUN:-$ROOT_DIR/.pixi/envs/default/bin/torchrun}"
+TORCHRUN="${TORCHRUN:-$ROOT_DIR/.venv/bin/torchrun}"
 
 OUTPUT_ROOT="${OUTPUT_ROOT:-data/maze/latents/maze_384x384x81_perfect_v2}"
 WEBDATASET_DIR="${WEBDATASET_DIR:-$OUTPUT_ROOT/webdataset}"

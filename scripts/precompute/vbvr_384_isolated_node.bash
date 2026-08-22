@@ -140,8 +140,8 @@ MASTER_ADDR="${LOCAL_MASTER_ADDR:-127.0.0.1}"
 MASTER_PORT="${LOCAL_MASTER_PORT:-$((29680 + MACHINE_RANK))}"
 mkdir -p "$LOG_DIR" "$PROMPT_EMBEDS_DIR" "$VAE_LATENTS_DIR"
 
-PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.pixi/envs/default/bin/python}"
-TORCHRUN_BIN="${TORCHRUN_BIN:-$ROOT_DIR/.pixi/envs/default/bin/torchrun}"
+PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
+TORCHRUN_BIN="${TORCHRUN_BIN:-$ROOT_DIR/.venv/bin/torchrun}"
 
 require_path() {
     local kind="$1"
@@ -156,11 +156,11 @@ require_path metadata "$METADATA"
 require_path tar_dir "$TAR_DIR"
 require_path model_path "$MODEL_PATH"
 if [[ ! -x "$PYTHON_BIN" ]]; then
-    echo "[error] locked Pixi Python is missing: $PYTHON_BIN; run 'pixi install --locked'" >&2
+    echo "[error] uv environment Python is missing: $PYTHON_BIN; run 'uv sync --frozen'" >&2
     exit 1
 fi
 if [[ ! -x "$TORCHRUN_BIN" ]]; then
-    echo "[error] locked Pixi torchrun is missing: $TORCHRUN_BIN; run 'pixi install --locked'" >&2
+    echo "[error] uv environment torchrun is missing: $TORCHRUN_BIN; run 'uv sync --frozen'" >&2
     exit 1
 fi
 

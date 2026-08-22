@@ -59,9 +59,9 @@ LOG_DIR="${LOG_DIR:-logs}"
 STREAM_VAE_LOG="${STREAM_VAE_LOG:-1}"
 mkdir -p "$LOG_DIR" "$SFT_WEBDATASET_DIR" "$RL_WEBDATASET_DIR"
 
-TORCHRUN_BIN="${TORCHRUN_BIN:-$ROOT_DIR/.pixi/envs/default/bin/torchrun}"
+TORCHRUN_BIN="${TORCHRUN_BIN:-$ROOT_DIR/.venv/bin/torchrun}"
 if [[ ! -x "$TORCHRUN_BIN" ]]; then
-    echo "[error] locked Pixi torchrun is missing: $TORCHRUN_BIN; run 'pixi install --locked'" >&2
+    echo "[error] uv environment torchrun is missing: $TORCHRUN_BIN; run 'uv sync --frozen'" >&2
     exit 1
 fi
 

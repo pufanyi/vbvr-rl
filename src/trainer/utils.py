@@ -112,7 +112,7 @@ def prepare_diffusers_attention_backend(backend: str | None) -> bool:
             raise FileNotFoundError(
                 f"Pinned attention kernel {repo_id}@{pinned_revision} is unavailable in "
                 f"KERNELS_CACHE={cache_dir!r}. On a networked login node run: "
-                "pixi run python -m src.cli.prefetch_attention_kernel --backend _flash_3_hub"
+                ".venv/bin/python -m src.cli.prefetch_attention_kernel --backend _flash_3_hub"
             ) from exc
 
     with patch("kernels.get_kernel", _get_pinned_kernel), attention_dispatch.attention_backend(backend):

@@ -3,7 +3,7 @@
 Loads one pipeline once, then accepts JSON jobs from stdin or a jobs file.
 
 Examples:
-    pixi run python -m src.cli.infer_i2v_persistent \
+    .venv/bin/python -m src.cli.infer_i2v_persistent \
         --model_path storage/models/dcp_converted/sft_maze_4_checkpoint-epoch0 \
         --max_area 147456 --num_frames 161 --num_inference_steps 50
 

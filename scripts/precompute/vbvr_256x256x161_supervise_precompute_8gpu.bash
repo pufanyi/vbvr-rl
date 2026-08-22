@@ -44,14 +44,14 @@ VAE_BATCH_SIZE="${VAE_BATCH_SIZE:-22}"
 BUILD_WORKERS="${BUILD_WORKERS:-64}"
 LOG_DIR="${LOG_DIR:-logs/vbvr_256x256x161}"
 
-TORCHRUN_BIN="${TORCHRUN_BIN:-$ROOT_DIR/.pixi/envs/default/bin/torchrun}"
-PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.pixi/envs/default/bin/python}"
+TORCHRUN_BIN="${TORCHRUN_BIN:-$ROOT_DIR/.venv/bin/torchrun}"
+PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
 if [[ ! -x "$TORCHRUN_BIN" ]]; then
-    echo "[error] locked Pixi torchrun is missing: $TORCHRUN_BIN; run 'pixi install --locked'" >&2
+    echo "[error] uv environment torchrun is missing: $TORCHRUN_BIN; run 'uv sync --frozen'" >&2
     exit 1
 fi
 if [[ ! -x "$PYTHON_BIN" ]]; then
-    echo "[error] locked Pixi Python is missing: $PYTHON_BIN; run 'pixi install --locked'" >&2
+    echo "[error] uv environment Python is missing: $PYTHON_BIN; run 'uv sync --frozen'" >&2
     exit 1
 fi
 

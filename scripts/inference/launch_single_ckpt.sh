@@ -8,9 +8,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-PYTHON="${PYTHON:-$PWD/.pixi/envs/default/bin/python}"
+PYTHON="${PYTHON:-$PWD/.venv/bin/python}"
 if [[ ! -x "$PYTHON" ]]; then
-  echo "missing locked Pixi Python: $PYTHON; run 'pixi install --locked'" >&2
+  echo "missing uv environment Python: $PYTHON; run 'uv sync --frozen'" >&2
   exit 1
 fi
 

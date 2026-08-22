@@ -11,11 +11,11 @@ TORCH_DTYPE="${TORCH_DTYPE:-bfloat16}"
 MAX_SHARD_SIZE="${MAX_SHARD_SIZE:-10GB}"
 POLL_SECONDS="${POLL_SECONDS:-300}"
 STABLE_POLLS="${STABLE_POLLS:-2}"
-PYTHON="${PYTHON:-.pixi/envs/default/bin/python}"
-LMMS_EVAL_ROOT="${LMMS_EVAL_ROOT:-}"
+PYTHON="${PYTHON:-.venv/bin/python}"
+LMMS_PY="${LMMS_PY:-}"
 
 if [[ ! -x "$PYTHON" ]]; then
-  echo "missing locked Pixi Python: $PYTHON; run 'pixi install --locked'" >&2
+  echo "missing uv environment Python: $PYTHON; run 'uv sync --frozen'" >&2
   exit 1
 fi
 
@@ -39,16 +39,12 @@ tree_size() {
 }
 
 validate_output() {
-  if [[ -z "$LMMS_EVAL_ROOT" ]]; then
-    log "skip validation: LMMS_EVAL_ROOT is not set"
-    return 0
-  fi
-  if [[ ! -f "$LMMS_EVAL_ROOT/pixi.lock" ]]; then
-    log "skip validation: external lmms-eval Pixi lock is missing: $LMMS_EVAL_ROOT/pixi.lock"
+  if [[ ! -x "$LMMS_PY" ]]; then
+    log "skip validation: LMMS_PY is not executable: $LMMS_PY"
     return 0
   fi
 
-  pixi --manifest-path "$LMMS_EVAL_ROOT" run --locked python - "$(realpath -m "$OUT")" <<'PY'
+  "$LMMS_PY" - "$OUT" <<'PY'
 import json
 import sys
 from copy import deepcopy
